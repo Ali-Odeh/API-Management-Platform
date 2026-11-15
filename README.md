@@ -24,6 +24,8 @@ Check that the mock backend is reachable:
 Invoke-RestMethod http://localhost:9000/anything/hello
 ```
 
+Connect to the database from Windows (pgAdmin, DBeaver, psql): `localhost:5434`, database, user and password from `.env`. Port 5434 is used on the host so it does not clash with locally installed Postgres servers on 5432 and 5433. Inside Docker, containers still use `postgres:5432`.
+
 Stop everything:
 
 ```powershell

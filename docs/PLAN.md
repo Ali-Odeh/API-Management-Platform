@@ -390,7 +390,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 
 | Service | Port | Purpose |
 | --- | --- | --- |
-| `postgres` | 5432 | Config database |
+| `postgres` | 5432 (host 5434) | Config database. Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
 | `redis` | 6379 | Rate-limit state |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
 | `gateway` | 8080 | Public entry point |

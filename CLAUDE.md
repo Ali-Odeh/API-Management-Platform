@@ -40,3 +40,4 @@ docker-compose.yml
 - The user is on **Windows**, so give commands for **PowerShell**. Python is run with `py` (plain `python` is the Store alias).
 - Git: remote `origin` is `https://github.com/Ali-Odeh/API-Management-Platform.git`. **Never push.** The user pushes.
 - Secrets live in `.env` (gitignored). Only `.env.example` is committed.
+- The user has local Windows Postgres 18 on port 5432 and 14 on 5433. The Docker Postgres is mapped to **host port 5434**. Use `localhost:5434` for anything run on Windows (tests, Alembic, pgAdmin), and `postgres:5432` inside containers.
