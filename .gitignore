@@ -22,11 +22,11 @@ build/
 *.test
 *.out
 coverage.*
-gateway/bin/
+backend/gateway/bin/
 
 # ---- Node (dashboard) ----
 node_modules/
-dashboard/dist/
+frontend/dist/
 npm-debug.log*
 yarn-error.log*
 pnpm-debug.log*

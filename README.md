@@ -35,9 +35,9 @@ docker compose down -v     # also delete the Postgres volume
 
 | Folder | What |
 | --- | --- |
-| `gateway/` | Go reverse proxy (data plane) |
-| `control-plane/` | FastAPI admin API (control plane) |
-| `mock-backend/` | Small FastAPI echo service to proxy to |
-| `dashboard/` | React admin UI (v2, not started) |
+| `backend/gateway/` | Go reverse proxy (data plane) |
+| `backend/control-plane/` | FastAPI admin API (control plane) |
+| `backend/mock-backend/` | Small FastAPI echo service to proxy to |
+| `frontend/` | React admin UI (v2, not started) |
 | `loadtest/` | k6 scripts |
 | `docs/` | Plan and architecture |

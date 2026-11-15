@@ -6,7 +6,7 @@ API Management Platform, a learning project modeled on Kong, Tyk and Apigee. The
 
 - **Gateway (data plane):** Go. Reverse proxy with route matching, API-key auth, a Redis token-bucket rate limiter and JSON logs. It never touches Postgres. It polls `/internal/config` every 5s and swaps the snapshot in with `atomic.Pointer`.
 - **Control plane:** FastAPI. Admin API under `/api/v1` with JWT auth, plus `/internal/config` protected by `X-Internal-Token` with ETag/304.
-- **Dashboard:** React (v2). Do not build it yet.
+- **Dashboard:** React (v2), in `frontend/`. Do not build it yet.
 
 ## Stack
 
@@ -16,14 +16,15 @@ API Management Platform, a learning project modeled on Kong, Tyk and Apigee. The
 
 ## Repo layout
 
-The repo root is the plan's `api-platform/` folder.
+The repo root is the plan's `api-platform/` folder. Services are grouped into `backend/` and `frontend/`, a change from the original plan that the user approved and that is reflected in PLAN.md section 9.
 
 ```
-gateway/           cmd/gateway/main.go, internal/{config,middleware,proxy,ratelimit}
-control-plane/     app/{core,auth,services,routes,consumers,keys,gateway_config}, main.py, alembic/, tests/
+backend/
+  gateway/         cmd/gateway/main.go, internal/{config,middleware,proxy,ratelimit}
+  control-plane/   app/{core,auth,services,routes,consumers,keys,gateway_config}, main.py, alembic/, tests/
                    each feature folder: router.py, models.py, schemas.py, crud.py
-mock-backend/      FastAPI echo service (port 9000)
-dashboard/         React (v2)
+  mock-backend/    FastAPI echo service (port 9000)
+frontend/          React dashboard (v2); compose service name stays `dashboard`
 loadtest/          k6 scripts
 docs/PLAN.md       the plan
 docker-compose.yml

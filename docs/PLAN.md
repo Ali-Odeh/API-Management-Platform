@@ -340,7 +340,7 @@ Sidebar (Overview, Services, Routes, Consumers, Plans, Logs), top bar with admin
 **Folder structure**
 
 ```
-dashboard/src/
+frontend/src/
 ├── api/          # generated types and the fetch client
 ├── components/   # shared UI: tables, modals, charts, layout
 ├── features/     # one folder per page group: services, routes, consumers, ...
@@ -354,31 +354,35 @@ Everything lives in one repository and starts with `docker compose up`.
 
 ```
 api-platform/
-├── gateway/                  # Go, one package per responsibility
-│   ├── cmd/gateway/main.go
-│   └── internal/
-│       ├── config/           # poller and snapshot store
-│       ├── middleware/       # recover, requestid, logger, auth, ratelimit
-│       ├── proxy/            # route matching and reverse proxy
-│       └── ratelimit/        # Redis client and Lua script
-├── control-plane/            # FastAPI, organized by feature
-│   ├── app/
-│   │   ├── core/             # settings, db session, security, shared deps
-│   │   ├── auth/             # same four files (models = admins)
-│   │   ├── services/         # router.py, models.py, schemas.py, crud.py
-│   │   ├── routes/           # same four files
-│   │   ├── consumers/        # same four files
-│   │   ├── keys/             # same four files
-│   │   ├── gateway_config/   # the /internal/config endpoint
-│   │   └── main.py           # creates the app, includes each router
-│   ├── alembic/
-│   └── tests/                # one test file per feature
-├── dashboard/                # React (v2), organized by feature
-├── mock-backend/             # small FastAPI echo service
-├── loadtest/                 # k6 scripts
+├── backend/
+│   ├── gateway/                  # Go, one package per responsibility
+│   │   ├── cmd/gateway/main.go
+│   │   └── internal/
+│   │       ├── config/           # poller and snapshot store
+│   │       ├── middleware/       # recover, requestid, logger, auth, ratelimit
+│   │       ├── proxy/            # route matching and reverse proxy
+│   │       └── ratelimit/        # Redis client and Lua script
+│   ├── control-plane/            # FastAPI, organized by feature
+│   │   ├── app/
+│   │   │   ├── core/             # settings, db session, security, shared deps
+│   │   │   ├── auth/             # same four files (models = admins)
+│   │   │   ├── services/         # router.py, models.py, schemas.py, crud.py
+│   │   │   ├── routes/           # same four files
+│   │   │   ├── consumers/        # same four files
+│   │   │   ├── keys/             # same four files
+│   │   │   ├── gateway_config/   # the /internal/config endpoint
+│   │   │   └── main.py           # creates the app, includes each router
+│   │   ├── alembic/
+│   │   └── tests/                # one test file per feature
+│   └── mock-backend/             # small FastAPI echo service
+├── frontend/                     # React dashboard (v2), organized by feature
+├── loadtest/                     # k6 scripts
+├── docs/
 ├── docker-compose.yml
 └── README.md
 ```
+
+Services are grouped into `backend/` and `frontend/` so it is easy to see which side each one is on. Each service folder is still its own program with its own container. (Changed on Nov 15, 2026 from a flat layout.)
 
 The control plane is organized by feature: everything about one feature (endpoints, models, schemas, logic) sits in one folder, so a new feature such as `plans` in v2 is one new folder. Logic files are named `crud.py` rather than `service.py` so they don't clash with the `services` feature. The gateway keeps Go's package-per-responsibility layout.
 
