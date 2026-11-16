@@ -1,27 +1,20 @@
 """HTTP layer for services: parse input, call crud, shape output. No SQL here."""
 
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, status
 
 from app.core.deps import CurrentAdmin, DbSession
+from app.core.openapi import error_responses
 from app.core.pagination import Page, Pagination
 from app.services import crud
 from app.services.schemas import ServiceCreate, ServiceOut, ServiceUpdate
 
 router = APIRouter(prefix="/api/v1/services", tags=["services"])
 
-# Extra responses shown in the OpenAPI docs (Swagger).
-_NOT_FOUND: dict[int | str, dict[str, Any]] = {
-    status.HTTP_404_NOT_FOUND: {"description": "Service not found"}
-}
-_CONFLICT: dict[int | str, dict[str, Any]] = {
-    status.HTTP_409_CONFLICT: {"description": "Name already used in this workspace"}
-}
-_HAS_ROUTES: dict[int | str, dict[str, Any]] = {
-    status.HTTP_409_CONFLICT: {"description": "Service still has routes"}
-}
+_NOT_FOUND = error_responses({404: "Service not found"})
+_CONFLICT = error_responses({409: "Name already used in this workspace"})
+_HAS_ROUTES = error_responses({409: "Service still has routes"})
 
 
 @router.get("")

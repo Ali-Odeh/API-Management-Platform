@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import get_settings
-from app.core.errors import ConflictError
+from app.core.errors import AppError
 
 # Predictable constraint names (e.g. "uq_services_name") so Alembic
 # migrations can find and change constraints later.
@@ -59,10 +59,11 @@ def violated_constraint(exc: IntegrityError) -> str | None:
     return name if isinstance(name, str) else None
 
 
-async def commit_or_conflict(db: AsyncSession, conflicts: Mapping[str, str]) -> None:
-    """Commit; if one of the named constraints is violated, raise ConflictError (409).
+async def commit_or_raise(db: AsyncSession, errors: Mapping[str, AppError]) -> None:
+    """Commit; if one of the named constraints is violated, raise its AppError.
 
-    `conflicts` maps a constraint name to the message the client should see.
+    `errors` maps a constraint name to the error the client should get, e.g.
+    {"uq_services_workspace_id_name": ConflictError("A service named ...")}.
     We let the database enforce the rules instead of checking first, because
     "check, then write" can race with a parallel request. Any other violation
     is a bug, so it is re-raised as is.
@@ -71,7 +72,7 @@ async def commit_or_conflict(db: AsyncSession, conflicts: Mapping[str, str]) -> 
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
-        message = conflicts.get(violated_constraint(exc) or "")
-        if message is None:
+        error = errors.get(violated_constraint(exc) or "")
+        if error is None:
             raise
-        raise ConflictError(message) from None
+        raise error from None

@@ -30,6 +30,13 @@ class ConflictError(AppError):
     status_code = status.HTTP_409_CONFLICT
 
 
+class UnprocessableError(AppError):
+    """The body is well-formed but refers to something unusable,
+    e.g. a route pointing to a service that isn't in this workspace."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
 async def _handle_app_error(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})

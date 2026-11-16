@@ -3,8 +3,9 @@
 Request:   GET /api/v1/services?page=2&page_size=20
 Response:  {"items": [...], "total": 57}
 
-Usage in a router:
-    async def list_things(page: Pagination) -> Page[ThingOut]: ...
+Usage:
+    router:  async def list_things(page: Pagination) -> Page[ThingOut]: ...
+    crud:    items, total = await paginate(db, query, page)
 """
 
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from typing import Annotated, Generic, TypeVar
 
 from fastapi import Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import Select, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 MAX_PAGE_SIZE = 100
 DEFAULT_PAGE_SIZE = 20
@@ -47,3 +50,17 @@ class Page(BaseModel, Generic[T]):
 
     items: list[T]
     total: int
+
+
+async def paginate(
+    db: AsyncSession, query: Select[tuple[T]], page: PageParams
+) -> tuple[list[T], int]:
+    """Run `query` for one page, plus a count of all matching rows.
+
+    The caller decides the filters and the order; the count ignores the order
+    (it doesn't change how many rows match, and Postgres can skip sorting).
+    """
+    count_query = select(func.count()).select_from(query.order_by(None).subquery())
+    total = await db.scalar(count_query)
+    rows = await db.scalars(query.offset(page.offset).limit(page.page_size))
+    return list(rows), total or 0
