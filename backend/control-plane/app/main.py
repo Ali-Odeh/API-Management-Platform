@@ -10,6 +10,7 @@ from app.auth.router import router as auth_router
 from app.core.config import get_settings
 from app.core.db import SessionLocal, engine
 from app.core.errors import register_error_handlers
+from app.routes.router import router as routes_router
 from app.services.router import router as services_router
 
 
@@ -35,6 +36,7 @@ register_error_handlers(app)
 
 app.include_router(auth_router)
 app.include_router(services_router)
+app.include_router(routes_router)
 
 
 @app.get("/health", tags=["health"])
