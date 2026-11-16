@@ -6,6 +6,9 @@ from app.core.models import TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceMixin
 
 DEFAULT_TIMEOUT_MS = 5000
 
+# Constraint names, used by crud.py to turn violations into clear 409 errors.
+UQ_SERVICE_NAME = "uq_services_workspace_id_name"
+
 
 class Service(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
     """One backend API the gateway can forward requests to."""
@@ -13,7 +16,7 @@ class Service(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
     __tablename__ = "services"
     __table_args__ = (
         # Unique per workspace (option C): two workspaces may both have "orders".
-        UniqueConstraint("workspace_id", "name", name="uq_services_workspace_id_name"),
+        UniqueConstraint("workspace_id", "name", name=UQ_SERVICE_NAME),
     )
 
     name: Mapped[str] = mapped_column(String(100))

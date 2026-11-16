@@ -8,13 +8,15 @@
                 and it is closed when the request ends.
 """
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 
 from sqlalchemy import MetaData
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.core.config import get_settings
+from app.core.errors import ConflictError
 
 # Predictable constraint names (e.g. "uq_services_name") so Alembic
 # migrations can find and change constraints later.
@@ -41,3 +43,35 @@ SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 async def get_db() -> AsyncIterator[AsyncSession]:
     async with SessionLocal() as session:
         yield session
+
+
+# ---- Turning database rule violations into clean errors
+
+
+def violated_constraint(exc: IntegrityError) -> str | None:
+    """Name of the constraint the database rejected, e.g. "uq_services_workspace_id_name".
+
+    The asyncpg driver error (kept as the cause of SQLAlchemy's wrapper) carries
+    the exact name, which is more reliable than searching the message text.
+    """
+    driver_error = exc.orig.__cause__ if exc.orig is not None else None
+    name = getattr(driver_error, "constraint_name", None)
+    return name if isinstance(name, str) else None
+
+
+async def commit_or_conflict(db: AsyncSession, conflicts: Mapping[str, str]) -> None:
+    """Commit; if one of the named constraints is violated, raise ConflictError (409).
+
+    `conflicts` maps a constraint name to the message the client should see.
+    We let the database enforce the rules instead of checking first, because
+    "check, then write" can race with a parallel request. Any other violation
+    is a bug, so it is re-raised as is.
+    """
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        message = conflicts.get(violated_constraint(exc) or "")
+        if message is None:
+            raise
+        raise ConflictError(message) from None

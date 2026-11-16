@@ -28,8 +28,9 @@ function Invoke-Check([string]$Name, [string[]]$Command) {
 }
 
 if ($Fix) {
-    Invoke-Check "ruff fix"    @("ruff", "check", "--fix", ".")
+    # Format first (it fixes long lines), then let the linter fix the rest.
     Invoke-Check "ruff format" @("ruff", "format", ".")
+    Invoke-Check "ruff fix"    @("ruff", "check", "--fix", ".")
 }
 
 Invoke-Check "ruff lint"   @("ruff", "check", ".")

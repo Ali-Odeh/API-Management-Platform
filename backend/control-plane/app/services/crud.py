@@ -8,15 +8,17 @@ service in another workspace behaves exactly like one that doesn't exist.
 import uuid
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.db import commit_or_conflict
+from app.core.errors import NotFoundError
 from app.core.pagination import PageParams
-from app.services.models import Service
+from app.services.models import UQ_SERVICE_NAME, Service
 from app.services.schemas import ServiceCreate, ServiceUpdate
 
-_UNIQUE_NAME_CONSTRAINT = "uq_services_workspace_id_name"
+
+def _name_taken(name: str) -> dict[str, str]:
+    return {UQ_SERVICE_NAME: f"A service named '{name}' already exists"}
 
 
 async def list_services(
@@ -50,7 +52,7 @@ async def create_service(
 ) -> Service:
     service = Service(workspace_id=workspace_id, **data.model_dump())
     db.add(service)
-    await _commit_or_conflict(db, name=data.name)
+    await commit_or_conflict(db, _name_taken(data.name))
     await db.refresh(service)  # load DB-generated values (created_at, ...)
     return service
 
@@ -62,7 +64,7 @@ async def update_service(
     changes = data.model_dump(exclude_unset=True)  # only the fields that were sent
     for field, value in changes.items():
         setattr(service, field, value)
-    await _commit_or_conflict(db, name=changes.get("name", service.name))
+    await commit_or_conflict(db, _name_taken(changes.get("name", service.name)))
     await db.refresh(service)  # updated_at is set by the database
     return service
 
@@ -73,18 +75,3 @@ async def delete_service(
     service = await get_service(db, workspace_id=workspace_id, service_id=service_id)
     await db.delete(service)
     await db.commit()
-
-
-async def _commit_or_conflict(db: AsyncSession, *, name: str) -> None:
-    """Commit, turning a duplicate-name violation into a ConflictError.
-
-    We rely on the database's unique constraint instead of checking first,
-    because a "check, then insert" can race with a parallel request.
-    """
-    try:
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        if _UNIQUE_NAME_CONSTRAINT in str(exc.orig):
-            raise ConflictError(f"A service named '{name}' already exists") from None
-        raise

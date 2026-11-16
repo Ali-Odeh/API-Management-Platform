@@ -5,9 +5,10 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import Settings
-from app.core.db import get_db
+from app.core.db import get_db, violated_constraint
 from app.core.errors import ConflictError, NotFoundError, register_error_handlers
 from app.core.pagination import Page, PageParams, Pagination
 
@@ -93,3 +94,13 @@ async def test_pagination_query_limits(query: str, status: int) -> None:
     assert r.status_code == status
     if query == "":
         assert r.json() == {"items": [1, 20], "total": 2}  # the defaults
+
+
+# ---- db.violated_constraint (the happy path is covered by every expect_violation)
+
+
+def test_violated_constraint_is_none_without_driver_details() -> None:
+    no_driver_error = IntegrityError("INSERT ...", None, None)  # type: ignore[arg-type]
+    plain_cause = IntegrityError("INSERT ...", None, Exception("no constraint name"))
+    assert violated_constraint(no_driver_error) is None
+    assert violated_constraint(plain_cause) is None
