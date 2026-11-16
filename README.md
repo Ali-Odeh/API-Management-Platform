@@ -2,7 +2,7 @@
 
 A self-hosted API management system, built as a learning project: a **Go gateway** that every API request passes through (auth, rate limiting, logging), a **FastAPI control plane** that configures it, and later a React dashboard.
 
-The full design is in [docs/PLAN.md](docs/PLAN.md).
+The full design is in [docs/PLAN.md](docs/PLAN.md). Step-by-step progress is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Status
 

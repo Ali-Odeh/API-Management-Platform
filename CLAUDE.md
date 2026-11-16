@@ -46,6 +46,7 @@ The user expects production-style code: scalable, maintainable, readable, clean 
 
 - The user is a backend engineer (FastAPI, Spring Boot, Node) and **new to Go**. The goal is learning, not just code.
 - Work in **small steps: one checklist item from PLAN.md section 10 at a time**. Stop after each step so the user can review, run it and ask questions.
+- **`docs/ROADMAP.md` tracks progress.** At the end of every step, update it: the step's status and commits, the overview counts, the quality numbers, "Current step", and the decisions log for any new decision.
 - For Go, **briefly explain each new Go concept the first time it appears**.
 - **Write tests alongside the code** and show how to run them.
 - Follow the plan's schema, endpoints and layout. **If something in the plan should change, propose it first. Don't change it silently.**
