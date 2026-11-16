@@ -7,7 +7,6 @@ Each helper commits, so database rules (unique, check, foreign key) are
 enforced right there; use `expect_violation` to assert that one fails.
 """
 
-import hashlib
 import uuid
 from collections.abc import Awaitable
 from typing import Any, TypeVar
@@ -18,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.consumers.models import Consumer
 from app.core.db import violated_constraint
+from app.core.security import generate_api_key, hash_api_key
 from app.keys.models import KEY_PREFIX_LENGTH, ApiKey
 from app.routes.models import Route
 from app.services.models import Service
@@ -71,10 +71,10 @@ async def make_api_key(
     raw_key: str | None = None,
     **fields: Any,
 ) -> ApiKey:
-    raw = raw_key or "ak_live_" + uuid.uuid4().hex  # 8 + 32 characters, like a real key
+    raw = raw_key or generate_api_key()
     fields.setdefault("name", "test key")
     fields.setdefault("key_prefix", raw[:KEY_PREFIX_LENGTH])
-    fields.setdefault("key_hash", hashlib.sha256(raw.encode()).hexdigest())
+    fields.setdefault("key_hash", hash_api_key(raw))
     return await _save(db, ApiKey(workspace_id=workspace_id, consumer_id=consumer_id, **fields))
 
 
