@@ -6,7 +6,7 @@ The full design is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Status
 
-Milestone **M1: Skeleton** is in progress. Postgres, Redis, the mock backend and the control plane run in Docker Compose. The control plane has admin login (JWT) and a tenant-ready data model (one `default` workspace).
+Milestone **M1: Skeleton** is done ✅. Postgres, Redis, the mock backend and the control plane run in Docker Compose. The control plane has admin login (JWT), services CRUD, and a tenant-ready data model (one `default` workspace). Next: **M2**, the rest of the control plane.
 
 ## Getting started (Windows / PowerShell)
 
@@ -71,6 +71,13 @@ docker compose exec control-plane alembic upgrade head
 ```
 
 Tests run against a separate database, `apim_test`, which is recreated on every test run. Your real data in `apim` is never touched.
+
+Run every quality check before committing (ruff lint and format, mypy strict, pytest with coverage of at least 90%):
+
+```powershell
+.\backend\control-plane\scripts\check.ps1        # check only
+.\backend\control-plane\scripts\check.ps1 -Fix   # let ruff fix and format first
+```
 
 For editor autocomplete only (optional), create a local venv:
 

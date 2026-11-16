@@ -453,7 +453,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] FastAPI project with settings, async SQLAlchemy and Alembic
 - [x] `workspaces` and `admins` tables, seed workspace and admin, login endpoint, JWT dependency
 - [x] `services` model, migration and CRUD endpoints
-- [ ] First pytest tests for login and services
+- [x] First pytest tests for login and services (plus ruff, mypy strict and coverage, run by `scripts/check.ps1`)
 
 **M2: Control plane done**
 

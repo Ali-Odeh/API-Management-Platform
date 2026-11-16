@@ -1,13 +1,17 @@
 """API tests for /api/v1/services."""
 
+import asyncio
 import uuid
 from typing import Any
 
 import pytest
 from httpx import AsyncClient, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services import crud
 from app.services.models import Service
+from app.services.schemas import ServiceCreate
 from app.workspaces.models import Workspace
 
 URL = "/api/v1/services"
@@ -213,3 +217,24 @@ async def test_same_name_allowed_in_different_workspaces(
     # "orders" exists in the other workspace; ours may still use it.
     r = await create(client, auth_headers, name="orders")
     assert r.status_code == 201
+
+
+# ---- Robustness
+
+
+async def test_parallel_creates_with_same_name(client: AsyncClient, auth_headers: Headers) -> None:
+    # Two requests at the same moment: the database's unique constraint
+    # guarantees exactly one wins, with no duplicate row and no 500 error.
+    results = await asyncio.gather(*(create(client, auth_headers) for _ in range(2)))
+    assert sorted(r.status_code for r in results) == [201, 409]
+
+    listing = (await client.get(URL, headers=auth_headers)).json()
+    assert listing["total"] == 1
+
+
+async def test_other_integrity_errors_are_not_reported_as_409(db: AsyncSession) -> None:
+    # A missing workspace breaks the foreign key, not the name rule. That is a
+    # bug, so it must surface as an error instead of a misleading "name taken".
+    data = ServiceCreate(name="orders", upstream_url="http://x:1")
+    with pytest.raises(IntegrityError):
+        await crud.create_service(db, workspace_id=uuid.uuid4(), data=data)
