@@ -222,7 +222,9 @@ POST /api/v1/consumers/{id}/keys
 }
 ```
 
-The `key` field appears in this response only. Later reads return the prefix.
+The `key` field appears in this response only, which is sent with `Cache-Control: no-store`. Later reads return the prefix, plus `is_active` and `revoked_at`.
+
+**Key rules:** keys come from Python's `secrets` module (128 random bits). A consumer can have at most 10 active keys (409 after that). `DELETE /api/v1/keys/{id}` revokes: it sets `revoked_at` and keeps the row, and revoking again is a no-op. A revoked key can't be restored; generate a new one instead. Keys can be generated for a blocked consumer, since blocking is checked per request.
 
 **Gateway config snapshot**
 

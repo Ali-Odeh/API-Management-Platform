@@ -66,6 +66,8 @@ Invoke-RestMethod "http://localhost:8000/api/v1/services?page=1&page_size=20" -H
 | `GET, PATCH, DELETE /api/v1/routes/{id}` | Read, partial update, delete |
 | `GET, POST /api/v1/consumers` | List (`?status=active\|blocked`), create |
 | `GET, PATCH, DELETE /api/v1/consumers/{id}` | Read, update (block with `{"status":"blocked"}`), delete (also deletes its keys) |
+| `GET, POST /api/v1/consumers/{id}/keys` | List keys (prefix only), generate a key (the full key is shown **once**) |
+| `DELETE /api/v1/keys/{id}` | Revoke a key (kept in the list as revoked) |
 
 New migration after changing a model:
 

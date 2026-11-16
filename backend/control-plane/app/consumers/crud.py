@@ -31,11 +31,18 @@ async def list_consumers(
 
 
 async def get_consumer(
-    db: AsyncSession, *, workspace_id: uuid.UUID, consumer_id: uuid.UUID
+    db: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    consumer_id: uuid.UUID,
+    for_update: bool = False,
 ) -> Consumer:
-    consumer = await db.scalar(
-        select(Consumer).where(Consumer.id == consumer_id, Consumer.workspace_id == workspace_id)
+    """`for_update=True` locks the row until commit (SELECT ... FOR UPDATE), so
+    parallel requests touching the same consumer wait for each other."""
+    query = select(Consumer).where(
+        Consumer.id == consumer_id, Consumer.workspace_id == workspace_id
     )
+    consumer = await db.scalar(query.with_for_update() if for_update else query)
     if consumer is None:
         raise NotFoundError("Consumer not found")
     return consumer

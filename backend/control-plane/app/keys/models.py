@@ -11,6 +11,9 @@ from app.core.models import TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceMixin
 KEY_PREFIX_LENGTH = 12  # "ak_live_3f9a": shown in lists so admins can tell keys apart
 SHA256_HEX_LENGTH = 64
 
+# Constraint names, used by crud.py to react to violations.
+UQ_API_KEY_HASH = "uq_api_keys_key_hash"
+
 
 class ApiKey(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
     """A consumer's API key. The raw key is never stored, only its SHA-256 hash."""
@@ -37,3 +40,7 @@ class ApiKey(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
     key_hash: Mapped[str] = mapped_column(String(SHA256_HEX_LENGTH), unique=True)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # None = active
+
+    @property
+    def is_active(self) -> bool:
+        return self.revoked_at is None

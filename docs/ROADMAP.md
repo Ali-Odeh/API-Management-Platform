@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 16, 2026 · **Current step:** 2.3
+**Last updated:** Nov 16, 2026 · **Current step:** 2.4
 
 ## Overview
 
@@ -10,19 +10,19 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- | --- |
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M2: Control plane done | ✅✅⬜⬜⬜⬜ 2/6 | 🔄 In progress |
+| M2: Control plane done | ✅✅✅⬜⬜⬜ 3/6 | 🔄 In progress |
 | M3: Gateway proxies (Go) | ⬜⬜⬜⬜⬜⬜⬜ 0/7 | ⏳ |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 8 of 24 steps done (33%).
+**MVP:** 9 of 24 steps done (38%).
 
 ## Quality today
 
 | Check | Result |
 | --- | --- |
-| Tests | 163 passing |
+| Tests | 186 passing |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -55,9 +55,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | # | Step | Status |
 | --- | --- | --- |
 | 2.1 | `routes`, `consumers` and `api_keys` models and migrations | ✅ `ee9cf45`, `bfabeae` |
-| 2.2 | CRUD endpoints for routes and consumers | ✅ `a85435d`, `9911ea2`, *this commit* |
-| 2.3 | API key generation (shown once, stored hashed) and revocation | 👉 Next |
-| 2.4 | `config_version` bump on every change | ⬜ |
+| 2.2 | CRUD endpoints for routes and consumers | ✅ `a85435d`, `9911ea2`, `0cde4fe` |
+| 2.3 | API key generation (shown once, stored hashed) and revocation | ✅ `c89c9c6`, *this commit* |
+| 2.4 | `config_version` bump on every change | 👉 Next |
 | 2.5 | `/internal/config` with the shared-secret check and ETag/304 | ⬜ |
 | 2.6 | Tests for every endpoint | ⬜ |
 
@@ -134,4 +134,7 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 16 | 2.2 | Shared CRUD core: `paginate`, `SlugName`, `PartialUpdate`, `error_responses`, `commit_or_raise` | Write each rule once; every feature behaves the same |
 | Nov 16 | 2.2 | Route `path_prefix` and `methods` normalized; a service outside the workspace is 422 | No near-duplicate routes; bad body references are input errors, not missing URLs |
 | Nov 16 | 2.2 | List filters: routes `?service_id=`, consumers `?status=`; block = PATCH status | Needed by the dashboard pages; matches the plan's "update (including block)" |
+| Nov 16 | 2.3 | Revoke keeps the row (`revoked_at`), idempotent, no un-revoke | History stays; a possibly leaked key is never trusted again |
+| Nov 16 | 2.3 | Max 10 active keys per consumer, enforced with a row lock | Stops key sprawl, even under parallel requests |
+| Nov 16 | 2.3 | `Cache-Control: no-store` on key creation; retry on hash collision | Secrets never cached; correct even in the impossible case |
 | Nov 16 | — | No CI yet; revisit at the end of M2 | Keep scope small |
