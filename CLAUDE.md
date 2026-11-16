@@ -40,6 +40,7 @@ The user expects production-style code: scalable, maintainable, readable, clean 
 - Type hints everywhere, small functions, clear names, short docstrings that say *why*. No dead code.
 - Go follows the same spirit: small packages with one responsibility, interfaces at boundaries, table-driven tests.
 - Split each step into 2–3 logical commits.
+- Before every commit, `backend/control-plane/scripts/check.ps1` must pass: ruff lint and format, mypy strict on `app/`, pytest with coverage of at least 90% (currently 100%). Config lives in `backend/control-plane/pyproject.toml`.
 
 ## Working rules
 

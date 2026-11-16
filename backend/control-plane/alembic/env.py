@@ -8,19 +8,20 @@ of it with `connection.run_sync(...)`.
 import asyncio
 from logging.config import fileConfig
 
+from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from alembic import context
 from app.core.config import get_settings
 from app.core.db import Base
 
+# isort: split
 # Import every feature's models here so Base.metadata knows their tables
 # and `alembic revision --autogenerate` can see them.
-from app.auth import models as auth_models  # noqa: F401, E402
-from app.services import models as service_models  # noqa: F401, E402
-from app.workspaces import models as workspace_models  # noqa: F401, E402
+from app.auth import models as auth_models  # noqa: F401
+from app.services import models as service_models  # noqa: F401
+from app.workspaces import models as workspace_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

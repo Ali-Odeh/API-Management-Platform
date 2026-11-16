@@ -5,7 +5,8 @@ from app.workspaces.models import DEFAULT_WORKSPACE_SLUG, Workspace
 
 
 async def get_workspace_by_slug(db: AsyncSession, slug: str) -> Workspace | None:
-    return await db.scalar(select(Workspace).where(Workspace.slug == slug))
+    result = await db.scalars(select(Workspace).where(Workspace.slug == slug))
+    return result.one_or_none()
 
 
 async def get_or_create_default_workspace(db: AsyncSession) -> Workspace:

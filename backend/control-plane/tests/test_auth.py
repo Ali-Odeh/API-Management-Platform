@@ -29,9 +29,7 @@ async def test_login_success_returns_token(client: AsyncClient, admin: Admin) ->
 
 
 async def test_login_email_is_case_insensitive(client: AsyncClient, admin: Admin) -> None:
-    r = await client.post(
-        LOGIN, json={"email": "  ADMIN@Test.Local ", "password": ADMIN_PASSWORD}
-    )
+    r = await client.post(LOGIN, json={"email": "  ADMIN@Test.Local ", "password": ADMIN_PASSWORD})
     assert r.status_code == 200
 
 

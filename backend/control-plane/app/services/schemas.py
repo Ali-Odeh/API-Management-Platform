@@ -17,7 +17,7 @@ from pydantic import (
 
 from app.services.models import DEFAULT_TIMEOUT_MS
 
-_http_url = TypeAdapter(AnyHttpUrl)
+_http_url: TypeAdapter[AnyHttpUrl] = TypeAdapter(AnyHttpUrl)
 
 
 def _normalize_upstream_url(value: str) -> str:

@@ -73,7 +73,13 @@ def test_page_offset(page: int, size: int, offset: int) -> None:
 
 @pytest.mark.parametrize(
     ("query", "status"),
-    [("", 200), ("?page=0", 422), ("?page_size=0", 422), ("?page_size=101", 422), ("?page_size=100", 200)],
+    [
+        ("", 200),
+        ("?page=0", 422),
+        ("?page_size=0", 422),
+        ("?page_size=101", 422),
+        ("?page_size=100", 200),
+    ],
 )
 async def test_pagination_query_limits(query: str, status: int) -> None:
     mini = FastAPI()

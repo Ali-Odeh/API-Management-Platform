@@ -23,9 +23,7 @@ class UUIDPrimaryKeyMixin:
 class TimestampMixin:
     # server_default: Postgres fills it in on INSERT.
     # onupdate: SQLAlchemy sets it again on every UPDATE through the ORM.
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

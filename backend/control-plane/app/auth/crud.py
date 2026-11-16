@@ -16,7 +16,8 @@ def normalize_email(email: str) -> str:
 
 
 async def get_admin_by_email(db: AsyncSession, email: str) -> Admin | None:
-    return await db.scalar(select(Admin).where(Admin.email == normalize_email(email)))
+    result = await db.scalars(select(Admin).where(Admin.email == normalize_email(email)))
+    return result.one_or_none()
 
 
 async def get_admin_by_id(db: AsyncSession, admin_id: uuid.UUID) -> Admin | None:
@@ -58,8 +59,6 @@ async def seed_admin(db: AsyncSession, *, email: str, password: str) -> Admin:
     workspace = await get_or_create_default_workspace(db)
     admin = await get_admin_by_email(db, email)
     if admin is None:
-        admin = await create_admin(
-            db, email=email, password=password, workspace_id=workspace.id
-        )
+        admin = await create_admin(db, email=email, password=password, workspace_id=workspace.id)
     await db.commit()
     return admin

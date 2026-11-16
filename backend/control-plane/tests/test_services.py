@@ -115,7 +115,9 @@ async def test_get_bad_uuid_is_422(client: AsyncClient, auth_headers: Headers) -
 
 async def test_patch_changes_only_sent_fields(client: AsyncClient, auth_headers: Headers) -> None:
     created = (await create(client, auth_headers)).json()
-    r = await client.patch(f"{URL}/{created['id']}", json={"timeout_ms": 3000}, headers=auth_headers)
+    r = await client.patch(
+        f"{URL}/{created['id']}", json={"timeout_ms": 3000}, headers=auth_headers
+    )
     assert r.status_code == 200
     body = r.json()
     assert body["timeout_ms"] == 3000
@@ -199,7 +201,9 @@ async def test_other_workspace_is_invisible(
     listing = (await client.get(URL, headers=auth_headers)).json()
     assert listing == {"items": [], "total": 0}
     assert (await client.get(path, headers=auth_headers)).status_code == 404
-    assert (await client.patch(path, json={"timeout_ms": 1000}, headers=auth_headers)).status_code == 404
+    assert (
+        await client.patch(path, json={"timeout_ms": 1000}, headers=auth_headers)
+    ).status_code == 404
     assert (await client.delete(path, headers=auth_headers)).status_code == 404
 
 

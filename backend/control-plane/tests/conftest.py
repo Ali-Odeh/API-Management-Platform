@@ -21,19 +21,19 @@ os.environ["DATABASE_URL"] = _real_url.set(database=TEST_DATABASE).render_as_str
     hide_password=False
 )
 
-import pytest  # noqa: E402
-from alembic import command  # noqa: E402
-from alembic.config import Config  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy import text  # noqa: E402
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine  # noqa: E402
+import pytest
+from alembic import command
+from alembic.config import Config
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from app.auth import crud as auth_crud  # noqa: E402
-from app.auth.models import Admin  # noqa: E402
-from app.core.db import Base, SessionLocal, engine  # noqa: E402
-from app.core.security import create_access_token  # noqa: E402
-from app.main import app  # noqa: E402
-from app.workspaces.crud import get_or_create_default_workspace  # noqa: E402
+from app.auth import crud as auth_crud
+from app.auth.models import Admin
+from app.core.db import Base, SessionLocal, engine
+from app.core.security import create_access_token
+from app.main import app
+from app.workspaces.crud import get_or_create_default_workspace
 
 ADMIN_EMAIL = "admin@test.local"
 ADMIN_PASSWORD = "correct-horse-battery-staple"

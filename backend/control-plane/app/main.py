@@ -19,9 +19,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # (Tables already exist: the container runs `alembic upgrade head` first.)
     settings = get_settings()
     async with SessionLocal() as db:
-        await auth_crud.seed_admin(
-            db, email=settings.admin_email, password=settings.admin_password
-        )
+        await auth_crud.seed_admin(db, email=settings.admin_email, password=settings.admin_password)
     yield
     # Shutdown: close all pooled DB connections cleanly.
     await engine.dispose()

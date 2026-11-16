@@ -62,4 +62,5 @@ def decode_access_token(token: str) -> str | None:
         )
     except jwt.InvalidTokenError:
         return None
-    return payload["sub"]
+    subject = payload["sub"]
+    return subject if isinstance(subject, str) else None
