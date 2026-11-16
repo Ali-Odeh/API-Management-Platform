@@ -13,6 +13,7 @@ from app.services import crud
 from app.services.models import Service
 from app.services.schemas import ServiceCreate
 from app.workspaces.models import Workspace
+from tests.factories import make_route, make_service
 
 URL = "/api/v1/services"
 Headers = dict[str, str]
@@ -164,6 +165,23 @@ async def test_delete_unknown_is_404(client: AsyncClient, auth_headers: Headers)
     assert r.status_code == 404
 
 
+async def test_delete_with_routes_is_409_until_routes_are_gone(
+    client: AsyncClient, auth_headers: Headers, db: AsyncSession, workspace: Workspace
+) -> None:
+    service = await make_service(db, workspace.id)
+    route = await make_route(db, workspace.id, service.id)
+    path = f"{URL}/{service.id}"
+
+    r = await client.delete(path, headers=auth_headers)
+    assert r.status_code == 409
+    assert r.json() == {"detail": "Service still has routes. Delete its routes first."}
+    assert (await client.get(path, headers=auth_headers)).status_code == 200  # still there
+
+    await db.delete(route)
+    await db.commit()
+    assert (await client.delete(path, headers=auth_headers)).status_code == 204
+
+
 # ---- Auth
 
 
@@ -186,15 +204,9 @@ async def test_every_endpoint_needs_a_token(client: AsyncClient, method: str, pa
 
 
 @pytest.fixture
-async def other_workspace_service(db: AsyncSession) -> Service:
+async def other_workspace_service(db: AsyncSession, other_workspace: Workspace) -> Service:
     """A service that belongs to a different workspace than the test admin."""
-    other = Workspace(name="Other Co", slug="other")
-    db.add(other)
-    await db.flush()
-    service = Service(workspace_id=other.id, name="orders", upstream_url="http://other:1")
-    db.add(service)
-    await db.commit()
-    return service
+    return await make_service(db, other_workspace.id, name="orders")
 
 
 async def test_other_workspace_is_invisible(

@@ -19,6 +19,9 @@ _NOT_FOUND: dict[int | str, dict[str, Any]] = {
 _CONFLICT: dict[int | str, dict[str, Any]] = {
     status.HTTP_409_CONFLICT: {"description": "Name already used in this workspace"}
 }
+_HAS_ROUTES: dict[int | str, dict[str, Any]] = {
+    status.HTTP_409_CONFLICT: {"description": "Service still has routes"}
+}
 
 
 @router.get("")
@@ -49,6 +52,8 @@ async def update_service(
     return ServiceOut.model_validate(service)
 
 
-@router.delete("/{service_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_NOT_FOUND)
+@router.delete(
+    "/{service_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_NOT_FOUND | _HAS_ROUTES
+)
 async def delete_service(service_id: uuid.UUID, admin: CurrentAdmin, db: DbSession) -> None:
     await crud.delete_service(db, workspace_id=admin.workspace_id, service_id=service_id)

@@ -134,7 +134,9 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 
 The MVP needs seven tables in Postgres, all owned by the control plane. Every table has a `uuid` primary key plus `created_at` and `updated_at` timestamps.
 
-**Tenant-ready:** every config table has a `workspace_id` (FK to `workspaces`, not null, indexed). In the MVP only the `default` workspace exists. All queries live in each feature's `crud.py` and filter by the current admin's workspace, so turning on real multi-tenancy (milestone MT) needs no data migration.
+**Tenant-ready:** every config table has a `workspace_id` (FK to `workspaces`, not null, indexed). In the MVP only the `default` workspace exists. All queries live in each feature's `crud.py` and filter by the current admin's workspace, so turning on real multi-tenancy (milestone MT) needs no data migration. Child rows point to their parent with a composite foreign key on (`parent_id`, `workspace_id`), so the database itself makes a cross-workspace link (a route to another tenant's service, a key to another tenant's consumer) impossible.
+
+**Delete rules:** a service that still has routes can't be deleted (409). Deleting a consumer deletes its API keys. `consumers.status` is text with a CHECK (`active` or `blocked`) rather than a Postgres ENUM, so new values are easy to add.
 
 ```mermaid
 erDiagram

@@ -34,6 +34,8 @@ from app.core.db import Base, SessionLocal, engine
 from app.core.security import create_access_token
 from app.main import app
 from app.workspaces.crud import get_or_create_default_workspace
+from app.workspaces.models import Workspace
+from tests.factories import make_workspace
 
 ADMIN_EMAIL = "admin@test.local"
 ADMIN_PASSWORD = "correct-horse-battery-staple"
@@ -84,9 +86,22 @@ async def db() -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-async def admin(db: AsyncSession) -> Admin:
-    """The default workspace plus one admin with a known password."""
-    workspace = await get_or_create_default_workspace(db)
+async def workspace(db: AsyncSession) -> Workspace:
+    """The `default` workspace (the one the test admin belongs to)."""
+    default = await get_or_create_default_workspace(db)
+    await db.commit()
+    return default
+
+
+@pytest.fixture
+async def other_workspace(db: AsyncSession) -> Workspace:
+    """A second tenant, for isolation tests."""
+    return await make_workspace(db, slug="other")
+
+
+@pytest.fixture
+async def admin(db: AsyncSession, workspace: Workspace) -> Admin:
+    """One admin with a known password, in the default workspace."""
     created = await auth_crud.create_admin(
         db, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, workspace_id=workspace.id
     )

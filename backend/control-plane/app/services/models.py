@@ -17,6 +17,9 @@ class Service(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
     __table_args__ = (
         # Unique per workspace (option C): two workspaces may both have "orders".
         UniqueConstraint("workspace_id", "name", name=UQ_SERVICE_NAME),
+        # Target for the (service_id, workspace_id) foreign key in routes,
+        # which guarantees a route is always in its service's workspace.
+        UniqueConstraint("id", "workspace_id", name="uq_services_id_workspace_id"),
     )
 
     name: Mapped[str] = mapped_column(String(100))

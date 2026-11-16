@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import commit_or_conflict
 from app.core.errors import NotFoundError
 from app.core.pagination import PageParams
+from app.routes.models import FK_ROUTE_SERVICE
 from app.services.models import UQ_SERVICE_NAME, Service
 from app.services.schemas import ServiceCreate, ServiceUpdate
 
@@ -72,6 +73,9 @@ async def update_service(
 async def delete_service(
     db: AsyncSession, *, workspace_id: uuid.UUID, service_id: uuid.UUID
 ) -> None:
+    """Delete a service. Refused (409) while routes still point to it."""
     service = await get_service(db, workspace_id=workspace_id, service_id=service_id)
     await db.delete(service)
-    await db.commit()
+    await commit_or_conflict(
+        db, {FK_ROUTE_SERVICE: "Service still has routes. Delete its routes first."}
+    )
