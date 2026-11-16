@@ -30,6 +30,17 @@ docs/PLAN.md       the plan
 docker-compose.yml
 ```
 
+## Code quality (always)
+
+The user expects production-style code: scalable, maintainable, readable, clean architecture.
+
+- **Layers in the control plane:** `router.py` handles HTTP only (parse input, call crud, shape output). `crud.py` holds all DB access and business rules. `models.py` holds tables, and `schemas.py` holds input/output validation. Routers never write queries.
+- `crud.py` never raises `HTTPException`. It raises `NotFoundError` / `ConflictError` from `app/core/errors.py`, which map to `{"detail": ...}` with 404/409.
+- Reuse the shared core instead of copying it: mixins (`core/models.py`), `CurrentAdmin` / `DbSession` (`core/deps.py`), `Pagination` / `Page[T]` (`core/pagination.py`), errors (`core/errors.py`).
+- Type hints everywhere, small functions, clear names, short docstrings that say *why*. No dead code.
+- Go follows the same spirit: small packages with one responsibility, interfaces at boundaries, table-driven tests.
+- Split each step into 2–3 logical commits.
+
 ## Working rules
 
 - The user is a backend engineer (FastAPI, Spring Boot, Node) and **new to Go**. The goal is learning, not just code.
