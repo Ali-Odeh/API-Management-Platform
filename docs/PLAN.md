@@ -201,8 +201,9 @@ The admin API lives under `/api/v1` and needs an admin JWT on every call except 
 
 **Conventions**
 
-- Lists take `?page=` and `?page_size=` and return `{ items, total }`
-- Errors return `{ "detail": "..." }` with the right status code
+- Lists take `?page=` and `?page_size=` (max 100) and return `{ items, total }`, newest first. Some lists also filter: routes by `?service_id=`, consumers by `?status=`
+- Errors return `{ "detail": "..." }` with the right status code: 404 unknown id (or another workspace's), 409 duplicate or still in use, 422 invalid input or a reference to something not in this workspace
+- `PATCH` changes only the fields sent; sending `null` is rejected
 - FastAPI generates the OpenAPI spec, and the frontend generates its TypeScript types from it
 
 **Generate a key**

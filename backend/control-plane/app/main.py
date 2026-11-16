@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from app.auth import crud as auth_crud
 from app.auth.router import router as auth_router
+from app.consumers.router import router as consumers_router
 from app.core.config import get_settings
 from app.core.db import SessionLocal, engine
 from app.core.errors import register_error_handlers
@@ -37,6 +38,7 @@ register_error_handlers(app)
 app.include_router(auth_router)
 app.include_router(services_router)
 app.include_router(routes_router)
+app.include_router(consumers_router)
 
 
 @app.get("/health", tags=["health"])

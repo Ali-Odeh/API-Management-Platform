@@ -61,7 +61,11 @@ Invoke-RestMethod "http://localhost:8000/api/v1/services?page=1&page_size=20" -H
 | --- | --- |
 | `POST /api/v1/auth/login`, `GET /api/v1/auth/me` | Admin login and current admin |
 | `GET, POST /api/v1/services` | List (paginated `{items, total}`), create |
-| `GET, PATCH, DELETE /api/v1/services/{id}` | Read, partial update, delete |
+| `GET, PATCH, DELETE /api/v1/services/{id}` | Read, partial update, delete (409 while it has routes) |
+| `GET, POST /api/v1/routes` | List (`?service_id=`), create |
+| `GET, PATCH, DELETE /api/v1/routes/{id}` | Read, partial update, delete |
+| `GET, POST /api/v1/consumers` | List (`?status=active\|blocked`), create |
+| `GET, PATCH, DELETE /api/v1/consumers/{id}` | Read, update (block with `{"status":"blocked"}`), delete (also deletes its keys) |
 
 New migration after changing a model:
 
