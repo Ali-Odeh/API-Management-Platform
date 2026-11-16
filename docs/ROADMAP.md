@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 16, 2026 · **Current step:** 2.1
+**Last updated:** Nov 16, 2026 · **Current step:** 2.2
 
 ## Overview
 
@@ -10,19 +10,19 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- | --- |
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M2: Control plane done | ⬜⬜⬜⬜⬜⬜ 0/6 | 👉 Next |
+| M2: Control plane done | ✅⬜⬜⬜⬜⬜ 1/6 | 🔄 In progress |
 | M3: Gateway proxies (Go) | ⬜⬜⬜⬜⬜⬜⬜ 0/7 | ⏳ |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 6 of 24 steps done (25%).
+**MVP:** 7 of 24 steps done (29%).
 
 ## Quality today
 
 | Check | Result |
 | --- | --- |
-| Tests | 73 passing |
+| Tests | 94 passing |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -50,12 +50,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 **Outcome:** an admin logs in and registers backend services through the API. The whole stack starts with `docker compose up`.
 
-## M2: Control plane done 👉
+## M2: Control plane done 🔄
 
 | # | Step | Status |
 | --- | --- | --- |
-| 2.1 | `routes`, `consumers` and `api_keys` models and migrations | 👉 Next |
-| 2.2 | CRUD endpoints for routes and consumers | ⬜ |
+| 2.1 | `routes`, `consumers` and `api_keys` models and migrations | ✅ `ee9cf45`, `bfabeae` |
+| 2.2 | CRUD endpoints for routes and consumers | 👉 Next |
 | 2.3 | API key generation (shown once, stored hashed) and revocation | ⬜ |
 | 2.4 | `config_version` bump on every change | ⬜ |
 | 2.5 | `/internal/config` with the shared-secret check and ETag/304 | ⬜ |
@@ -125,4 +125,8 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 16 | 1.4 | Tests use a separate `apim_test` database | Tests never touch real data |
 | Nov 16 | 1.5 | Layered code: router → crud → models, shared errors and pagination | Clean architecture, reused by every feature |
 | Nov 16 | 1.6 | ruff + mypy strict + coverage ≥ 90%, run by `check.ps1` | The quality bar is enforced by tools, not memory |
+| Nov 16 | 2.1 | Composite FKs on (`parent_id`, `workspace_id`) for routes and keys | The database itself blocks cross-tenant links |
+| Nov 16 | 2.1 | Service with routes can't be deleted (409); deleting a consumer deletes its keys | No dangling routes; keys mean nothing without their owner |
+| Nov 16 | 2.1 | `consumers.status` is text + CHECK, not a Postgres ENUM; consumer email not unique | Easy to extend; one developer can own several apps |
+| Nov 16 | 2.1 | Route defaults: `auth_required=true`, `strip_prefix=false` | Secure by default |
 | Nov 16 | — | No CI yet; revisit at the end of M2 | Keep scope small |
