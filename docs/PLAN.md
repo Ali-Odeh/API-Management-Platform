@@ -98,7 +98,7 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 | Reverse proxy | Forwards `/v1/orders/*` to the `orders` backend | MVP |
 | Route matching | Longest path prefix plus HTTP method | MVP |
 | API key auth | Checks `X-API-Key`, returns 401 on a bad key | MVP |
-| Rate limiting | Token bucket per key in Redis, 429 with `Retry-After` | MVP |
+| Rate limiting | Token bucket per consumer in Redis, 429 with `Retry-After` | MVP |
 | Request logging | One JSON line per request | MVP |
 | Config sync | Polls the control plane every 5 seconds | MVP |
 | Timeouts and errors | 504 on a slow backend, 502 on a dead one | MVP |
@@ -177,7 +177,7 @@ A key looks like `ak_live_` followed by 32 random characters. The control plane 
 
 | Key | Type | Purpose | Expiry |
 | --- | --- | --- | --- |
-| `rl:{key_id}` | Hash (`tokens`, `ts`) | Token bucket state per API key | 2 minutes idle |
+| `rl:{consumer_id}` | Hash (`tokens`, `ts`) | Token bucket state per consumer, shared by all of its keys | 2 minutes idle |
 | `quota:{consumer_id}:{yyyymm}` | Counter | Monthly quota (v2) | 35 days |
 
 ## 6. Control plane API
@@ -272,10 +272,10 @@ A background goroutine polls `/internal/config` every 5 seconds. It builds a new
 
 **Token bucket**
 
-Each key has a bucket with capacity equal to its per-minute limit, refilled continuously. One Lua script does the whole check so two gateway instances cannot both spend the last token:
+Each consumer has one bucket with capacity equal to its `rate_limit_per_min`, refilled continuously. All of a consumer's keys share that bucket, because the limit is set on the consumer: a bucket per key would let a consumer multiply its limit just by creating more keys (changed Nov 16, 2026). One Lua script does the whole check so two gateway instances cannot both spend the last token:
 
 ```lua
--- KEYS[1] = rl:{key_id}   ARGV = capacity, refill_per_sec, now_ms
+-- KEYS[1] = rl:{consumer_id}   ARGV = capacity, refill_per_sec, now_ms
 local b = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
 local tokens = tonumber(b[1]) or tonumber(ARGV[1])
 local ts = tonumber(b[2]) or tonumber(ARGV[3])

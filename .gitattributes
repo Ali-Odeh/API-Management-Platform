@@ -1,0 +1,17 @@
+# Line endings: store and check out text files with LF everywhere.
+# Code runs in Linux containers, where a CRLF line ending can break shell
+# scripts ("bad interpreter") and Go/Python tooling. This file overrides
+# each developer's core.autocrlf setting, so every clone behaves the same.
+* text=auto eol=lf
+
+# PowerShell scripts are Windows-only: give them Windows line endings.
+*.ps1 text eol=crlf
+
+# Never touch binary files.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
