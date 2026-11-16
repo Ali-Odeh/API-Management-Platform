@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     database_url: str
     jwt_secret: str
+    jwt_expire_minutes: int = 60  # optional: has a default
     internal_token: str
     admin_email: str
     admin_password: str
