@@ -37,7 +37,29 @@ services:
       timeout: 3s
       retries: 10
 
-  # control-plane (8000), gateway (8080) and dashboard (5173) are added in later milestones.
+  control-plane:
+    build: ./backend/control-plane
+    env_file: .env          # DATABASE_URL, JWT_SECRET, INTERNAL_TOKEN, ADMIN_*
+    environment:
+      # Docker Desktop on Windows doesn't pass file-change events into
+      # containers, so the --reload watcher polls for changes instead.
+      WATCHFILES_FORCE_POLLING: "true"
+    # Dev mode: restart automatically when you save a .py file.
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./backend/control-plane:/code   # your code, live inside the container
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # gateway (8080) and dashboard (5173) are added in later milestones.
 
 volumes:
   pgdata:

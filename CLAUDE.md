@@ -40,4 +40,5 @@ docker-compose.yml
 - The user is on **Windows**, so give commands for **PowerShell**. Python is run with `py` (plain `python` is the Store alias).
 - Git: remote `origin` is `https://github.com/Ali-Odeh/API-Management-Platform.git`. **Never push.** The user pushes.
 - Secrets live in `.env` (gitignored). Only `.env.example` is committed.
-- The user has local Windows Postgres 18 on port 5432 and 14 on 5433. The Docker Postgres is mapped to **host port 5434**. Use `localhost:5434` for anything run on Windows (tests, Alembic, pgAdmin), and `postgres:5432` inside containers.
+- **The apps run only in Docker** (decided at step 1.3). The control plane always uses `DATABASE_URL=...@postgres:5432/...`. Run its tests and Alembic inside the container: `docker compose exec control-plane pytest` and `docker compose exec control-plane alembic ...`. The code is bind-mounted and uvicorn runs with `--reload`. The local `.venv` (Python 3.12, made with `uv`) only serves editor autocomplete.
+- The user has local Windows Postgres 18 on port 5432 and 14 on 5433. The Docker Postgres is mapped to **host port 5434**, which is only for viewing data from Windows tools like pgAdmin.
