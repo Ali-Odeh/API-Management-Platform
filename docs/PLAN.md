@@ -22,7 +22,7 @@ An admin registers a service and a route through the admin API, creates a consum
 - Billing and payments
 - Kubernetes deployment and multi-region setups
 - OAuth2 authorization server, mTLS
-- Multi-tenant workspaces
+- Full multi-tenancy (several workspaces, admin roles, per-tenant gateway routing). The data model is **tenant-ready from day one**: every record belongs to a workspace, and the MVP runs with one `default` workspace. The full feature is milestone MT, after the MVP (decided Nov 16, 2026).
 
 **How we work**
 
@@ -116,6 +116,7 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 
 | Feature | What it does | Phase |
 | --- | --- | --- |
+| Workspaces (tenant-ready) | Every record belongs to a workspace; one `default` workspace is seeded | MVP |
 | Admin auth | Email and password login, JWT access token | MVP |
 | Services CRUD | Name, upstream URL, timeout | MVP |
 | Routes CRUD | Path prefix, methods, service, auth flag | MVP |
@@ -124,16 +125,22 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 | Gateway config endpoint | One snapshot of everything the gateway needs | MVP |
 | Plans | Rate limit and monthly quota tiers | v2 |
 | Usage analytics | Requests, errors and latency by consumer and route | v2 |
+| Multi-tenancy | Several workspaces, admin roles, data isolation, per-tenant config | MT |
 | Audit log | Who changed what, and when | v3 |
 | API lifecycle | Draft, published, deprecated | v3 |
 | Developer accounts | Sign-up and self-service keys for the portal | v3 |
 
 ## 5. Database design
 
-The MVP needs six tables in Postgres, all owned by the control plane. Every table has a `uuid` primary key plus `created_at` and `updated_at` timestamps.
+The MVP needs seven tables in Postgres, all owned by the control plane. Every table has a `uuid` primary key plus `created_at` and `updated_at` timestamps.
+
+**Tenant-ready:** every config table has a `workspace_id` (FK to `workspaces`, not null, indexed). In the MVP only the `default` workspace exists. All queries live in each feature's `crud.py` and filter by the current admin's workspace, so turning on real multi-tenancy (milestone MT) needs no data migration.
 
 ```mermaid
 erDiagram
+  WORKSPACES ||--o{ ADMINS : has
+  WORKSPACES ||--o{ SERVICES : owns
+  WORKSPACES ||--o{ CONSUMERS : owns
   SERVICES ||--o{ ROUTES : has
   CONSUMERS ||--o{ API_KEYS : owns
   PLANS ||--o{ CONSUMERS : assigned
@@ -145,11 +152,12 @@ erDiagram
 
 | Table | Columns | Notes |
 | --- | --- | --- |
-| `admins` | `email` (unique), `password_hash` | Password hashed with argon2 or bcrypt |
-| `services` | `name` (unique), `upstream_url`, `timeout_ms` (default 5000), `is_active` | One row per backend |
-| `routes` | `service_id` (FK), `path_prefix`, `methods` (text array), `strip_prefix` (bool), `auth_required` (bool), `is_active` | Unique on `path_prefix` |
-| `consumers` | `name`, `email`, `status` (`active` or `blocked`), `rate_limit_per_min` (default 60) | The apps that call the APIs |
-| `api_keys` | `consumer_id` (FK), `key_prefix`, `key_hash` (unique), `name`, `last_used_at`, `revoked_at` | The raw key is never stored |
+| `workspaces` | `name`, `slug` (unique) | One row (`default`) in the MVP |
+| `admins` | `workspace_id` (FK), `email` (unique), `password_hash` | Password hashed with argon2. Email is unique across all workspaces so login needs only email and password |
+| `services` | `workspace_id` (FK), `name`, `upstream_url`, `timeout_ms` (default 5000), `is_active` | One row per backend. Unique on (`workspace_id`, `name`) |
+| `routes` | `workspace_id` (FK), `service_id` (FK), `path_prefix`, `methods` (text array), `strip_prefix` (bool), `auth_required` (bool), `is_active` | Unique on `path_prefix` across all workspaces in the MVP, because the gateway matches by path only. MT makes it unique per workspace once the gateway can tell tenants apart |
+| `consumers` | `workspace_id` (FK), `name`, `email`, `status` (`active` or `blocked`), `rate_limit_per_min` (default 60) | The apps that call the APIs |
+| `api_keys` | `workspace_id` (FK), `consumer_id` (FK), `key_prefix`, `key_hash` (unique), `name`, `last_used_at`, `revoked_at` | The raw key is never stored |
 | `config_version` | `version` (bigint) | Single row, bumped on every config change |
 
 **v2 tables**
@@ -370,6 +378,7 @@ api-platform/
 │   │   │   ├── routes/           # same four files
 │   │   │   ├── consumers/        # same four files
 │   │   │   ├── keys/             # same four files
+│   │   │   ├── workspaces/       # models.py, crud.py (router comes with MT)
 │   │   │   ├── gateway_config/   # the /internal/config endpoint
 │   │   │   └── main.py           # creates the app, includes each router
 │   │   ├── alembic/
@@ -403,6 +412,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | --- | --- | --- |
 | Control plane | `DATABASE_URL` | `postgresql+asyncpg://app:app@postgres:5432/apim` |
 | Control plane | `JWT_SECRET` | random 32 bytes |
+| Control plane | `JWT_EXPIRE_MINUTES` | optional, default `60` |
 | Control plane | `INTERNAL_TOKEN` | shared secret with the gateway |
 | Control plane | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | seeds the first admin |
 | Gateway | `CONTROL_PLANE_URL` | `http://control-plane:8000` |
@@ -424,6 +434,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 | M2: Control plane done | 3 | All MVP endpoints, tests, config snapshot | Together |
 | M3: Gateway proxies | 4 | Requests flow through the gateway with key auth | Together |
 | M4: MVP done | 5 | Rate limiting, logging, load test, README | Together |
+| MT: Multi-tenancy | after M4 | Several workspaces, roles, per-tenant gateway routing | Together |
 | v2a: Admin UI | 6 to 7 | Pages 1, 3, 5, 6, 7 working against the API | Claude |
 | v2b: Plans and analytics | 8 to 10 | Plans, usage events, metrics, remaining admin pages | Together, UI by Claude |
 | v3: Portal and extras | 11 onward | Developer portal, JWT, LLM gateway mode | Together, UI by Claude |
@@ -437,10 +448,10 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 
 **M1: Skeleton**
 
-- [ ] Create the repo with the folder layout from section 9
-- [ ] Compose file with Postgres, Redis and the mock backend
-- [ ] FastAPI project with settings, async SQLAlchemy and Alembic
-- [ ] `admins` table, seed admin, login endpoint, JWT dependency
+- [x] Create the repo with the folder layout from section 9
+- [x] Compose file with Postgres, Redis and the mock backend
+- [x] FastAPI project with settings, async SQLAlchemy and Alembic
+- [ ] `workspaces` and `admins` tables, seed workspace and admin, login endpoint, JWT dependency
 - [ ] `services` model, migration and CRUD endpoints
 - [ ] First pytest tests for login and services
 
@@ -470,6 +481,15 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [ ] End-to-end test script: create service, route, consumer, key, then call through the gateway
 - [ ] k6 load test and a note of the p95 latency the gateway adds
 - [ ] README with setup steps and an architecture picture
+
+**MT: Multi-tenancy (after the MVP)**
+
+- [ ] Workspaces API: create and list workspaces
+- [ ] Admin roles per workspace (owner, member) and inviting admins
+- [ ] Make route `path_prefix` unique per workspace
+- [ ] Gateway finds the tenant (e.g. by subdomain) and matches only that tenant's routes
+- [ ] `/internal/config` snapshot grouped by workspace
+- [ ] Isolation tests: workspace A can never read or change workspace B's data
 
 **v2a: Admin UI (Claude)**
 
@@ -511,6 +531,6 @@ The main risk is scope: the full feature list is months of work, so nothing from
 **Open questions**
 
 - [ ] Should the rate limit live on the consumer (MVP) or move to plans from day one?
-- [ ] One admin account, or several admins with roles?
+- [x] One admin account, or several admins with roles? *One seeded admin in the MVP. Several admins with roles per workspace come in MT.*
 - [ ] Where will the demo run: local only, or a small cloud VM?
 - [ ] Should usage events go from the gateway over HTTP batches or a Redis stream (v2)?
