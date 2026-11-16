@@ -48,6 +48,21 @@ Invoke-RestMethod http://localhost:8000/api/v1/auth/me -Headers @{ Authorization
 
 In Swagger (`/docs`): call `POST /api/v1/auth/login`, copy `access_token`, click **Authorize**, paste it.
 
+Register a backend service (needs the token from above):
+
+```powershell
+$h = @{ Authorization = "Bearer $token" }
+Invoke-RestMethod -Method Post http://localhost:8000/api/v1/services -Headers $h -ContentType 'application/json' `
+  -Body '{"name":"orders","upstream_url":"http://mock-backend:9000"}'
+Invoke-RestMethod "http://localhost:8000/api/v1/services?page=1&page_size=20" -Headers $h
+```
+
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /api/v1/auth/login`, `GET /api/v1/auth/me` | Admin login and current admin |
+| `GET, POST /api/v1/services` | List (paginated `{items, total}`), create |
+| `GET, PATCH, DELETE /api/v1/services/{id}` | Read, partial update, delete |
+
 New migration after changing a model:
 
 ```powershell

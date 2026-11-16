@@ -451,8 +451,8 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Create the repo with the folder layout from section 9
 - [x] Compose file with Postgres, Redis and the mock backend
 - [x] FastAPI project with settings, async SQLAlchemy and Alembic
-- [ ] `workspaces` and `admins` tables, seed workspace and admin, login endpoint, JWT dependency
-- [ ] `services` model, migration and CRUD endpoints
+- [x] `workspaces` and `admins` tables, seed workspace and admin, login endpoint, JWT dependency
+- [x] `services` model, migration and CRUD endpoints
 - [ ] First pytest tests for login and services
 
 **M2: Control plane done**
