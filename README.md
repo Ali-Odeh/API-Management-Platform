@@ -6,7 +6,7 @@ The full design is in [docs/PLAN.md](docs/PLAN.md).
 
 ## Status
 
-Milestone **M1: Skeleton** is in progress. Postgres, Redis, the mock backend and the control plane base (FastAPI + async SQLAlchemy + Alembic) run in Docker Compose.
+Milestone **M1: Skeleton** is in progress. Postgres, Redis, the mock backend and the control plane run in Docker Compose. The control plane has admin login (JWT) and a tenant-ready data model (one `default` workspace).
 
 ## Getting started (Windows / PowerShell)
 
@@ -35,6 +35,27 @@ docker compose exec control-plane pytest -v            # run the tests
 docker compose exec control-plane alembic current      # migration status
 docker compose logs -f control-plane                   # follow the logs
 ```
+
+When the container starts it runs `alembic upgrade head` (applies migrations) and creates the `default` workspace and the first admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` if they don't exist yet.
+
+Log in and call a protected endpoint:
+
+```powershell
+$body  = @{ email = "admin@example.com"; password = "<ADMIN_PASSWORD from .env>" } | ConvertTo-Json
+$token = (Invoke-RestMethod -Method Post http://localhost:8000/api/v1/auth/login -ContentType 'application/json' -Body $body).access_token
+Invoke-RestMethod http://localhost:8000/api/v1/auth/me -Headers @{ Authorization = "Bearer $token" }
+```
+
+In Swagger (`/docs`): call `POST /api/v1/auth/login`, copy `access_token`, click **Authorize**, paste it.
+
+New migration after changing a model:
+
+```powershell
+docker compose exec control-plane alembic revision --autogenerate -m "describe the change"
+docker compose exec control-plane alembic upgrade head
+```
+
+Tests run against a separate database, `apim_test`, which is recreated on every test run. Your real data in `apim` is never touched.
 
 For editor autocomplete only (optional), create a local venv:
 

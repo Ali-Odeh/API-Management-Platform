@@ -5,14 +5,24 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.core.db import engine
+from app.auth import crud as auth_crud
+from app.auth.router import router as auth_router
+from app.core.config import get_settings
+from app.core.db import SessionLocal, engine
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # Code before `yield` runs at startup, code after it at shutdown.
+    # Startup: make sure the default workspace and the first admin exist.
+    # (Tables already exist: the container runs `alembic upgrade head` first.)
+    settings = get_settings()
+    async with SessionLocal() as db:
+        await auth_crud.seed_admin(
+            db, email=settings.admin_email, password=settings.admin_password
+        )
     yield
-    await engine.dispose()  # close all pooled DB connections cleanly
+    # Shutdown: close all pooled DB connections cleanly.
+    await engine.dispose()
 
 
 app = FastAPI(
@@ -20,6 +30,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.include_router(auth_router)
 
 
 @app.get("/health", tags=["health"])

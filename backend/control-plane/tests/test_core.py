@@ -22,12 +22,16 @@ def test_settings_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 async def test_get_db_session_can_query_postgres() -> None:
-    # Use the real dependency the endpoints will use, against the real DB.
+    # Use the real dependency the endpoints will use, against real Postgres.
     session_gen = get_db()
     session = await anext(session_gen)
     try:
         result = await session.execute(text("SELECT 1"))
         assert result.scalar_one() == 1
+
+        # Tests must never touch the real data (see conftest.py).
+        db_name = (await session.execute(text("SELECT current_database()"))).scalar_one()
+        assert db_name.endswith("_test")
 
         version = (await session.execute(text("SHOW server_version"))).scalar_one()
         assert version.startswith("16.")
