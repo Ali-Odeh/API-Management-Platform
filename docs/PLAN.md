@@ -547,3 +547,13 @@ The main risk is scope: the full feature list is months of work, so nothing from
 - [x] One admin account, or several admins with roles? *One seeded admin in the MVP. Several admins with roles per workspace come in MT.*
 - [ ] Where will the demo run: local only, or a small cloud VM?
 - [ ] Should usage events go from the gateway over HTTP batches or a Redis stream (v2)?
+
+**Patterns to apply later (reminder)**
+
+Config sync doesn't need these: the change and the version bump share one transaction, and the gateway receives full snapshots, which are naturally idempotent. Later milestones do need them:
+
+| When | Pattern | What it solves |
+| --- | --- | --- |
+| v2 usage events (gateway → control plane batches) | **Inbox** | Each batch carries an id; the control plane records processed ids and skips repeats, so a retried batch is never counted twice |
+| v3 webhooks (e.g. tell a customer "key revoked") | **Outbox** | The change and an outbox row are written in one transaction; a worker delivers with retries, so a webhook is never lost or sent for a change that rolled back |
+| v3 audit log | **Outbox** (same idea) | "Who changed what" is written in the same transaction as the change |
