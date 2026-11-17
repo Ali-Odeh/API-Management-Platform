@@ -44,6 +44,11 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 
+[[tool.mypy.overrides]]
+# asyncpg ships no type hints; we only use a few calls in gateway_config/notifier.py.
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true

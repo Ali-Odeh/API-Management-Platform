@@ -10,7 +10,7 @@
 
 from collections.abc import AsyncIterator, Mapping
 
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
@@ -38,6 +38,14 @@ engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
 # expire_on_commit=False: objects stay readable after commit, which we need
 # when we return them from an endpoint after saving.
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+
+
+def driver_dsn(database_url: str) -> str:
+    """'postgresql+asyncpg://...' -> 'postgresql://...', the form asyncpg accepts directly.
+
+    Used where we talk to asyncpg without SQLAlchemy (the LISTEN connection).
+    """
+    return make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

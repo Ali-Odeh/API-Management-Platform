@@ -29,7 +29,10 @@ from app.workspaces import models as workspace_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False: by default fileConfig mutes every logger that
+    # already exists, which silently swallowed our app warnings when tests run
+    # migrations in the same process.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 DATABASE_URL = get_settings().database_url

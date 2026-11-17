@@ -9,8 +9,11 @@ from app.auth import crud as auth_crud
 from app.auth.router import router as auth_router
 from app.consumers.router import router as consumers_router
 from app.core.config import get_settings
-from app.core.db import SessionLocal, engine
+from app.core.db import SessionLocal, driver_dsn, engine
 from app.core.errors import register_error_handlers
+from app.gateway_config.notifier import ConfigNotifier
+from app.gateway_config.provider import ConfigProvider
+from app.gateway_config.router import router as gateway_config_router
 from app.keys.router import router as keys_router
 from app.routes.router import router as routes_router
 from app.services.router import router as services_router
@@ -23,8 +26,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     async with SessionLocal() as db:
         await auth_crud.seed_admin(db, email=settings.admin_email, password=settings.admin_password)
+
+    # Start listening for config changes, for long-polling gateways.
+    notifier = ConfigNotifier(driver_dsn(settings.database_url))
+    await notifier.start()
+    app.state.config_provider = ConfigProvider(engine, notifier)
     yield
-    # Shutdown: close all pooled DB connections cleanly.
+    # Shutdown: stop listening (waiting requests answer at once), close pooled connections.
+    await notifier.stop()
     await engine.dispose()
 
 
@@ -41,6 +50,7 @@ app.include_router(services_router)
 app.include_router(routes_router)
 app.include_router(consumers_router)
 app.include_router(keys_router)
+app.include_router(gateway_config_router)
 
 
 @app.get("/health", tags=["health"])

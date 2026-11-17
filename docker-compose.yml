@@ -45,7 +45,9 @@ services:
       # containers, so the --reload watcher polls for changes instead.
       WATCHFILES_FORCE_POLLING: "true"
     # Apply migrations, then run in dev mode (restart when you save a .py file).
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    # --timeout-graceful-shutdown: long-poll requests can stay open up to 60 s;
+    # on restart, close them after 3 s instead of waiting (the gateway just asks again).
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3"
     volumes:
       - ./backend/control-plane:/code   # your code, live inside the container
     ports:
