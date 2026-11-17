@@ -263,6 +263,15 @@ ETag: "43"
 
 If the version has not changed, the control plane answers `304 Not Modified` with no body.
 
+**Details (step 2.5):**
+
+- `?wait=` (0 to 60 seconds, default 0) turns on long polling: with an unchanged version the request is held until a `NOTIFY config_changed` arrives or the time runs out. The gateway sends `wait=30`.
+- `If-None-Match` accepts `"46"`, `W/"46"` or `46`. A missing or unreadable value gets the full snapshot.
+- Missing or wrong `X-Internal-Token` is `401`. An admin JWT does not work here.
+- The snapshot holds active routes on active services and non-revoked keys. Keys of blocked consumers stay in with `consumer_status: "blocked"`, so the gateway can answer `403`. Routes are sorted by `path_prefix` and keys by `id`.
+- The version and the data are read in one `REPEATABLE READ` transaction, so they always match. Each version's snapshot is built once and shared by every gateway that asks for it.
+- Each control-plane process keeps one dedicated Postgres connection for `LISTEN`, reconnecting on its own if it drops. After waking or timing out, the version is re-read from the database, so a lost notification can delay an update but never hide it.
+
 ## 7. Gateway design
 
 The gateway is a chain of middleware around one reverse proxy. Each middleware either rejects the request or passes it on.
@@ -474,7 +483,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] CRUD endpoints for routes and consumers
 - [x] Key generation (shown once, hashed) and revocation
 - [x] `config_version` bump on every change (Postgres triggers + NOTIFY)
-- [ ] `/internal/config` with the shared-secret check, ETag and long polling
+- [x] `/internal/config` with the shared-secret check, ETag and long polling
 - [ ] Tests for every endpoint
 
 **M3: Gateway proxies**

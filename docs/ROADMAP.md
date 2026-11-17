@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 17, 2026 · **Current step:** 2.5
+**Last updated:** Nov 17, 2026 · **Current step:** 2.6
 
 ## Overview
 
@@ -10,19 +10,19 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- | --- |
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M2: Control plane done | ✅✅✅✅⬜⬜ 4/6 | 🔄 In progress |
+| M2: Control plane done | ✅✅✅✅✅⬜ 5/6 | 🔄 In progress |
 | M3: Gateway proxies (Go) | ⬜⬜⬜⬜⬜⬜⬜ 0/7 | ⏳ |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 10 of 24 steps done (42%).
+**MVP:** 11 of 24 steps done (46%).
 
 ## Quality today
 
 | Check | Result |
 | --- | --- |
-| Tests | 196 passing |
+| Tests | 228 passing |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -57,9 +57,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | 2.1 | `routes`, `consumers` and `api_keys` models and migrations | ✅ `ee9cf45`, `bfabeae` |
 | 2.2 | CRUD endpoints for routes and consumers | ✅ `a85435d`, `9911ea2`, `0cde4fe` |
 | 2.3 | API key generation (shown once, stored hashed) and revocation | ✅ `c89c9c6`, `26d9258` |
-| 2.4 | `config_version` bump on every change (Postgres triggers + NOTIFY) | ✅ `57daa61`, *this commit* |
-| 2.5 | `/internal/config` with the shared-secret check, ETag/304 and long polling | 👉 Next |
-| 2.6 | Tests for every endpoint | ⬜ |
+| 2.4 | `config_version` bump on every change (Postgres triggers + NOTIFY) | ✅ `57daa61`, `a144414` |
+| 2.5 | `/internal/config` with the shared-secret check, ETag/304 and long polling | ✅ `52dbcb3`, `c9d6517`, *this commit* |
+| 2.6 | Tests for every endpoint | 👉 Next |
 
 **Outcome:** the control plane is complete, and the gateway can read one config snapshot.
 
@@ -140,4 +140,8 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 17 | 2.4 | **Long polling** (`?wait=30`) instead of polling every 5 s | Changes reach the gateway in milliseconds; 6× fewer idle requests; still plain HTTP |
 | Nov 17 | 2.4 | `config_version` bumped by **Postgres triggers** that also send `NOTIFY config_changed` | No code path can forget it; cascades covered; a failed change bumps nothing |
 | Nov 17 | 2.4 | `config_version` is a singleton (`id` = 1 with a CHECK), no uuid, no `workspace_id` | System state, not tenant config; one global version for the MVP snapshot |
+| Nov 17 | 2.5 | Snapshot read in one `REPEATABLE READ` transaction | The version label always matches the data, so no change can be missed |
+| Nov 17 | 2.5 | Blocked consumers' keys stay in the snapshot, marked | The gateway can answer 403 (blocked) instead of 401 (unknown key) |
+| Nov 17 | 2.5 | One `LISTEN` connection per process, auto-reconnect; DB re-check after every wake-up; one snapshot build per version | Instant updates that stay correct even when a notification is lost; no thundering herd |
+| Nov 17 | 2.5 | `uvicorn --timeout-graceful-shutdown 3` | Held long-poll requests don't delay restarts |
 | Nov 16 | — | No CI yet; revisit at the end of M2 | Keep scope small |

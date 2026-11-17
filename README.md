@@ -68,6 +68,17 @@ Invoke-RestMethod "http://localhost:8000/api/v1/services?page=1&page_size=20" -H
 | `GET, PATCH, DELETE /api/v1/consumers/{id}` | Read, update (block with `{"status":"blocked"}`), delete (also deletes its keys) |
 | `GET, POST /api/v1/consumers/{id}/keys` | List keys (prefix only), generate a key (the full key is shown **once**) |
 | `DELETE /api/v1/keys/{id}` | Revoke a key (kept in the list as revoked) |
+| `GET /internal/config` | Gateway only (`X-Internal-Token`): config snapshot, `ETag`/`304`, long polling with `?wait=` |
+
+Watch the gateway's long polling yourself (two PowerShell windows; `INTERNAL_TOKEN` is in `.env`):
+
+```powershell
+# Window 1: ask like the gateway does. It waits, because nothing has changed yet.
+$it = @{ "X-Internal-Token" = "<INTERNAL_TOKEN>" }
+$etag = (Invoke-WebRequest -UseBasicParsing http://localhost:8000/internal/config -Headers $it).Headers['ETag']
+Invoke-WebRequest -UseBasicParsing "http://localhost:8000/internal/config?wait=30" -Headers ($it + @{ "If-None-Match" = $etag })
+# Window 2: change anything in Swagger (e.g. block a consumer). Window 1 answers at once.
+```
 
 New migration after changing a model:
 
