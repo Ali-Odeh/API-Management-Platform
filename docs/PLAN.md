@@ -470,11 +470,11 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 
 **M2: Control plane done**
 
-- [ ] `routes`, `consumers` and `api_keys` models and migrations
-- [ ] CRUD endpoints for routes and consumers
-- [ ] Key generation (shown once, hashed) and revocation
+- [x] `routes`, `consumers` and `api_keys` models and migrations
+- [x] CRUD endpoints for routes and consumers
+- [x] Key generation (shown once, hashed) and revocation
 - [x] `config_version` bump on every change (Postgres triggers + NOTIFY)
-- [ ] `/internal/config` with the shared-secret check and ETag
+- [ ] `/internal/config` with the shared-secret check, ETag and long polling
 - [ ] Tests for every endpoint
 
 **M3: Gateway proxies**
