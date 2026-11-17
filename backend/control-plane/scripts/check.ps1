@@ -7,7 +7,8 @@
     `docker compose up -d`). Stops at the first failing check.
 
 .PARAMETER Fix
-    Let ruff fix what it can and reformat the code before checking.
+    Let ruff fix what it can, reformat the code, and refresh openapi.json
+    before checking.
 
 .EXAMPLE
     .\backend\control-plane\scripts\check.ps1
@@ -31,6 +32,7 @@ if ($Fix) {
     # Format first (it fixes long lines), then let the linter fix the rest.
     Invoke-Check "ruff format" @("ruff", "format", ".")
     Invoke-Check "ruff fix"    @("ruff", "check", "--fix", ".")
+    Invoke-Check "openapi"     @("python", "scripts/export_openapi.py")
 }
 
 Invoke-Check "ruff lint"   @("ruff", "check", ".")
