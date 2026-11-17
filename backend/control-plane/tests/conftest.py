@@ -32,6 +32,7 @@ from app.auth import crud as auth_crud
 from app.auth.models import Admin
 from app.core.db import Base, SessionLocal, engine
 from app.core.security import create_access_token
+from app.gateway_config.models import ConfigVersion
 from app.main import app
 from app.workspaces.crud import get_or_create_default_workspace
 from app.workspaces.models import Workspace
@@ -61,9 +62,14 @@ def _test_database() -> None:
 # ---- 3. Clean tables before each test, close connections after
 @pytest.fixture(autouse=True)
 async def _clean_tables() -> AsyncIterator[None]:
-    table_names = ", ".join(t.name for t in Base.metadata.sorted_tables)
+    # config_version is a singleton that the triggers need: reset it, never delete it.
+    # (TRUNCATE doesn't fire the INSERT/UPDATE/DELETE triggers, so it bumps nothing.)
+    table_names = ", ".join(
+        t.name for t in Base.metadata.sorted_tables if t.name != ConfigVersion.__tablename__
+    )
     async with engine.begin() as conn:
         await conn.execute(text(f"TRUNCATE {table_names} CASCADE"))
+        await conn.execute(text("UPDATE config_version SET version = 1, updated_at = now()"))
     yield
     # Each test has its own event loop, and a pooled asyncpg connection only
     # works on the loop that opened it, so close them all after each test.
