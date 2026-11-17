@@ -1,0 +1,95 @@
+# Continuous integration: on every push to main and every pull request, GitHub
+# runs the same checks as backend/control-plane/scripts/check.ps1 on a fresh
+# machine with a fresh Postgres. A red X here means "don't merge yet".
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the run that is still going.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control-plane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend/control-plane
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: apim
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U app -d apim"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    # Throwaway values for this run only. Real secrets never belong in a repo.
+    env:
+      DATABASE_URL: postgresql+asyncpg://app:app@localhost:5432/apim
+      JWT_SECRET: ci-only-jwt-secret-not-used-anywhere-else
+      INTERNAL_TOKEN: ci-only-internal-token
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: ci-only-password
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/control-plane/requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Formatting (ruff)
+        run: ruff format --check .
+
+      - name: Types (mypy strict)
+        run: mypy app
+
+      - name: Tests and coverage (pytest)
+        run: pytest -p no:cacheprovider --cov --cov-report=term-missing --cov-fail-under=90
+
+  mock-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend/mock-backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/mock-backend/requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Tests (pytest)
+        run: pytest -p no:cacheprovider

@@ -40,6 +40,7 @@ The user expects production-style code: scalable, maintainable, readable, clean 
 - Type hints everywhere, small functions, clear names, short docstrings that say *why*. No dead code.
 - Go follows the same spirit: small packages with one responsibility, interfaces at boundaries, table-driven tests.
 - Split each step into 2–3 logical commits.
+- `.github/workflows/ci.yml` runs the same checks on GitHub for every push and pull request; keep it in step with `check.ps1`. `backend/control-plane/openapi.json` is the committed API contract: after an API change, run `check.ps1 -Fix` (or `scripts/export_openapi.py`) and commit the diff.
 - Before every commit, `backend/control-plane/scripts/check.ps1` must pass: ruff lint and format, mypy strict on `app/`, pytest with coverage of at least 90% (currently 100%). Config lives in `backend/control-plane/pyproject.toml`.
 
 ## Reminders for later milestones
@@ -50,7 +51,6 @@ Raise these with the user when the milestone starts (details in PLAN.md section 
 - **v3 webhooks and audit log:** use the **outbox** pattern (outbox row in the same transaction, a worker delivers with retries).
 - **Step 3.3 route matching:** match on path-segment boundaries, so `/v1/orders` must not match `/v1/orders-archive`.
 - **v2 `last_used_at`:** the gateway never writes to Postgres; it stays null until usage events exist. Exclude it from the config_version triggers then (it isn't config).
-- **End of M2:** revisit CI (GitHub Actions running `check.ps1`'s checks).
 
 ## Working rules
 

@@ -1,12 +1,14 @@
 # API Management Platform
 
+[![ci](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml)
+
 A self-hosted API management system, built as a learning project: a **Go gateway** that every API request passes through (auth, rate limiting, logging), a **FastAPI control plane** that configures it, and later a React dashboard.
 
 The full design is in [docs/PLAN.md](docs/PLAN.md). Step-by-step progress is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Status
 
-Milestone **M1: Skeleton** is done ✅. Postgres, Redis, the mock backend and the control plane run in Docker Compose. The control plane has admin login (JWT), services CRUD, and a tenant-ready data model (one `default` workspace). Next: **M2**, the rest of the control plane.
+Milestones **M1: Skeleton** and **M2: Control plane** are done ✅. The control plane has admin login (JWT), CRUD for services, routes, consumers and API keys, a tenant-ready data model (one `default` workspace), and `/internal/config` for the gateway with ETag/304 and long polling. Next: **M3**, the Go gateway.
 
 ## Getting started (Windows / PowerShell)
 
@@ -89,7 +91,7 @@ docker compose exec control-plane alembic upgrade head
 
 Tests run against a separate database, `apim_test`, which is recreated on every test run. Your real data in `apim` is never touched.
 
-Run every quality check before committing (ruff lint and format, mypy strict, pytest with coverage of at least 90%):
+Run every quality check before committing (ruff lint and format, mypy strict, pytest with coverage of at least 90%, and the OpenAPI contract in `backend/control-plane/openapi.json`). GitHub Actions runs the same checks on every push and pull request (`.github/workflows/ci.yml`):
 
 ```powershell
 .\backend\control-plane\scripts\check.ps1        # check only

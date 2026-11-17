@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 17, 2026 · **Current step:** 2.6
+**Last updated:** Nov 17, 2026 · **Current step:** 3.1 (first Go code)
 
 ## Overview
 
@@ -10,23 +10,25 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- | --- |
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M2: Control plane done | ✅✅✅✅✅⬜ 5/6 | 🔄 In progress |
-| M3: Gateway proxies (Go) | ⬜⬜⬜⬜⬜⬜⬜ 0/7 | ⏳ |
+| M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
+| M3: Gateway proxies (Go) | ⬜⬜⬜⬜⬜⬜⬜ 0/7 | 👉 Next |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 11 of 24 steps done (46%).
+**MVP:** 12 of 24 steps done (50%). Halfway! 🎉
 
 ## Quality today
 
 | Check | Result |
 | --- | --- |
-| Tests | 228 passing |
+| Tests | 326 passing (about 35–65 s) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
-| Run all checks | `.\backend\control-plane\scripts\check.ps1` |
+| Run all checks | `.\backend\control-plane\scripts\check.ps1` (`-Fix` to autofix) |
+| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`) |
+| API contract | `backend/control-plane/openapi.json`, checked by a test |
 
 ## Step 0: Go basics (Ali, in parallel)
 
@@ -50,7 +52,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 **Outcome:** an admin logs in and registers backend services through the API. The whole stack starts with `docker compose up`.
 
-## M2: Control plane done 🔄
+## M2: Control plane done ✅
 
 | # | Step | Status |
 | --- | --- | --- |
@@ -58,16 +60,16 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | 2.2 | CRUD endpoints for routes and consumers | ✅ `a85435d`, `9911ea2`, `0cde4fe` |
 | 2.3 | API key generation (shown once, stored hashed) and revocation | ✅ `c89c9c6`, `26d9258` |
 | 2.4 | `config_version` bump on every change (Postgres triggers + NOTIFY) | ✅ `57daa61`, `a144414` |
-| 2.5 | `/internal/config` with the shared-secret check, ETag/304 and long polling | ✅ `52dbcb3`, `c9d6517`, *this commit* |
-| 2.6 | Tests for every endpoint | 👉 Next |
+| 2.5 | `/internal/config` with the shared-secret check, ETag/304 and long polling | ✅ `52dbcb3`, `c9d6517`, `c9edaa3` |
+| 2.6 | Tests for every endpoint: guard tests, end-to-end flow, OpenAPI contract, faster suite, CI | ✅ `1b97eef`, `8d43b87`, `70f5644`, *this commit* |
 
-**Outcome:** the control plane is complete, and the gateway can read one config snapshot.
+**Outcome:** the control plane is complete, and the gateway can read one config snapshot (instantly, via long polling).
 
 ## M3: Gateway proxies (Go)
 
 | # | Step | Status |
 | --- | --- | --- |
-| 3.1 | Go module, `main.go`, graceful shutdown, `/health` | ⬜ |
+| 3.1 | Go module, `main.go`, graceful shutdown, `/health` | 👉 Next |
 | 3.2 | Config long-poll loop and atomic snapshot store | ⬜ |
 | 3.3 | Route matching by longest prefix and method | ⬜ |
 | 3.4 | Reverse proxy with per-route timeout, 502 and 504 | ⬜ |
@@ -144,4 +146,7 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 17 | 2.5 | Blocked consumers' keys stay in the snapshot, marked | The gateway can answer 403 (blocked) instead of 401 (unknown key) |
 | Nov 17 | 2.5 | One `LISTEN` connection per process, auto-reconnect; DB re-check after every wake-up; one snapshot build per version | Instant updates that stay correct even when a notification is lost; no thundering herd |
 | Nov 17 | 2.5 | `uvicorn --timeout-graceful-shutdown 3` | Held long-poll requests don't delay restarts |
-| Nov 16 | — | No CI yet; revisit at the end of M2 | Keep scope small |
+| Nov 17 | 2.6 | Guard tests discover every endpoint from the app | New endpoints are checked for auth and docs automatically |
+| Nov 17 | 2.6 | Commit `openapi.json` and test it | API changes show up as diffs; the dashboard can generate its types from it |
+| Nov 17 | 2.6 | Test cleanup with `DELETE` instead of `TRUNCATE` (measured: 86.8 s → 35.1 s) | Measured first: hashing wasn't the bottleneck, so it stays at full strength |
+| Nov 17 | 2.6 | CI on GitHub Actions (control plane + mock backend), throwaway env values | Every push is checked on a clean machine; no secrets in the repo |

@@ -484,7 +484,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Key generation (shown once, hashed) and revocation
 - [x] `config_version` bump on every change (Postgres triggers + NOTIFY)
 - [x] `/internal/config` with the shared-secret check, ETag and long polling
-- [ ] Tests for every endpoint
+- [x] Tests for every endpoint (plus guard tests that discover every endpoint, an end-to-end admin flow, the committed OpenAPI contract and CI on GitHub Actions)
 
 **M3: Gateway proxies**
 
