@@ -30,9 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.auth import crud as auth_crud
 from app.auth.models import Admin
-from app.core.db import Base, SessionLocal, engine
+from app.core.config import get_settings
+from app.core.db import Base, SessionLocal, driver_dsn, engine
 from app.core.security import create_access_token
 from app.gateway_config.models import ConfigVersion
+from app.gateway_config.notifier import ConfigNotifier
+from app.gateway_config.provider import ConfigProvider
 from app.main import app
 from app.workspaces.crud import get_or_create_default_workspace
 from app.workspaces.models import Workspace
@@ -124,3 +127,23 @@ async def admin(db: AsyncSession, workspace: Workspace) -> Admin:
 @pytest.fixture
 def auth_headers(admin: Admin) -> dict[str, str]:
     return {"Authorization": f"Bearer {create_access_token(str(admin.id))}"}
+
+
+# ---- The gateway's view: a running config provider and the internal token
+
+
+@pytest.fixture
+async def notifier() -> AsyncIterator[ConfigNotifier]:
+    listening = ConfigNotifier(driver_dsn(get_settings().database_url), reconnect_delay=0.1)
+    await listening.start()
+    await listening.wait_until_listening()
+    yield listening
+    await listening.stop()
+
+
+@pytest.fixture
+def gateway(client: AsyncClient, notifier: ConfigNotifier) -> AsyncClient:
+    """The test client, set up like the real gateway: provider running, token sent."""
+    app.state.config_provider = ConfigProvider(engine, notifier)
+    client.headers["X-Internal-Token"] = get_settings().internal_token
+    return client

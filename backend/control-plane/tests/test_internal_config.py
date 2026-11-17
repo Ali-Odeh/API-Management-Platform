@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
@@ -172,23 +171,6 @@ async def test_admin_jwt_does_not_open_internal_endpoints(
 # =====================================================================
 
 URL = "/internal/config"
-
-
-@pytest.fixture
-async def notifier() -> AsyncIterator[ConfigNotifier]:
-    listening = ConfigNotifier(driver_dsn(get_settings().database_url), reconnect_delay=0.1)
-    await listening.start()
-    await listening.wait_until_listening()
-    yield listening
-    await listening.stop()
-
-
-@pytest.fixture
-def gateway(client: AsyncClient, notifier: ConfigNotifier) -> AsyncClient:
-    """The test client, set up like the real gateway: provider running, token sent."""
-    app.state.config_provider = ConfigProvider(engine, notifier)
-    client.headers["X-Internal-Token"] = get_settings().internal_token
-    return client
 
 
 async def change_config(client: AsyncClient, auth_headers: dict[str, str], name: str) -> None:

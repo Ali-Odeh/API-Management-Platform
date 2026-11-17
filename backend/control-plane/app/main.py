@@ -11,6 +11,7 @@ from app.consumers.router import router as consumers_router
 from app.core.config import get_settings
 from app.core.db import SessionLocal, driver_dsn, engine
 from app.core.errors import register_error_handlers
+from app.core.openapi import error_responses
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
 from app.gateway_config.router import router as gateway_config_router
@@ -45,12 +46,15 @@ app = FastAPI(
 
 register_error_handlers(app)
 
-app.include_router(auth_router)
-app.include_router(services_router)
-app.include_router(routes_router)
-app.include_router(consumers_router)
-app.include_router(keys_router)
-app.include_router(gateway_config_router)
+# Every admin endpoint can answer 401; document it once for all of them in Swagger.
+_ADMIN_401 = error_responses({401: "Missing, invalid or expired admin token"})
+
+app.include_router(auth_router, responses=_ADMIN_401)
+app.include_router(services_router, responses=_ADMIN_401)
+app.include_router(routes_router, responses=_ADMIN_401)
+app.include_router(consumers_router, responses=_ADMIN_401)
+app.include_router(keys_router, responses=_ADMIN_401)
+app.include_router(gateway_config_router)  # documents its own 401 (internal token)
 
 
 @app.get("/health", tags=["health"])
