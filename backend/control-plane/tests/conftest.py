@@ -62,13 +62,19 @@ def _test_database() -> None:
 # ---- 3. Clean tables before each test, close connections after
 @pytest.fixture(autouse=True)
 async def _clean_tables() -> AsyncIterator[None]:
-    # config_version is a singleton that the triggers need: reset it, never delete it.
-    # (TRUNCATE doesn't fire the INSERT/UPDATE/DELETE triggers, so it bumps nothing.)
-    table_names = ", ".join(
-        t.name for t in Base.metadata.sorted_tables if t.name != ConfigVersion.__tablename__
-    )
+    # DELETE, not TRUNCATE: our test tables hold a handful of rows, and on tiny
+    # tables TRUNCATE (which takes heavy locks and rewrites files) is far slower.
+    # Children before parents (reverse dependency order), so foreign keys are happy.
+    # config_version is a singleton the triggers need: reset it, never delete it
+    # (the DELETEs fire the triggers and bump it, so the reset comes last).
+    tables = [
+        t.name
+        for t in reversed(Base.metadata.sorted_tables)
+        if t.name != ConfigVersion.__tablename__
+    ]
     async with engine.begin() as conn:
-        await conn.execute(text(f"TRUNCATE {table_names} CASCADE"))
+        for name in tables:  # asyncpg runs one statement per call
+            await conn.execute(text(f"DELETE FROM {name}"))
         await conn.execute(text("UPDATE config_version SET version = 1, updated_at = now()"))
     yield
     # Each test has its own event loop, and a pooled asyncpg connection only
