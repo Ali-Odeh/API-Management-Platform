@@ -4,7 +4,7 @@
 
 API Management Platform, a learning project modeled on Kong, Tyk and Apigee. The full plan is in `docs/PLAN.md`. Read it before starting any task. It is the source of truth for schema, endpoints, repo layout and roadmap.
 
-- **Gateway (data plane):** Go. Reverse proxy with route matching, API-key auth, a Redis token-bucket rate limiter and JSON logs. It never touches Postgres. It polls `/internal/config` every 5s and swaps the snapshot in with `atomic.Pointer`.
+- **Gateway (data plane):** Go. Reverse proxy with route matching, API-key auth, a Redis token-bucket rate limiter and JSON logs. It never touches Postgres. It long-polls `/internal/config?wait=30` (answered instantly on change via Postgres NOTIFY) and swaps the snapshot in with `atomic.Pointer`.
 - **Control plane:** FastAPI. Admin API under `/api/v1` with JWT auth, plus `/internal/config` protected by `X-Internal-Token` with ETag/304.
 - **Dashboard:** React (v2), in `frontend/`. Do not build it yet.
 

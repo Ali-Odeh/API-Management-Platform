@@ -51,7 +51,7 @@ The backend is the learning part, so Ali writes or reviews every piece of it. Th
 
 - **Two services, two languages.** The gateway is on the hot path and must be fast. The control plane is CRUD and should be quick to change.
 - **The gateway never touches Postgres.** It pulls config from the control plane over HTTP and keeps it in memory. If the control plane goes down, the gateway keeps serving with its last config.
-- **Polling before push.** The gateway polls for config every 5 seconds in the MVP. A push model (Redis pub/sub) can replace it later.
+- **Long polling for config.** The gateway asks for config and the control plane holds the request open until the config changes (or 30 seconds pass). Changes reach the gateway in milliseconds, idle traffic is one request per 30 seconds, and it is still plain HTTP with no new infrastructure. If anything goes wrong, the timeout makes it behave like ordinary polling. (Decided Nov 17, 2026; it replaces 5-second polling. Streaming over WebSocket or gRPC, as Kong and Envoy do, stays a possible v3 topic.)
 - **No Go web framework.** The standard library is enough, and it is what teaches the most.
 
 ## 3. System architecture
@@ -85,7 +85,11 @@ Requests travel along the middle row. Configuration is written in the bottom row
 
 **Config propagation**
 
-Every admin change bumps `config_version`. The gateway polls `/internal/config` every 5 seconds with the version it already has. An unchanged version returns 304, and a new one returns the full snapshot, which the gateway swaps in atomically.
+Every admin change bumps `config_version`, done by Postgres triggers so no code path can forget it. The same trigger sends `NOTIFY config_changed`. The gateway calls `/internal/config?wait=30` with the version it already has:
+
+- A newer version exists: the full snapshot comes back at once, and the gateway swaps it in atomically.
+- Same version: the control plane holds the request. When a `NOTIFY` arrives it answers immediately with the new snapshot; after 30 seconds without a change it answers `304`.
+- Either way the gateway asks again right away. On an error it waits a few seconds before retrying and keeps serving with its last snapshot.
 
 ## 4. Features by phase
 
@@ -100,7 +104,7 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 | API key auth | Checks `X-API-Key`, returns 401 on a bad key | MVP |
 | Rate limiting | Token bucket per consumer in Redis, 429 with `Retry-After` | MVP |
 | Request logging | One JSON line per request | MVP |
-| Config sync | Polls the control plane every 5 seconds | MVP |
+| Config sync | Long-polls the control plane; changes arrive in milliseconds | MVP |
 | Timeouts and errors | 504 on a slow backend, 502 on a dead one | MVP |
 | Health check | `GET /health` | MVP |
 | Monthly quotas | Per-plan request limits | v2 |
@@ -160,7 +164,11 @@ erDiagram
 | `routes` | `workspace_id` (FK), `service_id` (FK), `path_prefix`, `methods` (text array), `strip_prefix` (bool), `auth_required` (bool), `is_active` | Unique on `path_prefix` across all workspaces in the MVP, because the gateway matches by path only. MT makes it unique per workspace once the gateway can tell tenants apart |
 | `consumers` | `workspace_id` (FK), `name`, `email`, `status` (`active` or `blocked`), `rate_limit_per_min` (default 60) | The apps that call the APIs |
 | `api_keys` | `workspace_id` (FK), `consumer_id` (FK), `key_prefix`, `key_hash` (unique), `name`, `last_used_at`, `revoked_at` | The raw key is never stored |
-| `config_version` | `version` (bigint) | Single row, bumped on every config change |
+| `config_version` | `id` (always 1), `version` (bigint, starts at 1), `updated_at` | Single row (a CHECK forbids a second one). No uuid and no `workspace_id`: it is system state, not tenant config. Bumped by triggers, see below |
+
+**How `config_version` is bumped**
+
+A Postgres trigger function `bump_config_version()` runs after any `INSERT`, `UPDATE` or `DELETE` statement on `services`, `routes`, `consumers` and `api_keys`. It adds 1 to `version`, sets `updated_at`, and sends `NOTIFY config_changed` with the new version. Because it runs inside the same transaction, a failed change (for example a 409) bumps nothing and notifies nobody, and database cascades (deleting a consumer deletes its keys) are covered too. `admins` and `workspaces` don't bump: the gateway doesn't use them.
 
 **v2 tables**
 
@@ -271,7 +279,7 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 
 **Config store**
 
-A background goroutine polls `/internal/config` every 5 seconds. It builds a new immutable snapshot (route list sorted by prefix length, key map by hash) and swaps it in with `atomic.Pointer`. Request handlers read the pointer without locks. If a poll fails, the old snapshot stays in use.
+A background goroutine long-polls `/internal/config?wait=30` in a loop (section 3). It builds a new immutable snapshot (route list sorted by prefix length, key map by hash) and swaps it in with `atomic.Pointer`. Request handlers read the pointer without locks. If a request fails, the old snapshot stays in use and the goroutine retries after a short backoff.
 
 **Token bucket**
 
@@ -423,7 +431,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Gateway | `CONTROL_PLANE_URL` | `http://control-plane:8000` |
 | Gateway | `INTERNAL_TOKEN` | same shared secret |
 | Gateway | `REDIS_URL` | `redis://redis:6379/0` |
-| Gateway | `CONFIG_POLL_INTERVAL` | `5s` |
+| Gateway | `CONFIG_WAIT` | `30s` (how long the control plane may hold a config request) |
 | Gateway | `LISTEN_ADDR` | `:8080` |
 
 Secrets go in a `.env` file that is listed in `.gitignore`. A committed `.env.example` shows the names without values.
@@ -528,8 +536,8 @@ The main risk is scope: the full feature list is months of work, so nothing from
 | --- | --- |
 | Go learning curve slows the gateway | Step 0 first; standard library only; small pieces with tests |
 | Rate limiter is wrong under concurrency | All logic in one Lua script; a test with parallel clients |
-| Config changes take up to 5 seconds to apply | Accepted for the MVP; Redis pub/sub push later |
-| Revoked keys keep working until the next poll | Same 5-second window; documented in the README |
+| Config changes must reach the gateway fast | Long polling woken by Postgres `NOTIFY`: milliseconds in normal operation |
+| Revoked keys keep working while the gateway can't reach the control plane | The gateway keeps its last snapshot by design; documented in the README. Changes apply as soon as it reconnects |
 | Request logs grow fast in Postgres (v2) | Monthly partitions and a retention job; consider ClickHouse only if needed |
 | Frontend drifts from the API | Types generated from the OpenAPI spec on every change |
 
