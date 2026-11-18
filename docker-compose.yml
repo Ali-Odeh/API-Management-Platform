@@ -61,7 +61,23 @@ services:
       timeout: 3s
       retries: 10
 
-  # gateway (8080) and dashboard (5173) are added in later milestones.
+  gateway:
+    build: ./backend/gateway
+    # Only the variables the gateway uses, not the whole .env: it never needs
+    # the database password or the JWT secret (least privilege).
+    # Step 3.2 adds CONTROL_PLANE_URL, INTERNAL_TOKEN and CONFIG_WAIT.
+    environment:
+      LISTEN_ADDR: ":8080"   # fixed: the port mapping below depends on it
+    ports:
+      - "8080:8080"
+    healthcheck:
+      # The image has no curl or wget, so the binary checks itself.
+      test: ["CMD", "/gateway", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # dashboard (5173) is added in v2.
 
 volumes:
   pgdata:
