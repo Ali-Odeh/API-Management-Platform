@@ -16,9 +16,11 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/server"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
 )
@@ -52,12 +54,24 @@ func run(args []string) int {
 // serve runs the gateway until Ctrl+C (SIGINT) or `docker stop` (SIGTERM).
 func serve(cfg settings.Settings, log *slog.Logger) int {
 	// ctx is cancelled when one of these signals arrives. Everything that
-	// runs long (the server now, the config poller in step 3.2) watches it.
+	// runs long (the server and the config poller) watches it.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	log.Info("gateway starting", "listen_addr", cfg.ListenAddr)
-	if err := server.New(cfg, log).ListenAndServe(ctx); err != nil {
+	log.Info("gateway starting", "listen_addr", cfg.ListenAddr, "control_plane_url", cfg.ControlPlaneURL)
+
+	// The server starts at once, without waiting for the first config, so a
+	// slow control plane never keeps the gateway from starting.
+	store := &config.Store{}
+	poller := config.NewPoller(cfg, store, log)
+	var background sync.WaitGroup
+	background.Go(func() { poller.Run(ctx) })
+
+	err := server.New(cfg, log).ListenAndServe(ctx)
+	stop()            // if the server failed on its own, stop the poller too
+	background.Wait() // never exit while the poller is still running
+
+	if err != nil {
 		log.Error("gateway stopped with an error", "error", err)
 		return 1
 	}
