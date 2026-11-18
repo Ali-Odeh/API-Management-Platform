@@ -17,7 +17,7 @@ import (
 // newTestServer builds a server that logs nothing and listens on a free port.
 func newTestServer(t *testing.T, shutdownTimeout time.Duration) (*Server, net.Listener) {
 	t.Helper()
-	srv := New(settings.Settings{ListenAddr: "127.0.0.1:0", ShutdownTimeout: shutdownTimeout}, slog.New(slog.DiscardHandler))
+	srv := New(settings.Settings{ListenAddr: "127.0.0.1:0", ShutdownTimeout: shutdownTimeout}, http.NotFoundHandler(), slog.New(slog.DiscardHandler))
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -25,39 +25,60 @@ func newTestServer(t *testing.T, shutdownTimeout time.Duration) (*Server, net.Li
 	return srv, ln
 }
 
-func TestHealthEndpoint(t *testing.T) {
-	srv := New(settings.Settings{ListenAddr: ":0", ShutdownTimeout: time.Second}, slog.New(slog.DiscardHandler))
+// Which requests the server answers itself, and which go to the API handler.
+func TestServerRouting(t *testing.T) {
+	// The API handler answers 299 and echoes the path it received.
+	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(299)
+		_, _ = io.WriteString(w, r.URL.Path)
+	})
+	srv := New(settings.Settings{ListenAddr: ":0", ShutdownTimeout: time.Second}, api, slog.New(slog.DiscardHandler))
 
 	tests := []struct {
-		name       string
-		method     string
-		path       string
-		wantStatus int
-		wantBody   string // checked only when not empty
+		name         string
+		method       string
+		target       string
+		wantStatus   int
+		wantBody     string // checked only when not empty
+		wantLocation string // checked only when not empty
 	}{
-		{name: "GET returns ok", method: http.MethodGet, path: "/health", wantStatus: http.StatusOK, wantBody: `{"status":"ok"}` + "\n"},
-		{name: "HEAD is allowed", method: http.MethodHead, path: "/health", wantStatus: http.StatusOK},
-		{name: "POST is not allowed", method: http.MethodPost, path: "/health", wantStatus: http.StatusMethodNotAllowed},
-		{name: "unknown path", method: http.MethodGet, path: "/nope", wantStatus: http.StatusNotFound},
+		{name: "health GET", method: "GET", target: "/health", wantStatus: 200, wantBody: `{"status":"ok"}` + "\n"},
+		{name: "health HEAD", method: "HEAD", target: "/health", wantStatus: 200},
+		// Not the gateway's /health, so it is API traffic (the router will
+		// answer 404: the control plane never allows a /health route).
+		{name: "health POST goes to the API", method: "POST", target: "/health", wantStatus: 299},
+		{name: "API path", method: "GET", target: "/v1/orders/7", wantStatus: 299, wantBody: "/v1/orders/7"},
+		{name: "root", method: "GET", target: "/", wantStatus: 299, wantBody: "/"},
+
+		// Unclean paths are redirected to their clean form first (307 keeps
+		// the method), so ".." can never step outside a route's prefix.
+		{name: "dot-dot", method: "GET", target: "/v1/orders/../admin", wantStatus: 307, wantLocation: "/v1/admin"},
+		{name: "double slash", method: "GET", target: "/v1//orders", wantStatus: 307, wantLocation: "/v1/orders"},
+		{name: "dot segment", method: "GET", target: "/v1/./orders", wantStatus: 307, wantLocation: "/v1/orders"},
+		// The mux does NOT clean an encoded "..": it reaches the API handler
+		// as "/v1/orders/../admin". The router rejects it (proxy.Router).
+		{name: "encoded dot-dot is passed on", method: "GET", target: "/v1/orders/%2e%2e/admin", wantStatus: 299, wantBody: "/v1/orders/../admin"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(tt.method, tt.path, nil)
 
-			srv.http.Handler.ServeHTTP(rec, req)
+			srv.http.Handler.ServeHTTP(rec, httptest.NewRequest(tt.method, tt.target, nil))
 
 			if rec.Code != tt.wantStatus {
-				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantStatus, rec.Body.String())
 			}
-			if tt.wantStatus == http.StatusOK {
+			if tt.wantStatus == 200 {
 				if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 					t.Errorf("Content-Type = %q, want application/json", ct)
 				}
 			}
 			if tt.wantBody != "" && rec.Body.String() != tt.wantBody {
 				t.Errorf("body = %q, want %q", rec.Body.String(), tt.wantBody)
+			}
+			if tt.wantLocation != "" && rec.Header().Get("Location") != tt.wantLocation {
+				t.Errorf("Location = %q, want %q", rec.Header().Get("Location"), tt.wantLocation)
 			}
 		})
 	}
@@ -165,7 +186,7 @@ func TestListenAndServeFailsWhenPortIsTaken(t *testing.T) {
 	}
 	defer busy.Close()
 
-	srv := New(settings.Settings{ListenAddr: busy.Addr().String(), ShutdownTimeout: time.Second}, slog.New(slog.DiscardHandler))
+	srv := New(settings.Settings{ListenAddr: busy.Addr().String(), ShutdownTimeout: time.Second}, http.NotFoundHandler(), slog.New(slog.DiscardHandler))
 
 	if err := srv.ListenAndServe(t.Context()); err == nil {
 		t.Fatal("ListenAndServe() = nil, want an error for a port in use")
@@ -182,7 +203,7 @@ func TestListenAndServeRunsAndStops(t *testing.T) {
 	addr := probe.Addr().String()
 	probe.Close()
 
-	srv := New(settings.Settings{ListenAddr: addr, ShutdownTimeout: time.Second}, slog.New(slog.DiscardHandler))
+	srv := New(settings.Settings{ListenAddr: addr, ShutdownTimeout: time.Second}, http.NotFoundHandler(), slog.New(slog.DiscardHandler))
 	ctx, cancel := context.WithCancel(t.Context())
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- srv.ListenAndServe(ctx) }()

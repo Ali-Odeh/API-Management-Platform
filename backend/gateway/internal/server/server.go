@@ -1,19 +1,19 @@
 // Package server owns the gateway's HTTP server: its timeouts, its own
 // endpoints (/health) and a graceful shutdown.
 //
-// The proxy (step 3.4) and middleware (3.5) plug into this server later;
-// this package stays about running HTTP well, not about API traffic.
+// API traffic is handed to a handler from outside (route matching, later
+// middleware and the proxy); this package stays about running HTTP well.
 package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"time"
 
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
 )
 
@@ -36,10 +36,16 @@ type Server struct {
 	log             *slog.Logger
 }
 
-// New builds a server from the settings. It does not start listening yet.
-func New(cfg settings.Settings, log *slog.Logger) *Server {
+// New builds a server from the settings. GET /health is answered here; every
+// other request goes to api. It does not start listening yet.
+func New(cfg settings.Settings, api http.Handler, log *slog.Logger) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
+	// "/" matches every path no other pattern takes. Before calling api, the
+	// mux redirects unclean paths ("/v1/../admin", "/v1//x") to their clean
+	// form with a 307. Encoded ones ("%2e%2e") are not cleaned here; the
+	// router rejects those.
+	mux.Handle("/", api)
 
 	return &Server{
 		http: &http.Server{
@@ -106,6 +112,5 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 // up and serving. It checks nothing else on purpose: a gateway whose control
 // plane is down must stay "healthy" and keep serving its last config.
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

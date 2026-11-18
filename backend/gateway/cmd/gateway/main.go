@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/server"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
 )
@@ -67,7 +68,11 @@ func serve(cfg settings.Settings, log *slog.Logger) int {
 	var background sync.WaitGroup
 	background.Go(func() { poller.Run(ctx) })
 
-	err := server.New(cfg, log).ListenAndServe(ctx)
+	// API traffic: match the route (404/405/503 answered here), then the
+	// matched request goes on. The 501 placeholder becomes the proxy in 3.4.
+	api := proxy.NewRouter(store, proxy.NotImplemented())
+
+	err := server.New(cfg, api, log).ListenAndServe(ctx)
 	stop()            // if the server failed on its own, stop the poller too
 	background.Wait() // never exit while the poller is still running
 
