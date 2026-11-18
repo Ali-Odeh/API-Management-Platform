@@ -391,7 +391,9 @@ api-platform/
 │   │       ├── config/           # poller and snapshot store
 │   │       ├── middleware/       # recover, requestid, logger, auth, ratelimit
 │   │       ├── proxy/            # route matching and reverse proxy
-│   │       └── ratelimit/        # Redis client and Lua script
+│   │       ├── ratelimit/        # Redis client and Lua script
+│   │       ├── server/           # http.Server, timeouts, /health, graceful shutdown
+│   │       └── settings/         # env vars, validated at startup
 │   ├── control-plane/            # FastAPI, organized by feature
 │   │   ├── app/
 │   │   │   ├── core/             # settings, db session, security, shared deps
@@ -441,7 +443,10 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Gateway | `INTERNAL_TOKEN` | same shared secret |
 | Gateway | `REDIS_URL` | `redis://redis:6379/0` |
 | Gateway | `CONFIG_WAIT` | `30s` (how long the control plane may hold a config request) |
-| Gateway | `LISTEN_ADDR` | `:8080` |
+| Gateway | `LISTEN_ADDR` | `:8080` (set in `docker-compose.yml`, next to the port mapping that depends on it) |
+| Gateway | `SHUTDOWN_TIMEOUT` | optional, default `5s` (time given to in-flight requests on stop) |
+
+The gateway container gets only the variables it uses, not the whole `.env`: it never needs the database password or the JWT secret.
 
 Secrets go in a `.env` file that is listed in `.gitignore`. A committed `.env.example` shows the names without values.
 
@@ -488,7 +493,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 
 **M3: Gateway proxies**
 
-- [ ] Go module, `main.go`, graceful shutdown, `/health`
+- [x] Go module, `main.go`, graceful shutdown, `/health`
 - [ ] Config poller and atomic snapshot store
 - [ ] Route matching by longest prefix and method
 - [ ] Reverse proxy with per-route timeout, 502 and 504 handling

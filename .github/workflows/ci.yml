@@ -72,6 +72,42 @@ jobs:
       - name: Tests and coverage (pytest)
         run: pytest -p no:cacheprovider --cov --cov-report=term-missing --cov-fail-under=90
 
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend/gateway
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/gateway/go.mod
+          # No dependencies (no go.sum) yet; turn caching on when Redis arrives in M4.
+          cache: false
+
+      - name: Formatting (gofmt)
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "Not formatted (run scripts/check.ps1 -Fix):"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet (go vet)
+        run: go vet ./...
+
+      # -race finds goroutines touching the same data at once. It needs cgo,
+      # which Linux runners have and a default Windows install does not.
+      - name: Tests with the race detector (go test)
+        run: go test -count=1 -race -cover ./...
+
+      - name: Docker image builds
+        run: docker build --tag gateway:ci .
+
   mock-backend:
     runs-on: ubuntu-latest
     timeout-minutes: 10

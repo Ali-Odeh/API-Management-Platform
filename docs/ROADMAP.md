@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 17, 2026 · **Current step:** 3.1 (first Go code)
+**Last updated:** Nov 18, 2026 · **Current step:** 3.2 (config long-poll loop)
 
 ## Overview
 
@@ -11,14 +11,16 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M3: Gateway proxies (Go) | ⬜⬜⬜⬜⬜⬜⬜ 0/7 | 👉 Next |
+| M3: Gateway proxies (Go) | ✅⬜⬜⬜⬜⬜⬜ 1/7 | 🔄 In progress |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 12 of 24 steps done (50%). Halfway! 🎉
+**MVP:** 13 of 24 steps done (54%). First Go code is running.
 
 ## Quality today
+
+**Control plane (Python)**
 
 | Check | Result |
 | --- | --- |
@@ -27,7 +29,22 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | ruff lint and format | clean |
 | mypy strict | clean |
 | Run all checks | `.\backend\control-plane\scripts\check.ps1` (`-Fix` to autofix) |
-| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`) |
+
+**Gateway (Go)**
+
+| Check | Result |
+| --- | --- |
+| Tests | 31 passing (10 tests, 21 of them table cases), about 3 s |
+| Coverage | settings 100%, server 97.4%, main 62.1% (`serve()` waits for a real signal; checked in Docker instead) |
+| gofmt, go vet | clean |
+| Image | 16.5 MB (distroless, non-root) |
+| Run all checks | `.\backend\gateway\scripts\check.ps1` (`-Fix` to autofix) |
+
+**Both**
+
+| Check | Result |
+| --- | --- |
+| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (with `-race` and an image build), mock backend |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -69,8 +86,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | # | Step | Status |
 | --- | --- | --- |
-| 3.1 | Go module, `main.go`, graceful shutdown, `/health` | 👉 Next |
-| 3.2 | Config long-poll loop and atomic snapshot store | ⬜ |
+| 3.1 | Go module, `main.go`, graceful shutdown, `/health` | ✅ `430d193`, `3173814`, *this commit* |
+| 3.2 | Config long-poll loop and atomic snapshot store | 👉 Next |
 | 3.3 | Route matching by longest prefix and method | ⬜ |
 | 3.4 | Reverse proxy with per-route timeout, 502 and 504 | ⬜ |
 | 3.5 | Request ID, recover and logger middleware | ⬜ |
@@ -150,3 +167,8 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 17 | 2.6 | Commit `openapi.json` and test it | API changes show up as diffs; the dashboard can generate its types from it |
 | Nov 17 | 2.6 | Test cleanup with `DELETE` instead of `TRUNCATE` (measured: 86.8 s → 35.1 s) | Measured first: hashing wasn't the bottleneck, so it stays at full strength |
 | Nov 17 | 2.6 | CI on GitHub Actions (control plane + mock backend), throwaway env values | Every push is checked on a clean machine; no secrets in the repo |
+| Nov 18 | 3.1 | Gateway packages `internal/settings` (env vars) and `internal/server` (HTTP server), added to PLAN.md section 9 | `config` stays for the snapshot store; `main.go` stays thin wiring |
+| Nov 18 | 3.1 | Server: `ReadHeaderTimeout` 5 s, `IdleTimeout` 60 s, no global read/write timeout; `SHUTDOWN_TIMEOUT` 5 s | Stops Slowloris without cutting slow valid responses (per-route timeouts come in 3.4); finishes before Docker's 10 s kill |
+| Nov 18 | 3.1 | Image: multi-stage build into distroless/static, non-root; `gateway healthcheck` subcommand | 16.5 MB with no shell to attack; the binary checks itself because the image has no curl |
+| Nov 18 | 3.1 | Gateway container gets only its own env vars, not `env_file: .env` | Least privilege: it never needs the DB password or JWT secret |
+| Nov 18 | 3.1 | Go tests run locally on Windows; `-race` runs in CI | No database, no deps, so local equals Docker; the race detector needs cgo |
