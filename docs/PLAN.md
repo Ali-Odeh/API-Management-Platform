@@ -426,7 +426,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | `postgres` | 5432 (host 5434) | Config database. Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
 | `redis` | 6379 | Rate-limit state |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
-| `gateway` | 8080 | Public entry point |
+| `gateway` | 8080 (host 8081) | Public entry point. Mapped to 8081 on the host because another local app already uses 127.0.0.1:8080 |
 | `mock-backend` | 9000 | Echoes requests so there is something to proxy to |
 | `dashboard` | 5173 | Admin UI (v2) |
 
