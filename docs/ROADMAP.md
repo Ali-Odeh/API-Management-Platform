@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 18, 2026 · **Current step:** 3.3 (route matching)
+**Last updated:** Nov 18, 2026 · **Current step:** 3.4 (reverse proxy)
 
 ## Overview
 
@@ -11,12 +11,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M3: Gateway proxies (Go) | ✅✅⬜⬜⬜⬜⬜ 2/7 | 🔄 In progress |
+| M3: Gateway proxies (Go) | ✅✅✅⬜⬜⬜⬜ 3/7 | 🔄 In progress |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 14 of 24 steps done (58%). The gateway now holds a live copy of the config.
+**MVP:** 15 of 24 steps done (63%). The gateway now knows which route each request belongs to.
 
 ## Quality today
 
@@ -34,8 +34,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 73 passing (29 tests plus 44 table cases), about 3 s |
-| Coverage | settings 100%, config 99.0%, server 97.4%, main 48.6% (`serve()` waits for a real signal; checked in Docker instead) |
+| Tests | 112 passing (39 tests plus 73 table cases), about 3 s |
+| Coverage | settings, proxy, respond 100%; config 99.0%; server 97.4%; main 47.4% (`serve()` waits for a real signal; checked in Docker instead) |
 | gofmt, go vet | clean |
 | Race detector | clean (`go test -race` in a Linux container; also in CI) |
 | Config propagation | admin change → gateway updated in **68 ms** (measured in Docker) |
@@ -90,8 +90,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- | --- |
 | 3.1 | Go module, `main.go`, graceful shutdown, `/health` | ✅ `430d193`, `3173814`, *this commit* |
 | 3.2 | Config long-poll loop and atomic snapshot store | ✅ `e805370`, `9f9547c`, *this commit* |
-| 3.3 | Route matching by longest prefix and method | 👉 Next |
-| 3.4 | Reverse proxy with per-route timeout, 502 and 504 | ⬜ |
+| 3.3 | Route matching by longest prefix and method | ✅ `7d56624`, `3adc271`, *this commit* |
+| 3.4 | Reverse proxy with per-route timeout, 502 and 504 | 👉 Next |
 | 3.5 | Request ID, recover and logger middleware | ⬜ |
 | 3.6 | API key auth middleware with 401 and 403 | ⬜ |
 | 3.7 | Unit tests for matching and auth | ⬜ |
@@ -175,6 +175,12 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 18 | 3.1 | Gateway container gets only its own env vars, not `env_file: .env` | Least privilege: it never needs the DB password or JWT secret |
 | Nov 18 | 3.1 | Go tests run locally on Windows; `-race` runs in CI | No database, no deps, so local equals Docker; the race detector needs cgo |
 | Nov 18 | 3.1 | Route `path_prefix` `/health` (and below) is reserved: 422 | The gateway answers it itself, so such a route would be created but never reached |
+| Nov 18 | 3.3 | **405** `method_not_allowed` with `Allow` when a path fits but no route allows the method (plan said 404) | The correct HTTP answer; tells the client exactly what is wrong |
+| Nov 18 | 3.3 | Longest prefix **among routes that allow the method**; exact method match (no implied HEAD) | Falls back to a shorter route like Kong; simple and predictable |
+| Nov 18 | 3.3 | Snapshot read once per request and passed on in the context | Matching and the key check always use the same config version |
+| Nov 18 | 3.3 | Encoded traversal (`%2e%2e`) rejected with **400** `invalid_path` | Go's mux redirects `../` but passes the encoded form through; found by a test |
+| Nov 18 | 3.3 | Plain scan of the sorted route list; `respond` package for JSON errors | Fast enough for hundreds of routes and easy to swap; one error shape everywhere |
+| Nov 18 | 3.3 | Temporary 501 `not_implemented` after a match | Matching can be tried live; 3.4 replaces it with the proxy |
 | Nov 18 | 3.2 | Gateway starts without waiting for config; no `depends_on` on the control plane | A slow or down control plane never keeps the gateway from starting; 3.3 answers 503 until the first config |
 | Nov 18 | 3.2 | Backoff 1 s → 30 s with jitter; at most one poll per 250 ms | Gateways don't retry in lockstep; a misbehaving control plane can't cause a busy loop |
 | Nov 18 | 3.2 | Broken snapshot rejected whole; a single bad route or key skipped with a warning | One bad row must not block other changes, such as key revocations |

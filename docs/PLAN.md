@@ -282,10 +282,19 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 1. **Recover**: catches panics and returns 500 instead of crashing
 2. **Request ID**: reads or creates `X-Request-ID` and passes it upstream
 3. **Logger**: records start time, writes the log line when the response is done
-4. **Route match**: finds the route by longest path prefix and method; 404 if none
+4. **Route match**: finds the route by longest path prefix and method; 404 if no path fits, 405 if a path fits but no route allows the method
 5. **Auth**: hashes `X-API-Key`, looks it up in the in-memory key map; 401 if missing, unknown or revoked; 403 if the consumer is blocked
 6. **Rate limit**: runs the token-bucket script in Redis; 429 if empty
 7. **Proxy**: forwards to the upstream with the route's timeout
+
+**Route matching (step 3.3)**
+
+- Routes are checked longest `path_prefix` first; the first whose prefix fits **on whole path segments** and that allows the method wins. So `/v1/orders` covers `/v1/orders/7` but not `/v1/orders-archive`, and a request falls back to a shorter route (`/v1`) when the longer one lacks its method.
+- Methods match exactly (HEAD is not implied by GET). Paths are case-sensitive.
+- Each request reads the snapshot once; matching and the key check use that one version. The match is passed on in the request context.
+- Unclean paths: Go's server redirects `/v1/../x` and `/v1//x` (307) to the clean form; encoded ones (`%2e%2e`) are rejected with 400, so no request can reach a path outside its route's prefix.
+- `GET /health` is the gateway's own; every other request is API traffic.
+- A plain scan of the sorted list: fast for hundreds of routes. MT adds the workspace as a first filter.
 
 **Config store**
 
@@ -325,7 +334,10 @@ The gateway sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every respon
 | --- | --- | --- |
 | 401 | Key missing, unknown or revoked | `{"error":"invalid_api_key"}` |
 | 403 | Consumer blocked | `{"error":"consumer_blocked"}` |
+| 400 | Path with an encoded `.` or `..` segment (`%2e%2e`) | `{"error":"invalid_path"}` |
 | 404 | No route matches | `{"error":"route_not_found"}` |
+| 405 | A route's path fits but none allows the method; `Allow` lists the methods | `{"error":"method_not_allowed"}` |
+| 503 | No config loaded yet (gateway just started); `Retry-After: 1` | `{"error":"config_not_loaded"}` |
 | 429 | Rate limit hit | `{"error":"rate_limit_exceeded"}` |
 | 502 | Upstream refused or reset the connection | `{"error":"bad_gateway"}` |
 | 504 | Upstream exceeded the route timeout | `{"error":"gateway_timeout"}` |
@@ -402,6 +414,7 @@ api-platform/
 │   │       ├── proxy/            # route matching and reverse proxy
 │   │       ├── ratelimit/        # Redis client and Lua script
 │   │       ├── server/           # http.Server, timeouts, /health, graceful shutdown
+│   │       ├── respond/          # the gateway's own JSON answers, {"error": "..."}
 │   │       └── settings/         # env vars, validated at startup
 │   ├── control-plane/            # FastAPI, organized by feature
 │   │   ├── app/
@@ -504,7 +517,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 
 - [x] Go module, `main.go`, graceful shutdown, `/health`
 - [x] Config poller and atomic snapshot store
-- [ ] Route matching by longest prefix and method
+- [x] Route matching by longest prefix and method
 - [ ] Reverse proxy with per-route timeout, 502 and 504 handling
 - [ ] Request ID, recover and logger middleware
 - [ ] API key auth middleware with 401 and 403

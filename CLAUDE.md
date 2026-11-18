@@ -20,7 +20,7 @@ The repo root is the plan's `api-platform/` folder. Services are grouped into `b
 
 ```
 backend/
-  gateway/         cmd/gateway/main.go, internal/{config,middleware,proxy,ratelimit,server,settings}
+  gateway/         cmd/gateway/main.go, internal/{config,middleware,proxy,ratelimit,respond,server,settings}
   control-plane/   app/{core,auth,services,routes,consumers,keys,gateway_config}, main.py, alembic/, tests/
                    each feature folder: router.py, models.py, schemas.py, crud.py
   mock-backend/    FastAPI echo service (port 9000)
@@ -50,7 +50,6 @@ Raise these with the user when the milestone starts (details in PLAN.md section 
 
 - **v2 usage events:** use the **inbox** pattern (batch ids, skip repeats) so retried batches aren't counted twice.
 - **v3 webhooks and audit log:** use the **outbox** pattern (outbox row in the same transaction, a worker delivers with retries).
-- **Step 3.3 route matching:** match on path-segment boundaries, so `/v1/orders` must not match `/v1/orders-archive`.
 - **v2 `last_used_at`:** the gateway never writes to Postgres; it stays null until usage events exist. Exclude it from the config_version triggers then (it isn't config).
 
 ## Working rules
