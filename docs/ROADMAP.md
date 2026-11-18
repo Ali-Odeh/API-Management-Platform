@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 18, 2026 · **Current step:** 3.2 (config long-poll loop)
+**Last updated:** Nov 18, 2026 · **Current step:** 3.3 (route matching)
 
 ## Overview
 
@@ -11,12 +11,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M3: Gateway proxies (Go) | ✅⬜⬜⬜⬜⬜⬜ 1/7 | 🔄 In progress |
+| M3: Gateway proxies (Go) | ✅✅⬜⬜⬜⬜⬜ 2/7 | 🔄 In progress |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 13 of 24 steps done (54%). First Go code is running.
+**MVP:** 14 of 24 steps done (58%). The gateway now holds a live copy of the config.
 
 ## Quality today
 
@@ -34,10 +34,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 31 passing (10 tests, 21 of them table cases), about 3 s |
-| Coverage | settings 100%, server 97.4%, main 62.1% (`serve()` waits for a real signal; checked in Docker instead) |
+| Tests | 73 passing (29 tests plus 44 table cases), about 3 s |
+| Coverage | settings 100%, config 99.0%, server 97.4%, main 48.6% (`serve()` waits for a real signal; checked in Docker instead) |
 | gofmt, go vet | clean |
-| Image | 16.5 MB (distroless, non-root) |
+| Race detector | clean (`go test -race` in a Linux container; also in CI) |
+| Config propagation | admin change → gateway updated in **68 ms** (measured in Docker) |
+| Image | 16.6 MB (distroless, non-root) |
 | Run all checks | `.\backend\gateway\scripts\check.ps1` (`-Fix` to autofix) |
 
 **Both**
@@ -87,8 +89,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | # | Step | Status |
 | --- | --- | --- |
 | 3.1 | Go module, `main.go`, graceful shutdown, `/health` | ✅ `430d193`, `3173814`, *this commit* |
-| 3.2 | Config long-poll loop and atomic snapshot store | 👉 Next |
-| 3.3 | Route matching by longest prefix and method | ⬜ |
+| 3.2 | Config long-poll loop and atomic snapshot store | ✅ `e805370`, `9f9547c`, *this commit* |
+| 3.3 | Route matching by longest prefix and method | 👉 Next |
 | 3.4 | Reverse proxy with per-route timeout, 502 and 504 | ⬜ |
 | 3.5 | Request ID, recover and logger middleware | ⬜ |
 | 3.6 | API key auth middleware with 401 and 403 | ⬜ |
@@ -173,4 +175,9 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 18 | 3.1 | Gateway container gets only its own env vars, not `env_file: .env` | Least privilege: it never needs the DB password or JWT secret |
 | Nov 18 | 3.1 | Go tests run locally on Windows; `-race` runs in CI | No database, no deps, so local equals Docker; the race detector needs cgo |
 | Nov 18 | 3.1 | Route `path_prefix` `/health` (and below) is reserved: 422 | The gateway answers it itself, so such a route would be created but never reached |
+| Nov 18 | 3.2 | Gateway starts without waiting for config; no `depends_on` on the control plane | A slow or down control plane never keeps the gateway from starting; 3.3 answers 503 until the first config |
+| Nov 18 | 3.2 | Backoff 1 s → 30 s with jitter; at most one poll per 250 ms | Gateways don't retry in lockstep; a misbehaving control plane can't cause a busy loop |
+| Nov 18 | 3.2 | Broken snapshot rejected whole; a single bad route or key skipped with a warning | One bad row must not block other changes, such as key revocations |
+| Nov 18 | 3.2 | A lower config version is accepted | The control plane is the source of truth (e.g. after a database reset) |
+| Nov 18 | 3.2 | `Secret` type for `INTERNAL_TOKEN`; settings errors reported all at once | The token can't leak into logs or errors; one restart fixes every bad value |
 | Nov 18 | 3.1 | Gateway on host port **8081** (8080 inside Docker) | Another Windows app holds 127.0.0.1:8080, so tools using that address hit the wrong server |

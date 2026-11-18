@@ -64,10 +64,15 @@ services:
   gateway:
     build: ./backend/gateway
     # Only the variables the gateway uses, not the whole .env: it never needs
-    # the database password or the JWT secret (least privilege).
-    # Step 3.2 adds CONTROL_PLANE_URL, INTERNAL_TOKEN and CONFIG_WAIT.
+    # the database password or the JWT secret (least privilege). Values come
+    # from .env; ":?" makes `docker compose` refuse to start if one is missing.
+    # No depends_on: the gateway must cope with the control plane being down
+    # (it keeps retrying and serves its last config).
     environment:
       LISTEN_ADDR: ":8080"   # fixed: the port mapping below depends on it
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:?set CONTROL_PLANE_URL in .env}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN in .env}
+      CONFIG_WAIT: ${CONFIG_WAIT:-30s}
     ports:
       # host 8081 -> container 8080. 127.0.0.1:8080 on the host is taken by
       # another Windows app. Containers still use gateway:8080.

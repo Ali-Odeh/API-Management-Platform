@@ -291,6 +291,14 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 
 A background goroutine long-polls `/internal/config?wait=30` in a loop (section 3). It builds a new immutable snapshot (route list sorted by prefix length, key map by hash) and swaps it in with `atomic.Pointer`. Request handlers read the pointer without locks. If a request fails, the old snapshot stays in use and the goroutine retries after a short backoff.
 
+Details (step 3.2):
+
+- The server starts without waiting for config. Until the first snapshot arrives the store is empty; step 3.3 answers such requests with `503 {"error":"config_not_loaded"}`.
+- Backoff after a failure: 1 s, 2 s, 4 s ... up to 30 s, each with random jitter (half to all of the value), reset after a success. A `304` is not a failure: the next request goes out at once, but never more than one per 250 ms.
+- The HTTP client timeout is `CONFIG_WAIT` + 10 s, so a held request is never cut short. Shutdown cancels a held request at once.
+- A body that isn't valid JSON or has no `version` is rejected whole. A single bad route or key is skipped with a warning and the rest applied, so one bad row can't block other changes such as key revocations. Unknown JSON fields are ignored.
+- A lower version than the current one is accepted (for example after a database reset): the control plane is the source of truth.
+
 **Token bucket**
 
 Each consumer has one bucket with capacity equal to its `rate_limit_per_min`, refilled continuously. All of a consumer's keys share that bucket, because the limit is set on the consumer: a bucket per key would let a consumer multiply its limit just by creating more keys (changed Nov 16, 2026). One Lua script does the whole check so two gateway instances cannot both spend the last token:
@@ -440,10 +448,10 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Control plane | `JWT_EXPIRE_MINUTES` | optional, default `60` |
 | Control plane | `INTERNAL_TOKEN` | shared secret with the gateway |
 | Control plane | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | seeds the first admin |
-| Gateway | `CONTROL_PLANE_URL` | `http://control-plane:8000` |
-| Gateway | `INTERNAL_TOKEN` | same shared secret |
+| Gateway | `CONTROL_PLANE_URL` | `http://control-plane:8000` (required) |
+| Gateway | `INTERNAL_TOKEN` | same shared secret (required; never logged) |
 | Gateway | `REDIS_URL` | `redis://redis:6379/0` |
-| Gateway | `CONFIG_WAIT` | `30s` (how long the control plane may hold a config request) |
+| Gateway | `CONFIG_WAIT` | `30s` (how long the control plane may hold a config request; whole seconds, 1 to 60) |
 | Gateway | `LISTEN_ADDR` | `:8080` (set in `docker-compose.yml`, next to the port mapping that depends on it) |
 | Gateway | `SHUTDOWN_TIMEOUT` | optional, default `5s` (time given to in-flight requests on stop) |
 
@@ -495,7 +503,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 **M3: Gateway proxies**
 
 - [x] Go module, `main.go`, graceful shutdown, `/health`
-- [ ] Config poller and atomic snapshot store
+- [x] Config poller and atomic snapshot store
 - [ ] Route matching by longest prefix and method
 - [ ] Reverse proxy with per-route timeout, 502 and 504 handling
 - [ ] Request ID, recover and logger middleware
