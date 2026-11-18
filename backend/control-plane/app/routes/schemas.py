@@ -12,6 +12,16 @@ from app.routes.models import HTTP_METHODS
 
 _PATH_CHARS = re.compile(r"[A-Za-z0-9._~/-]*")  # URL-safe characters only
 
+# Paths the gateway answers itself (backend/gateway/internal/server). A route
+# under one of them would be created but never receive a request. v2 adds
+# "/metrics".
+RESERVED_PATH_PREFIXES = ("/health",)
+
+
+def _is_reserved(path: str) -> bool:
+    """True for '/health' and '/health/db', not for '/healthy' (segment boundary)."""
+    return any(path == r or path.startswith(r + "/") for r in RESERVED_PATH_PREFIXES)
+
 
 def _normalize_path_prefix(value: str) -> str:
     """'/v1/orders/' -> '/v1/orders'. Rejects anything the gateway can't match safely.
@@ -29,7 +39,13 @@ def _normalize_path_prefix(value: str) -> str:
         raise ValueError("path_prefix must not contain '//'")
     if any(segment in {".", ".."} for segment in value.split("/")):
         raise ValueError("path_prefix must not contain '.' or '..' segments")
-    return value.rstrip("/") or "/"
+    normalized = value.rstrip("/") or "/"
+    if _is_reserved(normalized):
+        raise ValueError(
+            f"path_prefix '{normalized}' is reserved by the gateway "
+            f"(reserved: {', '.join(RESERVED_PATH_PREFIXES)})"
+        )
+    return normalized
 
 
 def _normalize_methods(methods: list[str]) -> list[str]:

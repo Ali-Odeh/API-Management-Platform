@@ -140,6 +140,35 @@ async def test_bad_path_prefix_is_422(
     assert r.status_code == 422
 
 
+@pytest.mark.parametrize("path_prefix", ["/health", "/health/", "/health/db"])
+async def test_reserved_path_prefix_is_422(
+    client: AsyncClient, auth_headers: Headers, service: Service, path_prefix: str
+) -> None:
+    r = await create(client, auth_headers, service, path_prefix=path_prefix)
+    assert r.status_code == 422
+    assert "reserved by the gateway" in r.text
+
+
+# Only whole segments are reserved, and paths are case-sensitive, so the
+# gateway's own /health does not hide these.
+@pytest.mark.parametrize("path_prefix", ["/healthy", "/api/health", "/Health"])
+async def test_paths_near_reserved_ones_are_allowed(
+    client: AsyncClient, auth_headers: Headers, service: Service, path_prefix: str
+) -> None:
+    r = await create(client, auth_headers, service, path_prefix=path_prefix)
+    assert r.status_code == 201
+
+
+async def test_patch_to_reserved_prefix_is_422(
+    client: AsyncClient, auth_headers: Headers, service: Service
+) -> None:
+    route = (await create(client, auth_headers, service, path_prefix="/v1/orders")).json()
+    r = await client.patch(
+        f"{URL}/{route['id']}", json={"path_prefix": "/health"}, headers=auth_headers
+    )
+    assert r.status_code == 422
+
+
 async def test_methods_are_normalized(
     client: AsyncClient, auth_headers: Headers, service: Service
 ) -> None:
