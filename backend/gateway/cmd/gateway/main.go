@@ -84,14 +84,18 @@ func serve(cfg settings.Settings, log *slog.Logger) int {
 
 // apiHandler builds the path of every API request, outermost first:
 //
-//	request ID → logger → recover → router (400/404/405/503) → forwarder (502/504)
+//	request ID → logger → recover → router (400/404/405/503)
+//	  → auth (401/403) → forwarder (502/504)
 //
 // Recover sits inside the logger, so a panic's 500 shows in the request log.
+// Auth comes after the router: it needs the route (auth_required) and the
+// snapshot the router used.
 // GET /health is answered by the server before this chain, so Docker's
 // health checks don't fill the log.
 func apiHandler(source proxy.SnapshotSource, log *slog.Logger) http.Handler {
+	afterMatch := middleware.Auth(log)(proxy.NewForwarder(log))
 	return middleware.Chain(
-		proxy.NewRouter(source, proxy.NewForwarder(log)),
+		proxy.NewRouter(source, afterMatch),
 		middleware.RequestID,
 		middleware.Logger(log),
 		middleware.Recover(log),
