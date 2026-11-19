@@ -1,0 +1,149 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
+)
+
+// freeAddr returns a local address nothing listens on right now.
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+	return addr
+}
+
+// fakeControlPlane answers the first /internal/config with a snapshot (one
+// protected route to backendURL, one key), then holds every later request
+// open like a real long poll. A wrong token gets 401.
+func fakeControlPlane(t *testing.T, backendURL string) *httptest.Server {
+	t.Helper()
+	body := fmt.Sprintf(`{"version": 1,
+		"routes": [{"id": "r1", "path_prefix": "/v1/orders", "methods": ["GET"], "strip_prefix": false,
+		            "auth_required": true, "upstream_url": %q, "timeout_ms": 5000}],
+		"keys": [{"id": "k1", "key_hash": %q, "consumer_id": "c1", "consumer_status": "active", "rate_limit_per_min": 60}]}`,
+		backendURL, sha256Hex(testKey))
+	served := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Internal-Token") != "s3cret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		select {
+		case served <- struct{}{}: // first request: the full snapshot
+			w.Header().Set("ETag", `"1"`)
+			_, _ = io.WriteString(w, body)
+		default: // later: nothing changes, hold until the gateway stops
+			<-r.Context().Done()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The real program, start to stop: settings → poller loads the config from
+// the control plane → server answers through the whole chain → clean stop.
+func TestServeWholeGateway(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "order for "+r.Header.Get("X-Consumer-ID"))
+	}))
+	defer backend.Close()
+	cp := fakeControlPlane(t, backend.URL)
+
+	cfg := settings.Settings{
+		ListenAddr:      freeAddr(t),
+		ShutdownTimeout: 2 * time.Second,
+		ControlPlaneURL: cp.URL,
+		InternalToken:   "s3cret",
+		ConfigWait:      time.Second,
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	exit := make(chan int, 1)
+	go func() { exit <- serve(ctx, cfg, slog.New(slog.DiscardHandler)) }()
+
+	gateway := "http://" + cfg.ListenAddr
+	call := func(key string) (int, string) {
+		req, _ := http.NewRequest("GET", gateway+"/v1/orders/7", nil)
+		if key != "" {
+			req.Header.Set("X-API-Key", key)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, err.Error()
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	// Up and healthy (Docker's check), then 503 until the config arrives,
+	// then 200: retry briefly.
+	var status int
+	var body string
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if status, body = call(testKey); status == http.StatusOK {
+			break
+		}
+	}
+	if status != http.StatusOK || body != "order for c1" {
+		t.Fatalf("with a key: %d %q, want 200 from the backend for consumer c1", status, body)
+	}
+	if code := healthcheck(cfg); code != 0 {
+		t.Errorf("healthcheck() = %d while running, want 0", code)
+	}
+	if status, _ := call(""); status != http.StatusUnauthorized {
+		t.Errorf("without a key: %d, want 401", status)
+	}
+
+	cancel() // like docker stop
+	select {
+	case code := <-exit:
+		if code != 0 {
+			t.Errorf("serve() = %d after a clean stop, want 0", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve() did not stop within 5 s (is the held long poll stopping it?)")
+	}
+	if code := healthcheck(cfg); code != 1 {
+		t.Errorf("healthcheck() = %d after stop, want 1", code)
+	}
+}
+
+// If the server can't start, serve fails fast and the poller stops too.
+func TestServeFailsWhenThePortIsTaken(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer busy.Close()
+	cp := fakeControlPlane(t, "http://127.0.0.1:1")
+
+	cfg := settings.Settings{
+		ListenAddr: busy.Addr().String(), ShutdownTimeout: time.Second,
+		ControlPlaneURL: cp.URL, InternalToken: "s3cret", ConfigWait: time.Second,
+	}
+	exit := make(chan int, 1)
+	go func() { exit <- serve(t.Context(), cfg, slog.New(slog.DiscardHandler)) }()
+
+	select {
+	case code := <-exit:
+		if code != 1 {
+			t.Errorf("serve() = %d, want 1", code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve() kept running although the port was taken")
+	}
+}

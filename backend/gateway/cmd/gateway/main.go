@@ -45,7 +45,10 @@ func run(args []string) int {
 
 	switch {
 	case len(args) == 0:
-		return serve(cfg, log)
+		// Cancelled by Ctrl+C (SIGINT) or `docker stop` (SIGTERM).
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return serve(ctx, cfg, log)
 	case len(args) == 1 && args[0] == "healthcheck":
 		return healthcheck(cfg)
 	default:
@@ -54,11 +57,12 @@ func run(args []string) int {
 	}
 }
 
-// serve runs the gateway until Ctrl+C (SIGINT) or `docker stop` (SIGTERM).
-func serve(cfg settings.Settings, log *slog.Logger) int {
-	// ctx is cancelled when one of these signals arrives. Everything that
-	// runs long (the server and the config poller) watches it.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+// serve runs the gateway until ctx is cancelled. Everything that runs long
+// (the server and the config poller) watches ctx. Taking ctx as a parameter
+// (instead of listening for signals here) lets a test start and stop the
+// whole gateway.
+func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
+	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 
 	log.Info("gateway starting", "listen_addr", cfg.ListenAddr, "control_plane_url", cfg.ControlPlaneURL)
