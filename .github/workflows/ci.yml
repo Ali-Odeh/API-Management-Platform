@@ -166,16 +166,24 @@ jobs:
           CONFIG_WAIT=30s
           EOF
 
-      - name: Lint the end-to-end tests (ruff)
+      - name: Lint the end-to-end tests and the load-test helper (ruff)
         run: |
           docker compose --profile test build e2e
           docker compose run --rm --no-deps e2e sh -c "ruff check . && ruff format --check ."
+          docker compose run --rm --no-deps -v ./loadtest:/loadtest e2e sh -c \
+            "ruff check --config pyproject.toml /loadtest && ruff format --config pyproject.toml --check /loadtest"
 
       - name: Start the stack and wait until every service is healthy
         run: docker compose up -d --build --wait
 
       - name: End-to-end tests
         run: docker compose run --rm e2e
+
+      # The k6 load test at a gentle rate for a few seconds. Not a measurement
+      # (shared CI machines are too noisy for timing), just proof the script,
+      # its setup and its teardown still work. Thresholds still apply.
+      - name: Load test smoke run (k6, 20 requests/s, 5 s per run)
+        run: docker compose run --rm -e RATE=20 -e DURATION=5 loadtest
 
       - name: Service logs (only when something failed)
         if: failure()
