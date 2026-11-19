@@ -541,7 +541,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Reverse proxy with per-route timeout, 502 and 504 handling
 - [x] Request ID, recover and logger middleware
 - [x] API key auth middleware with 401 and 403
-- [ ] Unit tests for matching and auth
+- [x] Unit tests for matching and auth (plus a whole-gateway test, a load test during config changes, fuzz tests, benchmarks and a 90% coverage gate)
 
 **M4: MVP done**
 
@@ -573,7 +573,9 @@ Each service has its own tests, and one end-to-end script proves the whole stack
 | Level | Tool | Covers |
 | --- | --- | --- |
 | Control plane unit and API tests | pytest, httpx, a test Postgres database | Every endpoint, key hashing, config snapshot |
-| Gateway unit tests | `go test`, `httptest` | Route matching, auth, error mapping, middleware order |
+| Gateway unit tests | `go test`, `httptest` | Route matching, auth, error mapping, middleware order; the whole program start to stop against a fake control plane; requests under load while the config changes (`-race`); coverage at least 90% |
+| Gateway fuzz tests | `go test -fuzz` | Path checks, matching, prefix stripping and request IDs against independent reference rules; 10 s each in CI |
+| Gateway benchmarks | `go test -bench` (by hand) | Matching vs. number of routes, key lookup vs. number of keys, the whole chain without network |
 | Rate limiter tests | `go test` against a real Redis in Compose | Bucket refill, burst, two clients sharing one key |
 | End to end | Shell or pytest script against the Compose stack | 200, 401, 403, 404, 429, 502, 504 |
 | Load | k6 | Throughput and p95 latency with and without the gateway |

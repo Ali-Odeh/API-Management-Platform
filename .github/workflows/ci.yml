@@ -103,7 +103,22 @@ jobs:
       # -race finds goroutines touching the same data at once. It needs cgo,
       # which Linux runners have and a default Windows install does not.
       - name: Tests with the race detector (go test)
-        run: go test -count=1 -race -cover ./...
+        run: go test -count=1 -race -cover -coverprofile=cover.out ./...
+
+      - name: Coverage at least 90% (same bar as the control plane)
+        run: |
+          total=$(go tool cover -func=cover.out | tail -1 | grep -oE '[0-9.]+%' | tr -d '%')
+          echo "total coverage: ${total}%"
+          awk -v t="$total" 'BEGIN { exit (t < 90) }' || { echo "Coverage ${total}% is below 90%"; exit 1; }
+
+      # A short run of every fuzz test: random inputs against the path and
+      # request-ID checks. Go fuzzes one test of one package per command.
+      - name: Fuzz tests (10 s each)
+        run: |
+          for f in FuzzPrefixFits FuzzIsCleanPath FuzzMatch FuzzStripPrefix; do
+            go test -run='^$' -fuzz="^${f}\$" -fuzztime=10s ./internal/proxy
+          done
+          go test -run='^$' -fuzz='^FuzzValidRequestID$' -fuzztime=10s ./internal/middleware
 
       - name: Docker image builds
         run: docker build --tag gateway:ci .

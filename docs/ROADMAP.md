@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 3.7 (test review for matching and auth)
+**Last updated:** Nov 19, 2026 · **Current step:** 4.1 (token-bucket Lua script)
 
 ## Overview
 
@@ -11,12 +11,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M3: Gateway proxies (Go) | ✅✅✅✅✅✅⬜ 6/7 | 🔄 In progress |
-| M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
+| M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
+| M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | 👉 Next |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 18 of 24 steps done (75%). Only apps with a valid API key get through.
+**MVP:** 19 of 24 steps done (79%). M3 done: the Go gateway routes, authenticates, proxies and logs. 🎉
 
 ## Quality today
 
@@ -34,12 +34,14 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 187 passing (71 tests plus 116 table cases), about 3 s; mock backend 7 |
-| Coverage | settings, proxy, middleware, reqctx, respond 100%; config 99.0%; server 97.4%; main 51.3% (`serve()` waits for a real signal; checked in Docker instead) |
+| Tests | 336 passing (79 tests plus 257 table cases and fuzz seeds), about 3 s; mock backend 7 |
+| Coverage | **98.6%** total (minimum 90%, enforced): 6 packages at 100%, config 99.0%, server 97.4%, main 90.2% |
+| Fuzz tests | 5 (paths, matching, prefix stripping, request IDs); about 1.6 million random inputs in the first runs; 10 s each in CI |
+| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; whole chain without network **≈ 8.5 µs** |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
-| Race detector | clean (`go test -race` in a Linux container; also in CI) |
+| Race detector | clean, including 1,000 requests while the config changes every ms (`go test -race` in a Linux container; also in CI) |
 | Config propagation | admin change → gateway updated in **68 ms** (measured in Docker) |
 | Proxy errors (live) | slow backend → **504 after 5.05 s** (route timeout 5 s); backend down → **502** |
 | Image | 16.9 MB (distroless, non-root) |
@@ -49,7 +51,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (with `-race` and an image build), mock backend |
+| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -97,9 +99,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | 3.4 | Reverse proxy with per-route timeout, 502 and 504 | ✅ `8b22acb`, `b47bea2`, *this commit* |
 | 3.5 | Request ID, recover and logger middleware | ✅ `1348149`, `ded8f8a`, *this commit* |
 | 3.6 | API key auth middleware with 401 and 403 | ✅ `562d980`, `8fe67eb`, *this commit* |
-| 3.7 | Unit tests for matching and auth (now a review: both already have table tests) | 👉 Next |
+| 3.7 | Test review: whole gateway start to stop, load during config changes, fuzz tests, benchmarks, 90% coverage gate | ✅ `6347d95`, `8e80c76`, *this commit* |
 
-**Outcome:** requests flow client → gateway → mock backend, with key auth.
+**Outcome:** requests flow client → gateway → mock backend, with key auth, request IDs and one log line each. Tested start to stop, under load, with fuzzing; 98.6% coverage.
 
 ## M4: MVP done
 
@@ -178,17 +180,18 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 18 | 3.1 | Gateway container gets only its own env vars, not `env_file: .env` | Least privilege: it never needs the DB password or JWT secret |
 | Nov 18 | 3.1 | Go tests run locally on Windows; `-race` runs in CI | No database, no deps, so local equals Docker; the race detector needs cgo |
 | Nov 18 | 3.1 | Route `path_prefix` `/health` (and below) is reserved: 422 | The gateway answers it itself, so such a route would be created but never reached |
-| Nov 19 | 3.6 | Two 401 codes: `missing_api_key` and `invalid_api_key` (plan had one) | Client developers see at once whether they forgot the key or sent a wrong one; revoked and unknown stay identical |
-| Nov 19 | 3.6 | `X-API-Key` header only; removed before forwarding; gateway sets `X-Consumer-ID` and strips a client-sent one | Keys in URLs leak; the backend never needs the secret; nobody can pose as another consumer |
-| Nov 19 | 3.6 | Auth after route matching (404 before 401), same snapshot as the router | Kong's order; one consistent config version per request |
-| Nov 19 | 3.6 | `WWW-Authenticate: ApiKey header="X-API-Key"` on 401; `key_id` in the log | HTTP requires the challenge on 401; `key_id` shows which key to revoke |
-| Nov 19 | 3.6 | Gateway hash checked against a value computed by the control plane's Python code | Both sides must hash identically or no key would ever match |
-| Nov 19 | 3.5 | Order **request ID → logger → recover** → router (plan had recover outermost) | The logger then records a panic's 500; chi's documented order |
-| Nov 19 | 3.5 | Keep a safe client `X-Request-ID` (Kong style), else a new 128-bit ID | Customers can report an ID and it is found; the charset check stops log injection |
-| Nov 19 | 3.5 | Log adds `gateway_ms`, `client_ip`, `bytes`; times in ms with µs precision; no query string | `gateway_ms` shows the gateway's own cost at a glance (Kong's "kong latency") |
-| Nov 19 | 3.5 | `upstream_ms` = time to the backend's response headers | `latency − upstream` is then exactly the gateway's share |
-| Nov 19 | 3.5 | `/health` not logged; middleware wraps API traffic only | Docker's checks would add ~17,000 useless lines a day |
-| Nov 19 | 3.5 | `reqctx` package: a per-request "notes card" filled by router, forwarder, auth | The logger sees inner results without packages importing each other |
+| Nov 18 | 3.1 | Gateway on host port **8081** (8080 inside Docker) | Another Windows app holds 127.0.0.1:8080, so tools using that address hit the wrong server |
+| Nov 18 | 3.2 | Gateway starts without waiting for config; no `depends_on` on the control plane | A slow or down control plane never keeps the gateway from starting; 3.3 answers 503 until the first config |
+| Nov 18 | 3.2 | Backoff 1 s → 30 s with jitter; at most one poll per 250 ms | Gateways don't retry in lockstep; a misbehaving control plane can't cause a busy loop |
+| Nov 18 | 3.2 | Broken snapshot rejected whole; a single bad route or key skipped with a warning | One bad row must not block other changes, such as key revocations |
+| Nov 18 | 3.2 | A lower config version is accepted | The control plane is the source of truth (e.g. after a database reset) |
+| Nov 18 | 3.2 | `Secret` type for `INTERNAL_TOKEN`; settings errors reported all at once | The token can't leak into logs or errors; one restart fixes every bad value |
+| Nov 18 | 3.3 | **405** `method_not_allowed` with `Allow` when a path fits but no route allows the method (plan said 404) | The correct HTTP answer; tells the client exactly what is wrong |
+| Nov 18 | 3.3 | Longest prefix **among routes that allow the method**; exact method match (no implied HEAD) | Falls back to a shorter route like Kong; simple and predictable |
+| Nov 18 | 3.3 | Snapshot read once per request and passed on in the context | Matching and the key check always use the same config version |
+| Nov 18 | 3.3 | Encoded traversal (`%2e%2e`) rejected with **400** `invalid_path` | Go's mux redirects `../` but passes the encoded form through; found by a test |
+| Nov 18 | 3.3 | Plain scan of the sorted route list; `respond` package for JSON errors | Fast enough for hundreds of routes and easy to swap; one error shape everywhere |
+| Nov 18 | 3.3 | Temporary 501 `not_implemented` after a match | Matching can be tried live; 3.4 replaces it with the proxy |
 | Nov 19 | 3.4 | One shared `ReverseProxy` + one pool; target picked per request with `Rewrite` | Config changes apply to the next request; `Rewrite` (not `Director`) drops client-sent `X-Forwarded-*` |
 | Nov 19 | 3.4 | Pool: 100 idle per backend, 1000 total, 90 s idle; 5 s connect and TLS timeouts | Go's default of 2 idle per backend would reopen connections under load |
 | Nov 19 | 3.4 | Route timeout covers the whole answer (Envoy style); connect timeout also 504 | Simple and matches `timeout_ms`; WebSockets would need a different timeout later |
@@ -196,15 +199,19 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 19 | 3.4 | Client hang-up recorded as **499** (nginx convention), not logged as a backend failure | Not the backend's fault; the 3.5 log line still shows it |
 | Nov 19 | 3.4 | No retries, body limit or WebSockets yet | Retries need several backend instances (v3); the rest when a route needs them |
 | Nov 19 | 3.4 | Mock backend `?delay_ms=` (0–30000) | Shows a 504 live without a real slow service |
-| Nov 18 | 3.3 | **405** `method_not_allowed` with `Allow` when a path fits but no route allows the method (plan said 404) | The correct HTTP answer; tells the client exactly what is wrong |
-| Nov 18 | 3.3 | Longest prefix **among routes that allow the method**; exact method match (no implied HEAD) | Falls back to a shorter route like Kong; simple and predictable |
-| Nov 18 | 3.3 | Snapshot read once per request and passed on in the context | Matching and the key check always use the same config version |
-| Nov 18 | 3.3 | Encoded traversal (`%2e%2e`) rejected with **400** `invalid_path` | Go's mux redirects `../` but passes the encoded form through; found by a test |
-| Nov 18 | 3.3 | Plain scan of the sorted route list; `respond` package for JSON errors | Fast enough for hundreds of routes and easy to swap; one error shape everywhere |
-| Nov 18 | 3.3 | Temporary 501 `not_implemented` after a match | Matching can be tried live; 3.4 replaces it with the proxy |
-| Nov 18 | 3.2 | Gateway starts without waiting for config; no `depends_on` on the control plane | A slow or down control plane never keeps the gateway from starting; 3.3 answers 503 until the first config |
-| Nov 18 | 3.2 | Backoff 1 s → 30 s with jitter; at most one poll per 250 ms | Gateways don't retry in lockstep; a misbehaving control plane can't cause a busy loop |
-| Nov 18 | 3.2 | Broken snapshot rejected whole; a single bad route or key skipped with a warning | One bad row must not block other changes, such as key revocations |
-| Nov 18 | 3.2 | A lower config version is accepted | The control plane is the source of truth (e.g. after a database reset) |
-| Nov 18 | 3.2 | `Secret` type for `INTERNAL_TOKEN`; settings errors reported all at once | The token can't leak into logs or errors; one restart fixes every bad value |
-| Nov 18 | 3.1 | Gateway on host port **8081** (8080 inside Docker) | Another Windows app holds 127.0.0.1:8080, so tools using that address hit the wrong server |
+| Nov 19 | 3.5 | Order **request ID → logger → recover** → router (plan had recover outermost) | The logger then records a panic's 500; chi's documented order |
+| Nov 19 | 3.5 | Keep a safe client `X-Request-ID` (Kong style), else a new 128-bit ID | Customers can report an ID and it is found; the charset check stops log injection |
+| Nov 19 | 3.5 | Log adds `gateway_ms`, `client_ip`, `bytes`; times in ms with µs precision; no query string | `gateway_ms` shows the gateway's own cost at a glance (Kong's "kong latency") |
+| Nov 19 | 3.5 | `upstream_ms` = time to the backend's response headers | `latency − upstream` is then exactly the gateway's share |
+| Nov 19 | 3.5 | `/health` not logged; middleware wraps API traffic only | Docker's checks would add ~17,000 useless lines a day |
+| Nov 19 | 3.5 | `reqctx` package: a per-request "notes card" filled by router, forwarder, auth | The logger sees inner results without packages importing each other |
+| Nov 19 | 3.6 | Two 401 codes: `missing_api_key` and `invalid_api_key` (plan had one) | Client developers see at once whether they forgot the key or sent a wrong one; revoked and unknown stay identical |
+| Nov 19 | 3.6 | `X-API-Key` header only; removed before forwarding; gateway sets `X-Consumer-ID` and strips a client-sent one | Keys in URLs leak; the backend never needs the secret; nobody can pose as another consumer |
+| Nov 19 | 3.6 | Auth after route matching (404 before 401), same snapshot as the router | Kong's order; one consistent config version per request |
+| Nov 19 | 3.6 | `WWW-Authenticate: ApiKey header="X-API-Key"` on 401; `key_id` in the log | HTTP requires the challenge on 401; `key_id` shows which key to revoke |
+| Nov 19 | 3.6 | Gateway hash checked against a value computed by the control plane's Python code | Both sides must hash identically or no key would ever match |
+| Nov 19 | 3.7 | `serve(ctx, ...)` takes its context; `run()` owns the signals | A test can start and stop the real program; behavior unchanged |
+| Nov 19 | 3.7 | Fuzz tests against independent reference rules; 10 s each in CI | Security-relevant path checks are tried with inputs nobody thought of; found the `//` bug on day one |
+| Nov 19 | 3.7 | `//` is not a clean path (fix) | The trailing-slash rule also matched the root, so `/%2F` passed the check |
+| Nov 19 | 3.7 | Benchmarks run by hand, numbers in ROADMAP | CI timing is too noisy; the numbers back the linear-scan decision of 3.3 |
+| Nov 19 | 3.7 | Gateway coverage gate 90% in `check.ps1` and CI | Same bar as the control plane; enforced by tools, not memory |
