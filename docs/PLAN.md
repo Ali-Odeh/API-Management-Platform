@@ -296,6 +296,15 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 - `GET /health` is the gateway's own; every other request is API traffic.
 - A plain scan of the sorted list: fast for hundreds of routes. MT adds the workspace as a first filter.
 
+**API key auth (step 3.6)**
+
+- Runs after route matching (404 before 401, as in Kong) and only on routes with `auth_required`. It uses the same snapshot the router used.
+- The key is read from the `X-API-Key` header only (a key in the query string doesn't count), hashed with SHA-256 (lowercase hex, exactly like the control plane) and looked up in the snapshot's key map.
+- No key: `401 missing_api_key`. Unknown, revoked or doubled key: `401 invalid_api_key` (unknown and revoked look the same on purpose). Blocked consumer: `403 consumer_blocked`. Every 401 carries `WWW-Authenticate: ApiKey header="X-API-Key"`.
+- On every route, `X-API-Key` and any client-sent `X-Consumer-ID` are removed before forwarding (Kong's `hide_credentials`, turned on). A valid key adds `X-Consumer-ID` for the backend.
+- The log line gets `consumer_id` and `key_id` (also for a blocked consumer); the key itself never appears.
+- Later: limiting failed attempts per IP (after the rate limiter), `last_used_at` (v2 usage events), JWT (v3).
+
 **Proxy (step 3.4)**
 
 - One `httputil.ReverseProxy` and one connection pool serve every route; the target comes from the matched route per request, so config changes apply to the next request.
@@ -341,7 +350,8 @@ The gateway sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every respon
 
 | Status | When | Body |
 | --- | --- | --- |
-| 401 | Key missing, unknown or revoked | `{"error":"invalid_api_key"}` |
+| 401 | No `X-API-Key` header (with `WWW-Authenticate`) | `{"error":"missing_api_key"}` |
+| 401 | Key unknown or revoked (same answer for both), or sent twice | `{"error":"invalid_api_key"}` |
 | 403 | Consumer blocked | `{"error":"consumer_blocked"}` |
 | 400 | Path with an encoded `.` or `..` segment (`%2e%2e`) | `{"error":"invalid_path"}` |
 | 404 | No route matches | `{"error":"route_not_found"}` |
@@ -354,7 +364,7 @@ The gateway sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every respon
 **Log line**
 
 ```json
-{"ts":"2026-11-15T16:00:00Z","level":"INFO","msg":"request","request_id":"a1b2","method":"GET","path":"/v1/orders/7","route_id":"r1","consumer_id":"c1","status":200,"latency_ms":12.4,"upstream_ms":9.1,"gateway_ms":3.3,"client_ip":"172.18.0.1","bytes":245}
+{"ts":"2026-11-15T16:00:00Z","level":"INFO","msg":"request","request_id":"a1b2","method":"GET","path":"/v1/orders/7","route_id":"r1","consumer_id":"c1","key_id":"k1","status":200,"latency_ms":12.4,"upstream_ms":9.1,"gateway_ms":3.3,"client_ip":"172.18.0.1","bytes":245}
 ```
 
 Logs use Go's `log/slog` with the JSON handler. The API key itself never appears in a log, and neither does the query string (it can hold tokens or personal data). Times are milliseconds with microsecond precision. `upstream_ms` is the wait until the backend's response headers; `gateway_ms` = `latency_ms` − `upstream_ms` is the time the gateway added. `status` 499 means the client hung up; `aborted: true` marks an answer cut off mid-stream. `GET /health` is not logged. A panic adds an `ERROR` line with the stack trace and the request ID.
@@ -530,7 +540,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Route matching by longest prefix and method
 - [x] Reverse proxy with per-route timeout, 502 and 504 handling
 - [x] Request ID, recover and logger middleware
-- [ ] API key auth middleware with 401 and 403
+- [x] API key auth middleware with 401 and 403
 - [ ] Unit tests for matching and auth
 
 **M4: MVP done**

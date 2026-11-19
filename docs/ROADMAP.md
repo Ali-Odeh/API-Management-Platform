@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 3.6 (API key auth)
+**Last updated:** Nov 19, 2026 · **Current step:** 3.7 (test review for matching and auth)
 
 ## Overview
 
@@ -11,12 +11,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M3: Gateway proxies (Go) | ✅✅✅✅✅⬜⬜ 5/7 | 🔄 In progress |
+| M3: Gateway proxies (Go) | ✅✅✅✅✅✅⬜ 6/7 | 🔄 In progress |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 17 of 24 steps done (71%). Every request now has an ID and one log line.
+**MVP:** 18 of 24 steps done (75%). Only apps with a valid API key get through.
 
 ## Quality today
 
@@ -34,8 +34,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 169 passing (66 tests plus 103 table cases), about 3 s; mock backend 7 |
-| Coverage | settings, proxy, middleware, reqctx, respond 100%; config 99.0%; server 97.4%; main 50.0% (`serve()` waits for a real signal; checked in Docker instead) |
+| Tests | 187 passing (71 tests plus 116 table cases), about 3 s; mock backend 7 |
+| Coverage | settings, proxy, middleware, reqctx, respond 100%; config 99.0%; server 97.4%; main 51.3% (`serve()` waits for a real signal; checked in Docker instead) |
+| Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
 | Race detector | clean (`go test -race` in a Linux container; also in CI) |
@@ -95,8 +96,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | 3.3 | Route matching by longest prefix and method | ✅ `7d56624`, `3adc271`, *this commit* |
 | 3.4 | Reverse proxy with per-route timeout, 502 and 504 | ✅ `8b22acb`, `b47bea2`, *this commit* |
 | 3.5 | Request ID, recover and logger middleware | ✅ `1348149`, `ded8f8a`, *this commit* |
-| 3.6 | API key auth middleware with 401 and 403 | 👉 Next |
-| 3.7 | Unit tests for matching and auth | ⬜ |
+| 3.6 | API key auth middleware with 401 and 403 | ✅ `562d980`, `8fe67eb`, *this commit* |
+| 3.7 | Unit tests for matching and auth (now a review: both already have table tests) | 👉 Next |
 
 **Outcome:** requests flow client → gateway → mock backend, with key auth.
 
@@ -177,6 +178,11 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 18 | 3.1 | Gateway container gets only its own env vars, not `env_file: .env` | Least privilege: it never needs the DB password or JWT secret |
 | Nov 18 | 3.1 | Go tests run locally on Windows; `-race` runs in CI | No database, no deps, so local equals Docker; the race detector needs cgo |
 | Nov 18 | 3.1 | Route `path_prefix` `/health` (and below) is reserved: 422 | The gateway answers it itself, so such a route would be created but never reached |
+| Nov 19 | 3.6 | Two 401 codes: `missing_api_key` and `invalid_api_key` (plan had one) | Client developers see at once whether they forgot the key or sent a wrong one; revoked and unknown stay identical |
+| Nov 19 | 3.6 | `X-API-Key` header only; removed before forwarding; gateway sets `X-Consumer-ID` and strips a client-sent one | Keys in URLs leak; the backend never needs the secret; nobody can pose as another consumer |
+| Nov 19 | 3.6 | Auth after route matching (404 before 401), same snapshot as the router | Kong's order; one consistent config version per request |
+| Nov 19 | 3.6 | `WWW-Authenticate: ApiKey header="X-API-Key"` on 401; `key_id` in the log | HTTP requires the challenge on 401; `key_id` shows which key to revoke |
+| Nov 19 | 3.6 | Gateway hash checked against a value computed by the control plane's Python code | Both sides must hash identically or no key would ever match |
 | Nov 19 | 3.5 | Order **request ID → logger → recover** → router (plan had recover outermost) | The logger then records a panic's 500; chi's documented order |
 | Nov 19 | 3.5 | Keep a safe client `X-Request-ID` (Kong style), else a new 128-bit ID | Customers can report an ID and it is found; the charset check stops log injection |
 | Nov 19 | 3.5 | Log adds `gateway_ms`, `client_ip`, `bytes`; times in ms with µs precision; no query string | `gateway_ms` shows the gateway's own cost at a glance (Kong's "kong latency") |
