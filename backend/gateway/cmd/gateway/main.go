@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/server"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
@@ -68,11 +70,7 @@ func serve(cfg settings.Settings, log *slog.Logger) int {
 	var background sync.WaitGroup
 	background.Go(func() { poller.Run(ctx) })
 
-	// API traffic: match the route (400/404/405/503 answered here), then
-	// forward the matched request to its backend (502/504 on failure).
-	api := proxy.NewRouter(store, proxy.NewForwarder(log))
-
-	err := server.New(cfg, api, log).ListenAndServe(ctx)
+	err := server.New(cfg, apiHandler(store, log), log).ListenAndServe(ctx)
 	stop()            // if the server failed on its own, stop the poller too
 	background.Wait() // never exit while the poller is still running
 
@@ -82,6 +80,22 @@ func serve(cfg settings.Settings, log *slog.Logger) int {
 	}
 	log.Info("gateway stopped")
 	return 0
+}
+
+// apiHandler builds the path of every API request, outermost first:
+//
+//	request ID → logger → recover → router (400/404/405/503) → forwarder (502/504)
+//
+// Recover sits inside the logger, so a panic's 500 shows in the request log.
+// GET /health is answered by the server before this chain, so Docker's
+// health checks don't fill the log.
+func apiHandler(source proxy.SnapshotSource, log *slog.Logger) http.Handler {
+	return middleware.Chain(
+		proxy.NewRouter(source, proxy.NewForwarder(log)),
+		middleware.RequestID,
+		middleware.Logger(log),
+		middleware.Recover(log),
+	)
 }
 
 // healthcheck is what Docker runs inside the container to ask "are you up?".

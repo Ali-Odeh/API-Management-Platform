@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
 )
 
@@ -62,6 +63,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	reqctx.From(r.Context()).RouteID = route.ID // for the request log
 	ctx := context.WithValue(r.Context(), matchKey{}, Match{Snapshot: snap, Route: route})
 	rt.next.ServeHTTP(w, r.WithContext(ctx))
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
 )
 
 // received is what a fake backend saw.
@@ -154,6 +155,9 @@ func TestForwardSetsTrustedForwardingHeaders(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "10.0.0.1")
 	req.Header.Set("X-Forwarded-Host", "admin.internal")
 	req.Header.Set("Forwarded", "for=10.0.0.1")
+	// Tracing headers pass through untouched (W3C Trace Context, v3 OpenTelemetry).
+	const trace = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	req.Header.Set("Traceparent", trace)
 
 	gw.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -165,6 +169,7 @@ func TestForwardSetsTrustedForwardingHeaders(t *testing.T) {
 		"X-Forwarded-Host":  {r.header.Get("X-Forwarded-Host"), "api.example.com"},
 		"X-Forwarded-Proto": {r.header.Get("X-Forwarded-Proto"), "http"},
 		"Forwarded":         {r.header.Get("Forwarded"), ""},
+		"Traceparent":       {r.header.Get("Traceparent"), trace},
 	}
 	for name, c := range checks {
 		if c[0] != c[1] {
@@ -293,6 +298,27 @@ func TestClassify(t *testing.T) {
 				t.Errorf("classify() = %d %q, want %d %q", status, code, tt.wantStatus, tt.wantCode)
 			}
 		})
+	}
+}
+
+// The forwarder notes the backend's time and the router the route, for the
+// request log.
+func TestForwardReportsRouteAndUpstreamTime(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(30 * time.Millisecond)
+	}))
+	defer backend.Close()
+	gw, _ := newGateway(t, testRoute{prefix: "/v1", upstream: backend.URL})
+	info := &reqctx.Info{}
+	req := httptest.NewRequest("GET", "/v1/x", nil)
+
+	gw.ServeHTTP(httptest.NewRecorder(), req.WithContext(reqctx.With(req.Context(), info)))
+
+	if info.RouteID != "r1" {
+		t.Errorf("RouteID = %q, want r1", info.RouteID)
+	}
+	if info.Upstream < 30*time.Millisecond || info.Upstream > 2*time.Second {
+		t.Errorf("Upstream = %s, want about 30ms", info.Upstream)
 	}
 }
 

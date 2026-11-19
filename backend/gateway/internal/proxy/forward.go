@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
 )
 
@@ -42,10 +43,24 @@ func NewForwarder(log *slog.Logger) *Forwarder {
 	f := &Forwarder{log: log}
 	f.proxy = &httputil.ReverseProxy{
 		Rewrite:      rewrite,
-		Transport:    newTransport(),
+		Transport:    timedTransport{next: newTransport()},
 		ErrorHandler: f.handleError,
 	}
 	return f
+}
+
+// timedTransport measures how long the backend takes to start answering
+// (until its response headers arrive) and notes it for the request log as
+// upstream_ms. The proxy calls RoundTrip in the request's own goroutine.
+type timedTransport struct {
+	next http.RoundTripper
+}
+
+func (t timedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	start := time.Now()
+	resp, err := t.next.RoundTrip(req)
+	reqctx.From(req.Context()).Upstream = time.Since(start)
+	return resp, err
 }
 
 func newTransport() *http.Transport {
