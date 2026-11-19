@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 3.5 (request ID, recover and logger middleware)
+**Last updated:** Nov 19, 2026 · **Current step:** 3.6 (API key auth)
 
 ## Overview
 
@@ -11,12 +11,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
-| M3: Gateway proxies (Go) | ✅✅✅✅⬜⬜⬜ 4/7 | 🔄 In progress |
+| M3: Gateway proxies (Go) | ✅✅✅✅✅⬜⬜ 5/7 | 🔄 In progress |
 | M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | ⏳ |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 16 of 24 steps done (67%). Requests now flow client → gateway → backend and back.
+**MVP:** 17 of 24 steps done (71%). Every request now has an ID and one log line.
 
 ## Quality today
 
@@ -34,13 +34,14 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 135 passing (47 tests plus 88 table cases), about 3 s; mock backend 7 |
-| Coverage | settings, proxy, respond 100%; config 99.0%; server 97.4%; main 47.4% (`serve()` waits for a real signal; checked in Docker instead) |
+| Tests | 169 passing (66 tests plus 103 table cases), about 3 s; mock backend 7 |
+| Coverage | settings, proxy, middleware, reqctx, respond 100%; config 99.0%; server 97.4%; main 50.0% (`serve()` waits for a real signal; checked in Docker instead) |
+| Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
 | Race detector | clean (`go test -race` in a Linux container; also in CI) |
 | Config propagation | admin change → gateway updated in **68 ms** (measured in Docker) |
 | Proxy errors (live) | slow backend → **504 after 5.05 s** (route timeout 5 s); backend down → **502** |
-| Image | 16.8 MB (distroless, non-root) |
+| Image | 16.9 MB (distroless, non-root) |
 | Run all checks | `.\backend\gateway\scripts\check.ps1` (`-Fix` to autofix) |
 
 **Both**
@@ -93,8 +94,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | 3.2 | Config long-poll loop and atomic snapshot store | ✅ `e805370`, `9f9547c`, *this commit* |
 | 3.3 | Route matching by longest prefix and method | ✅ `7d56624`, `3adc271`, *this commit* |
 | 3.4 | Reverse proxy with per-route timeout, 502 and 504 | ✅ `8b22acb`, `b47bea2`, *this commit* |
-| 3.5 | Request ID, recover and logger middleware | 👉 Next |
-| 3.6 | API key auth middleware with 401 and 403 | ⬜ |
+| 3.5 | Request ID, recover and logger middleware | ✅ `1348149`, `ded8f8a`, *this commit* |
+| 3.6 | API key auth middleware with 401 and 403 | 👉 Next |
 | 3.7 | Unit tests for matching and auth | ⬜ |
 
 **Outcome:** requests flow client → gateway → mock backend, with key auth.
@@ -176,6 +177,12 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 18 | 3.1 | Gateway container gets only its own env vars, not `env_file: .env` | Least privilege: it never needs the DB password or JWT secret |
 | Nov 18 | 3.1 | Go tests run locally on Windows; `-race` runs in CI | No database, no deps, so local equals Docker; the race detector needs cgo |
 | Nov 18 | 3.1 | Route `path_prefix` `/health` (and below) is reserved: 422 | The gateway answers it itself, so such a route would be created but never reached |
+| Nov 19 | 3.5 | Order **request ID → logger → recover** → router (plan had recover outermost) | The logger then records a panic's 500; chi's documented order |
+| Nov 19 | 3.5 | Keep a safe client `X-Request-ID` (Kong style), else a new 128-bit ID | Customers can report an ID and it is found; the charset check stops log injection |
+| Nov 19 | 3.5 | Log adds `gateway_ms`, `client_ip`, `bytes`; times in ms with µs precision; no query string | `gateway_ms` shows the gateway's own cost at a glance (Kong's "kong latency") |
+| Nov 19 | 3.5 | `upstream_ms` = time to the backend's response headers | `latency − upstream` is then exactly the gateway's share |
+| Nov 19 | 3.5 | `/health` not logged; middleware wraps API traffic only | Docker's checks would add ~17,000 useless lines a day |
+| Nov 19 | 3.5 | `reqctx` package: a per-request "notes card" filled by router, forwarder, auth | The logger sees inner results without packages importing each other |
 | Nov 19 | 3.4 | One shared `ReverseProxy` + one pool; target picked per request with `Rewrite` | Config changes apply to the next request; `Rewrite` (not `Director`) drops client-sent `X-Forwarded-*` |
 | Nov 19 | 3.4 | Pool: 100 idle per backend, 1000 total, 90 s idle; 5 s connect and TLS timeouts | Go's default of 2 idle per backend would reopen connections under load |
 | Nov 19 | 3.4 | Route timeout covers the whole answer (Envoy style); connect timeout also 504 | Simple and matches `timeout_ms`; WebSockets would need a different timeout later |

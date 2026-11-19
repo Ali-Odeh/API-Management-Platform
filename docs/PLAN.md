@@ -279,9 +279,9 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 
 **Middleware order**
 
-1. **Recover**: catches panics and returns 500 instead of crashing
-2. **Request ID**: reads or creates `X-Request-ID` and passes it upstream
-3. **Logger**: records start time, writes the log line when the response is done
+1. **Request ID**: keeps a safe client `X-Request-ID` (1–128 chars, `A-Z a-z 0-9 . _ -`) or creates one; passes it upstream and back to the client
+2. **Logger**: records start time, writes the log line when the response is done (also for answers the proxy aborts)
+3. **Recover**: catches panics and returns 500 instead of crashing. It sits inside the logger (changed in step 3.5; the plan first had it outermost) so the panic's 500 appears in the request log; the proxy's deliberate `ErrAbortHandler` passes through
 4. **Route match**: finds the route by longest path prefix and method; 404 if no path fits, 405 if a path fits but no route allows the method
 5. **Auth**: hashes `X-API-Key`, looks it up in the in-memory key map; 401 if missing, unknown or revoked; 403 if the consumer is blocked
 6. **Rate limit**: runs the token-bucket script in Redis; 429 if empty
@@ -354,10 +354,10 @@ The gateway sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every respon
 **Log line**
 
 ```json
-{"ts":"2026-11-15T16:00:00Z","request_id":"a1b2","method":"GET","path":"/v1/orders/7","route_id":"r1","consumer_id":"c1","status":200,"latency_ms":12,"upstream_ms":9}
+{"ts":"2026-11-15T16:00:00Z","level":"INFO","msg":"request","request_id":"a1b2","method":"GET","path":"/v1/orders/7","route_id":"r1","consumer_id":"c1","status":200,"latency_ms":12.4,"upstream_ms":9.1,"gateway_ms":3.3,"client_ip":"172.18.0.1","bytes":245}
 ```
 
-Logs use Go's `log/slog` with the JSON handler. The API key itself never appears in a log.
+Logs use Go's `log/slog` with the JSON handler. The API key itself never appears in a log, and neither does the query string (it can hold tokens or personal data). Times are milliseconds with microsecond precision. `upstream_ms` is the wait until the backend's response headers; `gateway_ms` = `latency_ms` − `upstream_ms` is the time the gateway added. `status` 499 means the client hung up; `aborted: true` marks an answer cut off mid-stream. `GET /health` is not logged. A panic adds an `ERROR` line with the stack trace and the request ID.
 
 ## 8. Frontend
 
@@ -422,6 +422,7 @@ api-platform/
 │   │       ├── middleware/       # recover, requestid, logger, auth, ratelimit
 │   │       ├── proxy/            # route matching and reverse proxy
 │   │       ├── ratelimit/        # Redis client and Lua script
+│   │       ├── reqctx/           # per-request facts the log needs (request ID, route, times)
 │   │       ├── server/           # http.Server, timeouts, /health, graceful shutdown
 │   │       ├── respond/          # the gateway's own JSON answers, {"error": "..."}
 │   │       └── settings/         # env vars, validated at startup
@@ -528,7 +529,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Config poller and atomic snapshot store
 - [x] Route matching by longest prefix and method
 - [x] Reverse proxy with per-route timeout, 502 and 504 handling
-- [ ] Request ID, recover and logger middleware
+- [x] Request ID, recover and logger middleware
 - [ ] API key auth middleware with 401 and 403
 - [ ] Unit tests for matching and auth
 

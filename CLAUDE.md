@@ -20,7 +20,7 @@ The repo root is the plan's `api-platform/` folder. Services are grouped into `b
 
 ```
 backend/
-  gateway/         cmd/gateway/main.go, internal/{config,middleware,proxy,ratelimit,respond,server,settings}
+  gateway/         cmd/gateway/main.go, internal/{config,middleware,proxy,ratelimit,reqctx,respond,server,settings}
   control-plane/   app/{core,auth,services,routes,consumers,keys,gateway_config}, main.py, alembic/, tests/
                    each feature folder: router.py, models.py, schemas.py, crud.py
   mock-backend/    FastAPI echo service (port 9000)
