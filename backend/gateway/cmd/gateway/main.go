@@ -68,9 +68,9 @@ func serve(cfg settings.Settings, log *slog.Logger) int {
 	var background sync.WaitGroup
 	background.Go(func() { poller.Run(ctx) })
 
-	// API traffic: match the route (404/405/503 answered here), then the
-	// matched request goes on. The 501 placeholder becomes the proxy in 3.4.
-	api := proxy.NewRouter(store, proxy.NotImplemented())
+	// API traffic: match the route (400/404/405/503 answered here), then
+	// forward the matched request to its backend (502/504 on failure).
+	api := proxy.NewRouter(store, proxy.NewForwarder(log))
 
 	err := server.New(cfg, api, log).ListenAndServe(ctx)
 	stop()            // if the server failed on its own, stop the poller too

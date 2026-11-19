@@ -114,28 +114,3 @@ func TestFromContextWithoutRouter(t *testing.T) {
 		t.Error("FromContext found a match on a request that never went through the router")
 	}
 }
-
-func TestNotImplementedNamesTheRoute(t *testing.T) {
-	snap := &config.Snapshot{Version: 1, Routes: testRoutes}
-	rec := httptest.NewRecorder()
-
-	NewRouter(fakeSource{snap}, NotImplemented()).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/orders/7", nil))
-
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("status = %d, want 501", rec.Code)
-	}
-	var body map[string]string
-	_ = json.Unmarshal(rec.Body.Bytes(), &body)
-	if body["error"] != "not_implemented" || body["route_id"] != "orders" || body["path_prefix"] != "/v1/orders" {
-		t.Errorf("body = %v", body)
-	}
-}
-
-func TestNotImplementedWithoutAMatch(t *testing.T) {
-	rec := httptest.NewRecorder()
-	NotImplemented().ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
-
-	if got := rec.Body.String(); got != `{"error":"not_implemented"}`+"\n" {
-		t.Errorf("body = %q", got)
-	}
-}
