@@ -13,6 +13,7 @@ import (
 var required = map[string]string{
 	"CONTROL_PLANE_URL": "http://control-plane:8000",
 	"INTERNAL_TOKEN":    "s3cret",
+	"REDIS_URL":         "redis://redis:6379/0",
 }
 
 // defaults is what Load returns when only the required variables are set.
@@ -21,6 +22,7 @@ var defaults = Settings{
 	ShutdownTimeout: 5 * time.Second,
 	ControlPlaneURL: "http://control-plane:8000",
 	InternalToken:   "s3cret",
+	RedisURL:        "redis://redis:6379/0",
 	ConfigWait:      30 * time.Second,
 }
 
@@ -28,7 +30,7 @@ var defaults = Settings{
 // applies the required values and the case's own values on top.
 func setEnv(t *testing.T, env map[string]string) {
 	t.Helper()
-	for _, k := range []string{"LISTEN_ADDR", "SHUTDOWN_TIMEOUT", "CONTROL_PLANE_URL", "INTERNAL_TOKEN", "CONFIG_WAIT"} {
+	for _, k := range []string{"LISTEN_ADDR", "SHUTDOWN_TIMEOUT", "CONTROL_PLANE_URL", "INTERNAL_TOKEN", "CONFIG_WAIT", "REDIS_URL"} {
 		t.Setenv(k, "")
 	}
 	for k, v := range required {
@@ -69,6 +71,7 @@ func TestLoad(t *testing.T) {
 				ShutdownTimeout: 1500 * time.Millisecond,
 				ControlPlaneURL: "https://cp.example.com", // trailing slash dropped
 				InternalToken:   "s3cret",
+				RedisURL:        "redis://redis:6379/0",
 				ConfigWait:      60 * time.Second,
 			},
 		},
@@ -81,6 +84,9 @@ func TestLoad(t *testing.T) {
 		{name: "control plane URL with another scheme", env: map[string]string{"CONTROL_PLANE_URL": "ftp://cp"}, wantErr: []string{"CONTROL_PLANE_URL"}},
 		{name: "control plane URL with a query", env: map[string]string{"CONTROL_PLANE_URL": "http://cp?x=1"}, wantErr: []string{"CONTROL_PLANE_URL"}},
 		{name: "internal token missing", env: map[string]string{"INTERNAL_TOKEN": ""}, wantErr: []string{"INTERNAL_TOKEN is required"}},
+		{name: "redis URL missing", env: map[string]string{"REDIS_URL": ""}, wantErr: []string{"REDIS_URL is required"}},
+		{name: "redis URL with another scheme", env: map[string]string{"REDIS_URL": "http://redis:6379"}, wantErr: []string{"REDIS_URL: want"}},
+		{name: "redis URL without host", env: map[string]string{"REDIS_URL": "redis://"}, wantErr: []string{"REDIS_URL: want"}},
 		{name: "config wait not a duration", env: map[string]string{"CONFIG_WAIT": "soon"}, wantErr: []string{"CONFIG_WAIT"}},
 		{name: "config wait of zero", env: map[string]string{"CONFIG_WAIT": "0s"}, wantErr: []string{"whole seconds"}},
 		{name: "config wait above the endpoint's limit", env: map[string]string{"CONFIG_WAIT": "61s"}, wantErr: []string{"whole seconds"}},
@@ -140,5 +146,33 @@ func TestSecretIsNeverPrinted(t *testing.T) {
 	}
 	if s.InternalToken.Reveal() != "s3cret" {
 		t.Errorf("Reveal() = %q, want the real value", s.InternalToken.Reveal())
+	}
+}
+
+// A TLS Redis URL with a password is accepted, and the password never
+// shows when the settings are printed.
+func TestLoadAcceptsTLSRedisURLAndHidesIt(t *testing.T) {
+	const withPassword = "rediss://:pa55word@cache.example.com:6380/1"
+	setEnv(t, map[string]string{"REDIS_URL": withPassword})
+
+	got, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if got.RedisURL.Reveal() != withPassword {
+		t.Errorf("RedisURL = %q", got.RedisURL.Reveal())
+	}
+	if out := fmt.Sprintf("%+v", got); strings.Contains(out, "pa55word") {
+		t.Errorf("the Redis password leaks when printed: %s", out)
+	}
+}
+
+// A bad REDIS_URL is reported without printing it (it may hold a password).
+func TestBadRedisURLIsNotPrinted(t *testing.T) {
+	setEnv(t, map[string]string{"REDIS_URL": "http://:pa55word@redis:6379"})
+
+	_, err := Load()
+	if err == nil || strings.Contains(err.Error(), "pa55word") {
+		t.Errorf("Load() error = %v; want an error that does not show the URL", err)
 	}
 }

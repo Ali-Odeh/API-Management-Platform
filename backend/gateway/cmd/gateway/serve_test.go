@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
 )
 
@@ -26,16 +28,22 @@ func freeAddr(t *testing.T) string {
 	return addr
 }
 
+// servedConsumer is the consumer behind testKey in fakeControlPlane's
+// snapshot. Its own name, so its rate-limit bucket in the shared test Redis
+// never collides with another package's tests.
+const servedConsumer = "serve-test-consumer"
+
 // fakeControlPlane answers the first /internal/config with a snapshot (one
-// protected route to backendURL, one key), then holds every later request
-// open like a real long poll. A wrong token gets 401.
-func fakeControlPlane(t *testing.T, backendURL string) *httptest.Server {
+// protected route to backendURL, one key whose consumer may make limit
+// requests per minute), then holds every later request open like a real
+// long poll. A wrong token gets 401.
+func fakeControlPlane(t *testing.T, backendURL string, limit int) *httptest.Server {
 	t.Helper()
 	body := fmt.Sprintf(`{"version": 1,
 		"routes": [{"id": "r1", "path_prefix": "/v1/orders", "methods": ["GET"], "strip_prefix": false,
 		            "auth_required": true, "upstream_url": %q, "timeout_ms": 5000}],
-		"keys": [{"id": "k1", "key_hash": %q, "consumer_id": "c1", "consumer_status": "active", "rate_limit_per_min": 60}]}`,
-		backendURL, sha256Hex(testKey))
+		"keys": [{"id": "k1", "key_hash": %q, "consumer_id": %q, "consumer_status": "active", "rate_limit_per_min": %d}]}`,
+		backendURL, sha256Hex(testKey), servedConsumer, limit)
 	served := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Internal-Token") != "s3cret" {
@@ -61,7 +69,7 @@ func TestServeWholeGateway(t *testing.T) {
 		_, _ = io.WriteString(w, "order for "+r.Header.Get("X-Consumer-ID"))
 	}))
 	defer backend.Close()
-	cp := fakeControlPlane(t, backend.URL)
+	cp := fakeControlPlane(t, backend.URL, 60)
 
 	cfg := settings.Settings{
 		ListenAddr:      freeAddr(t),
@@ -69,6 +77,9 @@ func TestServeWholeGateway(t *testing.T) {
 		ControlPlaneURL: cp.URL,
 		InternalToken:   "s3cret",
 		ConfigWait:      time.Second,
+		// Nothing listens here: Redis is "down", so the rate limit fails open
+		// and requests still get through.
+		RedisURL: "redis://127.0.0.1:1/0",
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	exit := make(chan int, 1)
@@ -98,8 +109,8 @@ func TestServeWholeGateway(t *testing.T) {
 			break
 		}
 	}
-	if status != http.StatusOK || body != "order for c1" {
-		t.Fatalf("with a key: %d %q, want 200 from the backend for consumer c1", status, body)
+	if status != http.StatusOK || body != "order for "+servedConsumer {
+		t.Fatalf("with a key: %d %q, want 200 from the backend for the served consumer", status, body)
 	}
 	if code := healthcheck(cfg); code != 0 {
 		t.Errorf("healthcheck() = %d while running, want 0", code)
@@ -134,11 +145,12 @@ func TestServeFailsWhenThePortIsTaken(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	defer busy.Close()
-	cp := fakeControlPlane(t, "http://127.0.0.1:1")
+	cp := fakeControlPlane(t, "http://127.0.0.1:1", 60)
 
 	cfg := settings.Settings{
 		ListenAddr: busy.Addr().String(), ShutdownTimeout: time.Second,
 		ControlPlaneURL: cp.URL, InternalToken: "s3cret", ConfigWait: time.Second,
+		RedisURL: "redis://127.0.0.1:1/0",
 	}
 	exit := make(chan int, 1)
 	go func() { exit <- serve(t.Context(), cfg, slog.New(slog.DiscardHandler)) }()
@@ -151,4 +163,89 @@ func TestServeFailsWhenThePortIsTaken(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve() kept running although the port was taken")
 	}
+}
+
+// The real program with a real Redis: a consumer allowed 3 requests per
+// minute gets 3 answers, then 429. Skipped without REDIS_TEST_URL.
+func TestServeRateLimitsWithRealRedis(t *testing.T) {
+	redisURL := os.Getenv("REDIS_TEST_URL")
+	if redisURL == "" {
+		t.Skip("REDIS_TEST_URL not set")
+	}
+	rdb, err := ratelimit.NewClient(redisURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fresh bucket for this consumer only: other packages' tests may use
+	// the same Redis database at the same time.
+	if err := rdb.Del(t.Context(), "rl:"+servedConsumer).Err(); err != nil {
+		t.Fatalf("Redis not reachable: %v", err)
+	}
+	defer rdb.Close()
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+	cfg := settings.Settings{
+		ListenAddr: freeAddr(t), ShutdownTimeout: 2 * time.Second,
+		ControlPlaneURL: fakeControlPlane(t, backend.URL, 3).URL, InternalToken: "s3cret",
+		ConfigWait: time.Second, RedisURL: settings.Secret(redisURL),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	exit := make(chan int, 1)
+	go func() { exit <- serve(ctx, cfg, slog.New(slog.DiscardHandler)) }()
+	defer func() {
+		http.DefaultClient.CloseIdleConnections()
+		cancel()
+		<-exit
+	}()
+
+	call := func() *http.Response {
+		req, _ := http.NewRequest("GET", "http://"+cfg.ListenAddr+"/v1/orders/1", nil)
+		req.Header.Set("X-API-Key", testKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil
+		}
+		resp.Body.Close()
+		return resp
+	}
+	// Wait for the config: 503 until it arrives.
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if resp := call(); resp != nil && resp.StatusCode != http.StatusServiceUnavailable {
+			break
+		}
+	}
+
+	// When Redis is slower than the 50 ms limit (other packages' tests may
+	// hammer the same Redis right now), the gateway correctly fails open: a
+	// 200 without X-RateLimit-* headers. Such a round proves nothing, so it
+	// is tried again with a fresh bucket.
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err := rdb.Del(t.Context(), "rl:"+servedConsumer).Err(); err != nil {
+			t.Fatalf("reset bucket: %v", err)
+		}
+		var statuses []int
+		failedOpen := false
+		for range 4 {
+			resp := call()
+			if resp == nil {
+				t.Fatal("the gateway did not answer")
+			}
+			if resp.StatusCode == http.StatusOK && resp.Header.Get("X-RateLimit-Remaining") == "" {
+				failedOpen = true
+			}
+			statuses = append(statuses, resp.StatusCode)
+		}
+		if failedOpen {
+			t.Logf("attempt %d: Redis was slower than 50 ms, the gateway failed open; trying again", attempt)
+			continue
+		}
+		if fmt.Sprint(statuses) != "[200 200 200 429]" {
+			t.Errorf("statuses = %v, want [200 200 200 429]", statuses)
+		}
+		return
+	}
+	t.Fatal("Redis was slower than 50 ms in every attempt")
 }

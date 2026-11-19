@@ -17,9 +17,10 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// testRedis connects to REDIS_TEST_URL and empties that database. It skips
-// the test when the variable is unset, and fails when it is set but Redis
-// can't be reached (so CI never skips silently).
+// testRedis connects to REDIS_TEST_URL. It skips the test when the variable
+// is unset, and fails when it is set but Redis can't be reached (so CI never
+// skips silently). It never empties the database: tests of other packages
+// may use it at the same time, so every test uses its own consumer IDs.
 func testRedis(t testing.TB) *redis.Client {
 	t.Helper()
 	url := os.Getenv("REDIS_TEST_URL")
@@ -35,7 +36,7 @@ func testRedis(t testing.TB) *redis.Client {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := rdb.FlushDB(ctx).Err(); err != nil {
+	if err := rdb.Ping(ctx).Err(); err != nil {
 		t.Fatalf("Redis at %s not reachable: %v", url, err)
 	}
 	return rdb
@@ -50,6 +51,12 @@ func newTestLimiter(t testing.TB) (*Limiter, *redis.Client) {
 	return l, rdb
 }
 
+// consumer gives each test its own bucket names, so tests never share a
+// bucket, whatever else runs against the same Redis.
+func consumer(t testing.TB, name string) string {
+	return fmt.Sprintf("test/%s/%s/%d", t.Name(), name, time.Now().UnixNano())
+}
+
 func allow(t *testing.T, l *Limiter, consumer string, limit int) Result {
 	t.Helper()
 	res, err := l.Allow(t.Context(), consumer, limit)
@@ -60,16 +67,17 @@ func allow(t *testing.T, l *Limiter, consumer string, limit int) Result {
 }
 
 func TestBurstUpToTheLimitThenDenied(t *testing.T) {
+	c1 := consumer(t, "c1")
 	l, _ := newTestLimiter(t)
 
 	for want := 4; want >= 0; want-- { // a full bucket of 5
-		res := allow(t, l, "c1", 5)
+		res := allow(t, l, c1, 5)
 		if !res.Allowed || res.Remaining != want || res.Limit != 5 || res.RetryAfter != 0 {
 			t.Fatalf("request %d: %+v, want allowed with %d left", 5-want, res, want)
 		}
 	}
 
-	res := allow(t, l, "c1", 5)
+	res := allow(t, l, c1, 5)
 	// 5 per minute = one token every 12 s.
 	if res.Allowed || res.Remaining != 0 || res.RetryAfter <= 11*time.Second || res.RetryAfter > 12*time.Second {
 		t.Errorf("6th request: %+v, want denied, retry in about 12s", res)
@@ -77,81 +85,87 @@ func TestBurstUpToTheLimitThenDenied(t *testing.T) {
 }
 
 func TestOneRequestPerMinute(t *testing.T) {
+	c1 := consumer(t, "c1")
 	l, _ := newTestLimiter(t)
 
-	if res := allow(t, l, "c1", 1); !res.Allowed || res.Remaining != 0 {
+	if res := allow(t, l, c1, 1); !res.Allowed || res.Remaining != 0 {
 		t.Fatalf("first: %+v", res)
 	}
-	res := allow(t, l, "c1", 1)
+	res := allow(t, l, c1, 1)
 	if res.Allowed || res.RetryAfter < 59*time.Second || res.RetryAfter > time.Minute {
 		t.Errorf("second: %+v, want denied, retry in about 60s", res)
 	}
 }
 
 func TestBucketRefills(t *testing.T) {
+	c1 := consumer(t, "c1")
 	l, _ := newTestLimiter(t)
 	const limit = 600 // 10 per second: one token every 100 ms
 
 	// Empty the bucket (it refills a little while we drain it).
-	for i := 0; allow(t, l, "c1", limit).Allowed; i++ {
+	for i := 0; allow(t, l, c1, limit).Allowed; i++ {
 		if i > 2*limit {
 			t.Fatal("the bucket never ran empty")
 		}
 	}
-	res := allow(t, l, "c1", limit)
+	res := allow(t, l, c1, limit)
 	if res.Allowed || res.RetryAfter > 100*time.Millisecond {
 		t.Fatalf("right after draining: %+v, want denied within 100ms", res)
 	}
 
 	time.Sleep(res.RetryAfter + 30*time.Millisecond)
 
-	if res := allow(t, l, "c1", limit); !res.Allowed {
+	if res := allow(t, l, c1, limit); !res.Allowed {
 		t.Errorf("after waiting RetryAfter: %+v, want allowed", res)
 	}
 }
 
 func TestConsumersHaveSeparateBuckets(t *testing.T) {
+	greedy, polite := consumer(t, "greedy"), consumer(t, "polite")
 	l, _ := newTestLimiter(t)
 
-	allow(t, l, "greedy", 1) // empties greedy's bucket
-	if res := allow(t, l, "greedy", 1); res.Allowed {
+	allow(t, l, greedy, 1) // empties greedy's bucket
+	if res := allow(t, l, greedy, 1); res.Allowed {
 		t.Fatal("greedy should be limited")
 	}
-	if res := allow(t, l, "polite", 1); !res.Allowed {
+	if res := allow(t, l, polite, 1); !res.Allowed {
 		t.Error("another consumer was limited by greedy's bucket")
 	}
 }
 
 func TestLoweredLimitAppliesAtOnce(t *testing.T) {
+	c1 := consumer(t, "c1")
 	l, _ := newTestLimiter(t)
 
-	allow(t, l, "c1", 60) // 59 left at the old limit
-	if res := allow(t, l, "c1", 10); !res.Allowed || res.Remaining != 9 || res.Limit != 10 {
+	allow(t, l, c1, 60) // 59 left at the old limit
+	if res := allow(t, l, c1, 10); !res.Allowed || res.Remaining != 9 || res.Limit != 10 {
 		t.Errorf("after lowering to 10: %+v, want 9 left", res)
 	}
 }
 
 func TestIdleBucketsExpire(t *testing.T) {
+	c1 := consumer(t, "c1")
 	l, rdb := newTestLimiter(t)
 
-	allow(t, l, "c1", 60)
+	allow(t, l, c1, 60)
 
-	ttl, err := rdb.PTTL(t.Context(), "rl:c1").Result()
+	ttl, err := rdb.PTTL(t.Context(), "rl:"+c1).Result()
 	if err != nil || ttl <= 110*time.Second || ttl > 120*time.Second {
-		t.Errorf("TTL of rl:c1 = %s (err %v), want about 120s", ttl, err)
+		t.Errorf("TTL of the bucket = %s (err %v), want about 120s", ttl, err)
 	}
 }
 
 // After a Redis restart the script cache is empty; go-redis must load it again.
 func TestWorksAfterRedisForgetsTheScript(t *testing.T) {
+	c1 := consumer(t, "c1")
 	l, rdb := newTestLimiter(t)
-	allow(t, l, "c1", 60)
+	allow(t, l, c1, 60)
 
 	if err := rdb.ScriptFlush(t.Context()).Err(); err != nil {
 		t.Fatalf("SCRIPT FLUSH: %v", err)
 	}
 
-	if res := allow(t, l, "c1", 60); !res.Allowed || res.Remaining != 58 {
+	if res := allow(t, l, c1, 60); !res.Allowed || res.Remaining != 58 {
 		t.Errorf("after SCRIPT FLUSH: %+v, want allowed with 58 left", res)
 	}
 }
@@ -159,6 +173,7 @@ func TestWorksAfterRedisForgetsTheScript(t *testing.T) {
 // The point of the Lua script: many requests at the same moment can never
 // take more tokens than the bucket has. Run with -race in CI.
 func TestConcurrentRequestsNeverOverspend(t *testing.T) {
+	c1 := consumer(t, "c1")
 	l, _ := newTestLimiter(t)
 	const limit, requests = 50, 100
 
@@ -168,7 +183,7 @@ func TestConcurrentRequestsNeverOverspend(t *testing.T) {
 	for range requests {
 		wg.Go(func() {
 			<-start // all goroutines fire together
-			res, err := l.Allow(context.Background(), "c1", limit)
+			res, err := l.Allow(context.Background(), c1, limit)
 			if err != nil {
 				t.Errorf("Allow: %v", err)
 				return

@@ -33,13 +33,14 @@ const (
 )
 
 // Settings is everything the gateway needs to start. Later steps add fields
-// (such as the Redis URL) when they first use them.
+// when they first use them.
 type Settings struct {
 	ListenAddr      string        // LISTEN_ADDR, e.g. ":8080"
 	ShutdownTimeout time.Duration // SHUTDOWN_TIMEOUT, e.g. "5s"
 	ControlPlaneURL string        // CONTROL_PLANE_URL, e.g. "http://control-plane:8000" (no trailing slash)
 	InternalToken   Secret        // INTERNAL_TOKEN, shared with the control plane
 	ConfigWait      time.Duration // CONFIG_WAIT, how long the control plane may hold a config request
+	RedisURL        Secret        // REDIS_URL, e.g. "redis://redis:6379/0"; a Secret because it may hold a password
 }
 
 // Secret is a string that must never end up in a log or an error message.
@@ -104,6 +105,11 @@ func Load() (Settings, error) {
 		s.ConfigWait = d
 	}
 
+	s.RedisURL = Secret(os.Getenv("REDIS_URL"))
+	if err := checkRedisURL(s.RedisURL.Reveal()); err != nil {
+		errs = append(errs, err)
+	}
+
 	if len(errs) > 0 {
 		return Settings{}, errors.Join(errs...)
 	}
@@ -121,4 +127,18 @@ func parseControlPlaneURL(v string) (string, error) {
 		return "", fmt.Errorf("CONTROL_PLANE_URL %q: want an http(s) URL such as \"http://control-plane:8000\"", v)
 	}
 	return strings.TrimRight(v, "/"), nil
+}
+
+// checkRedisURL accepts redis:// or rediss:// (TLS) with a host. Only the
+// form is checked: Redis being down at startup is fine (the rate limit fails
+// open). The value is never printed, as it may hold a password.
+func checkRedisURL(v string) error {
+	if v == "" {
+		return errors.New(`REDIS_URL is required, e.g. "redis://redis:6379/0"`)
+	}
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "redis" && u.Scheme != "rediss") || u.Host == "" {
+		return errors.New(`REDIS_URL: want a URL such as "redis://redis:6379/0"`)
+	}
+	return nil
 }

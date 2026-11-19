@@ -24,6 +24,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/server"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
 )
@@ -74,7 +75,16 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 	var background sync.WaitGroup
 	background.Go(func() { poller.Run(ctx) })
 
-	err := server.New(cfg, apiHandler(store, log), log).ListenAndServe(ctx)
+	// Redis is only reached on the first limited request; if it is down,
+	// requests are let through (fail open) until it is back.
+	rdb, err := ratelimit.NewClient(cfg.RedisURL.Reveal())
+	if err != nil {
+		log.Error("cannot start", "error", err)
+		return 1
+	}
+	defer rdb.Close()
+
+	err = server.New(cfg, apiHandler(store, ratelimit.New(rdb), log), log).ListenAndServe(ctx)
 	stop()            // if the server failed on its own, stop the poller too
 	background.Wait() // never exit while the poller is still running
 
@@ -89,15 +99,20 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // apiHandler builds the path of every API request, outermost first:
 //
 //	request ID → logger → recover → router (400/404/405/503)
-//	  → auth (401/403) → forwarder (502/504)
+//	  → auth (401/403) → rate limit (429) → forwarder (502/504)
 //
 // Recover sits inside the logger, so a panic's 500 shows in the request log.
 // Auth comes after the router: it needs the route (auth_required) and the
-// snapshot the router used.
+// snapshot the router used. The rate limit comes after auth: it needs the
+// consumer, and refused requests must cost no budget.
 // GET /health is answered by the server before this chain, so Docker's
 // health checks don't fill the log.
-func apiHandler(source proxy.SnapshotSource, log *slog.Logger) http.Handler {
-	afterMatch := middleware.Auth(log)(proxy.NewForwarder(log))
+func apiHandler(source proxy.SnapshotSource, limiter middleware.Allower, log *slog.Logger) http.Handler {
+	afterMatch := middleware.Chain(
+		proxy.NewForwarder(log),
+		middleware.Auth(log),
+		middleware.RateLimit(limiter, log),
+	)
 	return middleware.Chain(
 		proxy.NewRouter(source, afterMatch),
 		middleware.RequestID,

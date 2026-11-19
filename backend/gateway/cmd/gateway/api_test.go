@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
 )
 
 type staticSource struct{ snap *config.Snapshot }
@@ -55,7 +57,7 @@ func TestAPIHandlerEndToEnd(t *testing.T) {
 		Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
 	}
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	tests := []struct {
 		name         string
@@ -116,7 +118,7 @@ func TestAPIHandlerTimesTheBackend(t *testing.T) {
 		ID: "r1", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: false, Upstream: upstream, Timeout: 5 * time.Second,
 	}}}
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	api.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
@@ -162,7 +164,7 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 	a, b := version(1, "consumer-a", 5*time.Second), version(2, "consumer-b", 4*time.Second)
 	source := &swappingSource{}
 	source.current.Store(a)
-	api := apiHandler(source, slog.New(slog.DiscardHandler))
+	api := apiHandler(source, allowAll{}, slog.New(slog.DiscardHandler))
 
 	stopSwapping := make(chan struct{})
 	swapped := make(chan struct{})
@@ -233,4 +235,12 @@ func BenchmarkAPIHandlerChain(b *testing.B) {
 		req.Header.Set("X-API-Key", testKey)
 		chain.ServeHTTP(httptest.NewRecorder(), req)
 	}
+}
+
+// allowAll is a rate limiter that always says yes, for tests about other
+// layers.
+type allowAll struct{}
+
+func (allowAll) Allow(_ context.Context, _ string, limit int) (ratelimit.Result, error) {
+	return ratelimit.Result{Allowed: true, Limit: limit, Remaining: limit - 1}, nil
 }

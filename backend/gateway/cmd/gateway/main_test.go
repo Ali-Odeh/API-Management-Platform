@@ -32,6 +32,7 @@ func TestRunExitCodes(t *testing.T) {
 			t.Setenv("CONTROL_PLANE_URL", cpURL)
 			t.Setenv("INTERNAL_TOKEN", "t")
 			t.Setenv("CONFIG_WAIT", "")
+			t.Setenv("REDIS_URL", "redis://127.0.0.1:1/0")
 
 			if got := run(tt.args); got != tt.want {
 				t.Errorf("run(%q) = %d, want %d", tt.args, got, tt.want)

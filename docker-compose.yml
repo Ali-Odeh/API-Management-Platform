@@ -67,12 +67,14 @@ services:
     # the database password or the JWT secret (least privilege). Values come
     # from .env; ":?" makes `docker compose` refuse to start if one is missing.
     # No depends_on: the gateway must cope with the control plane being down
-    # (it keeps retrying and serves its last config).
+    # (it keeps retrying and serves its last config) and with Redis being
+    # down (the rate limit lets requests through until it is back).
     environment:
       LISTEN_ADDR: ":8080"   # fixed: the port mapping below depends on it
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:?set CONTROL_PLANE_URL in .env}
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN in .env}
       CONFIG_WAIT: ${CONFIG_WAIT:-30s}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
     ports:
       # host 8081 -> container 8080. 127.0.0.1:8080 on the host is taken by
       # another Windows app. Containers still use gateway:8080.
