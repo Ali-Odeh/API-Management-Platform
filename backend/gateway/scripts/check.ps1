@@ -3,8 +3,10 @@
     Run every quality check of the gateway: format, vet, tests, coverage.
 
 .DESCRIPTION
-    Runs on Windows with your local Go (the gateway has no database, so it
-    needs no container). Stops at the first failing check. Total coverage
+    Runs on Windows with your local Go. The rate-limit tests need Redis:
+    they use Docker's Redis (database 15, so real counters are untouched),
+    so start the stack first with `docker compose up -d`. Set REDIS_TEST_URL
+    to use another Redis. Stops at the first failing check. Total coverage
     must be at least 90%, the same bar as the control plane. CI runs the
     same checks, plus the race detector (it needs a C compiler that Windows
     does not have by default) and a short run of every fuzz test.
@@ -42,6 +44,11 @@ Invoke-Check "gofmt" {
         $global:LASTEXITCODE = 1
     }
 }
+
+if (-not $env:REDIS_TEST_URL) {
+    $env:REDIS_TEST_URL = "redis://localhost:6379/15"
+}
+Write-Host "Redis for the rate-limit tests: $env:REDIS_TEST_URL"
 
 $MinCoverage = 90
 $coverFile = Join-Path ([IO.Path]::GetTempPath()) "gateway-cover.out"

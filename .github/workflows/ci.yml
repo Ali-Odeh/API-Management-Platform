@@ -79,14 +79,29 @@ jobs:
       run:
         working-directory: backend/gateway
 
+    # A real Redis for the rate-limit tests (the atomic Lua script is what
+    # they check). Database 15, like locally.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      REDIS_TEST_URL: redis://localhost:6379/15
+
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/gateway/go.mod
-          # No dependencies (no go.sum) yet; turn caching on when Redis arrives in M4.
-          cache: false
+          cache-dependency-path: backend/gateway/go.sum
 
       - name: Formatting (gofmt)
         run: |

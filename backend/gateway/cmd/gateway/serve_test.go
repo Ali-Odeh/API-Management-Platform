@@ -108,6 +108,11 @@ func TestServeWholeGateway(t *testing.T) {
 		t.Errorf("without a key: %d, want 401", status)
 	}
 
+	// Go's client sometimes opens a spare connection that never carries a
+	// request; Go's server counts such a connection as busy for up to 5 s
+	// during shutdown, longer than this test's 2 s. Close our idle ones first,
+	// as a client that is done would.
+	http.DefaultClient.CloseIdleConnections()
 	cancel() // like docker stop
 	select {
 	case code := <-exit:

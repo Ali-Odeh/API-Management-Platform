@@ -6,6 +6,11 @@
 FROM golang:1.27-alpine AS build
 WORKDIR /src
 
+# Dependencies first, in their own layer: they change rarely, so Docker
+# reuses this download on most rebuilds.
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY . .
 # CGO_ENABLED=0: a fully static binary that needs no C libraries at runtime.
 # -trimpath and -ldflags="-s -w": no local paths or debug symbols (smaller).
