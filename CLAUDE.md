@@ -26,7 +26,7 @@ backend/
   mock-backend/    FastAPI echo service (port 9000)
 frontend/          React dashboard (v2); compose service name stays `dashboard`
 e2e/               end-to-end tests (pytest) against the whole stack: docker compose run --rm e2e
-loadtest/          k6 scripts
+loadtest/          k6 load test: docker compose run --rm loadtest (results in loadtest/README.md)
 docs/PLAN.md       the plan
 docker-compose.yml
 ```

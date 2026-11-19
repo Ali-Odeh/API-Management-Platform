@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 4.4 (k6 load test)
+**Last updated:** Nov 19, 2026 · **Current step:** 4.5 (final README)
 
 ## Overview
 
@@ -12,11 +12,11 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
-| M4: MVP done | ✅✅✅⬜⬜ 3/5 | 🔄 In progress |
+| M4: MVP done | ✅✅✅✅⬜ 4/5 | 🔄 In progress |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 22 of 24 steps done (92%). The whole MVP story is proven end to end, on every push.
+**MVP:** 23 of 24 steps done (96%). Measured under load: the gateway adds about 1 ms at p95.
 
 ## Quality today
 
@@ -52,9 +52,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack |
+| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
 | End-to-end tests | **15 stories pass in about 4 s** (`docker compose run --rm e2e`); fresh stack healthy in 17 s; nothing left behind |
+| Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
 
@@ -112,8 +113,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | 4.1 | Token-bucket Lua script and its Go wrapper | ✅ `792c9aa`, `34d5446`, *this commit* |
 | 4.2 | Rate-limit middleware with headers and 429 | ✅ `fca379a`, `31c3dd5`, *this commit* |
 | 4.3 | End-to-end test script across the whole stack | ✅ `970742a`, `cc12051`, *this commit* |
-| 4.4 | k6 load test and the p95 latency the gateway adds | 👉 Next |
-| 4.5 | Final README with setup steps and an architecture picture | ⬜ |
+| 4.4 | k6 load test and the p95 latency the gateway adds | ✅ `3452329`, `8a21d3a`, *this commit* |
+| 4.5 | Final README with setup steps and an architecture picture | 👉 Next |
 
 **Outcome:** the MVP definition of done from PLAN.md section 1.
 
@@ -232,3 +233,8 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 19 | 4.3 | Runner in its own container, Compose profile `test` (`docker compose run --rm e2e`) | Apps run only in Docker; same internal addresses on Windows and in CI; never started by `up` |
 | Nov 19 | 4.3 | Tests create uniquely named objects and always delete them; wait by polling, no fixed sleeps | Never touch real data; fast and not flaky (config arrives in ~70 ms) |
 | Nov 19 | 4.3 | CI e2e job on a fresh stack after the unit jobs, throwaway `.env` | Every push proves the whole platform works, not just each part |
+| Nov 19 | 4.4 | Three runs at one fixed rate: direct, gateway public route, gateway protected route | Differences isolate the gateway's own cost and the Redis cost; a fixed rate keeps the comparison fair |
+| Nov 19 | 4.4 | 300 requests/s, after measuring the mock backend (p95 under 2 ms even at 1,000/s) | Well below the backend's limit, so backend queueing isn't counted as gateway time |
+| Nov 19 | 4.4 | Consumer limit 100,000/min (the control plane's maximum) | Every request does the full Redis check, but none gets a 429 |
+| Nov 19 | 4.4 | k6 in Docker (Compose profile `test`); `gateway_ms.py` reads the gateway's own times from its log | Nothing to install; an inside view to check k6's outside view |
+| Nov 19 | 4.4 | CI: 5 s smoke run at 20 requests/s, no timing claims | Shared CI machines are too noisy to measure; the smoke run keeps the script from breaking |

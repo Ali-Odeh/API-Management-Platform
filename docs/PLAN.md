@@ -464,7 +464,7 @@ api-platform/
 │   └── mock-backend/             # small FastAPI echo service
 ├── frontend/                     # React dashboard (v2), organized by feature
 ├── e2e/                          # end-to-end tests (pytest) against the whole Compose stack
-├── loadtest/                     # k6 scripts
+├── loadtest/                     # k6 load test (gateway.js) and a log helper; results in loadtest/README.md
 ├── docs/
 ├── docker-compose.yml
 └── README.md
@@ -561,7 +561,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Token-bucket Lua script and the Go wrapper around it
 - [x] Rate-limit middleware with headers and 429
 - [x] End-to-end test script: create service, route, consumer, key, then call through the gateway
-- [ ] k6 load test and a note of the p95 latency the gateway adds
+- [x] k6 load test and a note of the p95 latency the gateway adds (about 1 ms at p95; see loadtest/README.md)
 - [ ] README with setup steps and an architecture picture
 
 **MT: Multi-tenancy (after the MVP)**
@@ -591,7 +591,7 @@ Each service has its own tests, and one end-to-end script proves the whole stack
 | Gateway benchmarks | `go test -bench` (by hand) | Matching vs. number of routes, key lookup vs. number of keys, the whole chain without network |
 | Rate limiter tests | `go test` against a real Redis (Docker locally, database 15; a Redis service in CI); skipped without `REDIS_TEST_URL` | Burst, refill, `retry_after`, separate buckets, lowered limit, expiry, script reload, 100 concurrent requests for 50 tokens |
 | End to end | pytest + httpx in `e2e/`, run in its own container (`docker compose run --rm e2e`) and in CI on a fresh stack | The MVP story: admin API creates service, routes, consumers and keys, then calls through the gateway: 200 (backend sees `X-Consumer-ID`, not the key), 401, 403 after a block, 401 after a revoke, a new route live within 1 s, 404, 405, 429, 502, 504, `strip_prefix`, public routes. Own objects, always cleaned up |
-| Load | k6 | Throughput and p95 latency with and without the gateway |
+| Load | k6 in Docker (`docker compose run --rm loadtest`); a 5 s smoke run in CI | Three runs at the same fixed rate: direct to the backend, through the gateway on a public route, and on a protected route (key + Redis). Measured at 300 requests/s: the gateway adds 0.77 ms median and 0.95 ms p95 in total; its own code about 0.08 ms, the Redis rate limit about 0.3 ms, the rest is the extra network hop. 0 errors |
 
 **Observability**
 
