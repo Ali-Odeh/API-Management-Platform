@@ -18,7 +18,8 @@ import (
 type Info struct {
 	RequestID  string
 	RouteID    string        // set by the router when a route matched
-	ConsumerID string        // set by auth (step 3.6)
+	ConsumerID string        // set by auth when the key was found
+	KeyID      string        // which of the consumer's keys was used (never the key itself)
 	Upstream   time.Duration // time until the backend's response headers; 0 if not called
 }
 

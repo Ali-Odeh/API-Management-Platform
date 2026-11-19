@@ -14,7 +14,7 @@ import (
 // (PLAN.md section 7):
 //
 //	{"msg":"request","request_id":"...","method":"GET","path":"/v1/orders/7",
-//	 "route_id":"r1","consumer_id":"","status":200,"latency_ms":12.4,
+//	 "route_id":"r1","consumer_id":"c1","key_id":"k1","status":200,"latency_ms":12.4,
 //	 "upstream_ms":9.1,"gateway_ms":3.3,"client_ip":"172.18.0.1","bytes":245}
 //
 // latency_ms is the whole request; upstream_ms is the wait for the backend;
@@ -52,6 +52,7 @@ func logRequest(log *slog.Logger, r *http.Request, info *reqctx.Info, sw *status
 		slog.String("path", r.URL.Path),
 		slog.String("route_id", info.RouteID),
 		slog.String("consumer_id", info.ConsumerID),
+		slog.String("key_id", info.KeyID),
 		slog.Int("status", sw.finalStatus()),
 		slog.Float64("latency_ms", millis(latency)),
 		slog.Float64("upstream_ms", millis(info.Upstream)),
