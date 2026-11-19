@@ -2,128 +2,184 @@
 
 [![ci](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml)
 
-A self-hosted API management system, built as a learning project: a **Go gateway** that every API request passes through (auth, rate limiting, logging), a **FastAPI control plane** that configures it, and later a React dashboard.
+A self-hosted API gateway and its management API, modeled on Kong, Tyk and Apigee. A **Go gateway** sits in front of your backend services: every API call passes through it and is routed, authenticated with an API key, rate-limited per consumer and logged. A **FastAPI control plane** is where admins configure it, and changes reach the gateway in milliseconds.
 
-The full design is in [docs/PLAN.md](docs/PLAN.md). Step-by-step progress is in [docs/ROADMAP.md](docs/ROADMAP.md).
+It is a learning project, built step by step with production habits: tests at every layer, fuzzing, an end-to-end suite, a load test and CI on every push.
 
-## Status
+## What it does
 
-Milestones **M1: Skeleton** and **M2: Control plane** are done ✅. The control plane has admin login (JWT), CRUD for services, routes, consumers and API keys, a tenant-ready data model (one `default` workspace), and `/internal/config` for the gateway with ETag/304 and long polling. Next: **M3**, the Go gateway.
+- **Routing:** `/v1/orders/...` goes to the orders service, by longest path prefix and HTTP method, on whole path segments.
+- **API keys:** consumers (client apps) get keys, shown once and stored hashed. No key or a wrong key is `401`, a blocked consumer is `403`.
+- **Rate limiting:** a token bucket per consumer in Redis (one atomic Lua script, shared by every gateway instance). Over the limit is `429` with `Retry-After`. If Redis is down, traffic still flows (fail open).
+- **Reverse proxy:** per-route timeouts (`504`), dead backends (`502`), optional prefix stripping, trusted `X-Forwarded-*` headers. The backend never sees the API key; it gets `X-Consumer-ID`.
+- **Observability:** a request ID on every call, and one JSON log line per request with the route, the consumer, the status and how long the backend and the gateway each took.
+- **Live configuration:** admins change services, routes, consumers and keys through a REST API (JWT). The gateway long-polls the control plane and swaps in the new config without locks: a revoked key stops working in about 70 ms.
 
-## Getting started (Windows / PowerShell)
+## Architecture
 
-Requirements: Docker Desktop, Python 3.12+, Go 1.23+.
+```mermaid
+flowchart TB
+    app([Client app])
 
-```powershell
-Copy-Item .env.example .env   # then fill in the values
-docker compose up -d
-docker compose ps
+    subgraph data["Data plane: live traffic"]
+        direction LR
+        gw["Gateway (Go)<br/>config snapshot in memory"] <-- "token bucket (Lua)" --> redis[("Redis<br/>rate-limit buckets")]
+    end
+
+    backends["Backend services"]
+
+    subgraph control["Control plane: configuration"]
+        direction LR
+        admin([Admin]) -- "REST + JWT" --> cp["Control plane (FastAPI)<br/>admin API"] <-- "NOTIFY on change" --> pg[("PostgreSQL<br/>all config")]
+    end
+
+    app -- "API call + X-API-Key" --> gw
+    gw -- "proxied request" --> backends
+    gw -. "long poll /internal/config" .-> cp
 ```
 
-Check that the mock backend is reachable:
+The **data plane** (the gateway) handles live traffic and never touches the database: it keeps routes and key hashes in memory and only calls Redis for rate limits. The **control plane** owns the configuration. When an admin changes anything, a Postgres trigger bumps a version and sends `NOTIFY`, the waiting long-poll request returns the new snapshot, and the gateway swaps it in atomically. If the control plane is down, the gateway keeps serving with its last config.
 
-```powershell
-Invoke-RestMethod http://localhost:9000/anything/hello
+### One request through the gateway
+
+```mermaid
+flowchart LR
+    req([Request]) --> id["Request ID"] --> log["Log line"] --> rec["Recover"] --> route{"Route<br/>match"}
+    route -- "match" --> auth{"API key"}
+    auth -- "valid" --> limit{"Rate<br/>limit"}
+    limit -- "token left" --> proxy["Proxy"] --> backend([Backend])
+    route -- "400 / 404 / 405 / 503" --> answer[["Gateway answers<br/>{&quot;error&quot;: &quot;...&quot;}"]]
+    auth -- "401 / 403" --> answer
+    limit -- "429" --> answer
+    proxy -- "502 / 504" --> answer
 ```
 
-### Control plane
+## Numbers
 
-Everything runs inside Docker. The code folder is mounted into the container, so saving a `.py` file restarts the app automatically.
-
-```powershell
-Invoke-RestMethod http://localhost:8000/health        # {"status":"ok"}
-start http://localhost:8000/docs                       # Swagger UI
-docker compose exec control-plane pytest -v            # run the tests
-docker compose exec control-plane alembic current      # migration status
-docker compose logs -f control-plane                   # follow the logs
-```
-
-When the container starts it runs `alembic upgrade head` (applies migrations) and creates the `default` workspace and the first admin from `ADMIN_EMAIL` / `ADMIN_PASSWORD` if they don't exist yet.
-
-Log in and call a protected endpoint:
-
-```powershell
-$body  = @{ email = "admin@example.com"; password = "<ADMIN_PASSWORD from .env>" } | ConvertTo-Json
-$token = (Invoke-RestMethod -Method Post http://localhost:8000/api/v1/auth/login -ContentType 'application/json' -Body $body).access_token
-Invoke-RestMethod http://localhost:8000/api/v1/auth/me -Headers @{ Authorization = "Bearer $token" }
-```
-
-In Swagger (`/docs`): call `POST /api/v1/auth/login`, copy `access_token`, click **Authorize**, paste it.
-
-Register a backend service (needs the token from above):
-
-```powershell
-$h = @{ Authorization = "Bearer $token" }
-Invoke-RestMethod -Method Post http://localhost:8000/api/v1/services -Headers $h -ContentType 'application/json' `
-  -Body '{"name":"orders","upstream_url":"http://mock-backend:9000"}'
-Invoke-RestMethod "http://localhost:8000/api/v1/services?page=1&page_size=20" -Headers $h
-```
-
-| Endpoint | Purpose |
+| | |
 | --- | --- |
-| `POST /api/v1/auth/login`, `GET /api/v1/auth/me` | Admin login and current admin |
-| `GET, POST /api/v1/services` | List (paginated `{items, total}`), create |
-| `GET, PATCH, DELETE /api/v1/services/{id}` | Read, partial update, delete (409 while it has routes) |
-| `GET, POST /api/v1/routes` | List (`?service_id=`), create |
-| `GET, PATCH, DELETE /api/v1/routes/{id}` | Read, partial update, delete |
-| `GET, POST /api/v1/consumers` | List (`?status=active\|blocked`), create |
-| `GET, PATCH, DELETE /api/v1/consumers/{id}` | Read, update (block with `{"status":"blocked"}`), delete (also deletes its keys) |
-| `GET, POST /api/v1/consumers/{id}/keys` | List keys (prefix only), generate a key (the full key is shown **once**) |
-| `DELETE /api/v1/keys/{id}` | Revoke a key (kept in the list as revoked) |
-| `GET /internal/config` | Gateway only (`X-Internal-Token`): config snapshot, `ETag`/`304`, long polling with `?wait=` |
+| **Time the gateway adds** | **0.8 ms median, 1 ms p95** (k6, 300 requests/s, 0 errors). Its own code takes under 0.1 ms; the Redis rate-limit call about 0.3 ms; the rest is the extra network hop. [Details](loadtest/README.md) |
+| **Config propagation** | An admin change reaches the gateway in about **70 ms** |
+| **Route matching** | 0.4 µs for 100 routes, no memory allocations (Go benchmark) |
+| **Gateway tests** | 362 tests and table cases, **98% coverage**, the race detector, 5 fuzz tests |
+| **Control plane tests** | 333 tests, **100% coverage**, mypy strict |
+| **End to end** | 15 stories on the real stack, in CI on every push |
 
-Watch the gateway's long polling yourself (two PowerShell windows; `INTERNAL_TOKEN` is in `.env`):
+The load test ran on one laptop with Docker Desktop; the differences between runs (with and without the gateway) are the meaningful part.
 
-```powershell
-# Window 1: ask like the gateway does. It waits, because nothing has changed yet.
-$it = @{ "X-Internal-Token" = "<INTERNAL_TOKEN>" }
-$etag = (Invoke-WebRequest -UseBasicParsing http://localhost:8000/internal/config -Headers $it).Headers['ETag']
-Invoke-WebRequest -UseBasicParsing "http://localhost:8000/internal/config?wait=30" -Headers ($it + @{ "If-None-Match" = $etag })
-# Window 2: change anything in Swagger (e.g. block a consumer). Window 1 answers at once.
-```
+## Quick start
 
-New migration after changing a model:
+Requirements: [Docker](https://www.docker.com/) with Docker Compose.
+
+Windows (PowerShell):
 
 ```powershell
-docker compose exec control-plane alembic revision --autogenerate -m "describe the change"
-docker compose exec control-plane alembic upgrade head
+git clone https://github.com/Ali-Odeh/API-Management-Platform.git
+cd API-Management-Platform
+.\scripts\init-env.ps1
+docker compose up -d --build --wait
 ```
 
-Tests run against a separate database, `apim_test`, which is recreated on every test run. Your real data in `apim` is never touched.
+macOS / Linux:
 
-Run every quality check before committing (ruff lint and format, mypy strict, pytest with coverage of at least 90%, and the OpenAPI contract in `backend/control-plane/openapi.json`). GitHub Actions runs the same checks on every push and pull request (`.github/workflows/ci.yml`):
+```sh
+git clone https://github.com/Ali-Odeh/API-Management-Platform.git
+cd API-Management-Platform
+./scripts/init-env.sh
+docker compose up -d --build --wait
+```
+
+`init-env` creates `.env` with random secrets and prints the admin password. When `up` returns, everything is running:
+
+| | Address |
+| --- | --- |
+| Gateway (send API calls here) | `http://localhost:8081` |
+| Admin API and Swagger UI | `http://localhost:8000/docs` |
+| Mock backend (an echo service) | `http://localhost:9000` |
+
+## Try it (2 minutes, PowerShell)
+
+Log in as the admin and register a backend, a route, an app with a limit of 3 requests per minute, and a key for it:
 
 ```powershell
-.\backend\control-plane\scripts\check.ps1        # check only
-.\backend\control-plane\scripts\check.ps1 -Fix   # let ruff fix and format first
+$cp  = "http://localhost:8000/api/v1"
+$pw  = (Select-String -Path .env -Pattern '^ADMIN_PASSWORD=(.*)').Matches.Groups[1].Value
+$tok = (Invoke-RestMethod -Method Post "$cp/auth/login" -ContentType application/json `
+          -Body (@{ email = "admin@example.com"; password = $pw } | ConvertTo-Json)).access_token
+function Add($path, $body) {
+    Invoke-RestMethod -Method Post "$cp$path" -Headers @{ Authorization = "Bearer $tok" } `
+        -ContentType application/json -Body ($body | ConvertTo-Json)
+}
+
+$svc = Add /services  @{ name = "orders"; upstream_url = "http://mock-backend:9000" }
+$rt  = Add /routes    @{ service_id = $svc.id; path_prefix = "/v1/orders"; methods = @("GET", "POST") }
+$app = Add /consumers @{ name = "mobile-app"; email = "dev@example.com"; rate_limit_per_min = 3 }
+$key = (Add "/consumers/$($app.id)/keys" @{ name = "demo" }).key   # shown only this once
 ```
 
-For editor autocomplete only (optional), create a local venv:
+Now be the app and call the API through the gateway:
 
 ```powershell
-cd backend/control-plane
-uv venv --python 3.12 .venv
-uv pip install --python .venv\Scripts\python.exe -r requirements-dev.txt
+curl.exe -s http://localhost:8081/v1/orders/7 -H "X-API-Key: $key"
+# 200: the mock backend's echo. Note "x-consumer-id" and "x-request-id" in its headers, and no API key.
+
+curl.exe -s http://localhost:8081/v1/orders/7
+# 401 {"error":"missing_api_key"}
+
+1..4 | ForEach-Object { curl.exe -s -o NUL -w "%{http_code} " http://localhost:8081/v1/orders/7 -H "X-API-Key: $key" }
+# 200 200 429 429: the limit is 3 per minute, and one was used above
+
+docker compose logs gateway --no-log-prefix --tail 3
+# one JSON line per request: route, consumer, status, ratelimit, latency_ms, upstream_ms, gateway_ms
 ```
 
-### Database
+Or do the same by clicking in Swagger at `http://localhost:8000/docs` (log in with `POST /api/v1/auth/login`, then **Authorize**). Block the consumer there (`PATCH /api/v1/consumers/{id}` with `{"status": "blocked"}`) and the next call gets `403` at once.
 
-Connect to the database from Windows (pgAdmin, DBeaver, psql): `localhost:5434`, database, user and password from `.env`. Port 5434 is used on the host so it does not clash with locally installed Postgres servers on 5432 and 5433. Inside Docker, containers still use `postgres:5432`.
+## How it is built
 
-Stop everything:
+| Part | Stack |
+| --- | --- |
+| Gateway (data plane) | Go 1.27, standard library only (`net/http`, `httputil.ReverseProxy`, `log/slog`), plus `go-redis` for the rate limiter |
+| Control plane | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic v2 |
+| Storage | PostgreSQL 16 (config), Redis 7 (rate limits) |
+| Tests | Go `testing` (table tests, fuzzing, benchmarks, `-race`), pytest + httpx, k6 |
+| Runtime and CI | Docker Compose, GitHub Actions |
 
-```powershell
-docker compose down        # keep data
-docker compose down -v     # also delete the Postgres volume
-```
+Some decisions worth a look (all of them, with reasons, are in the [decisions log](docs/ROADMAP.md#decisions-log)):
 
-## Layout
+- **Long polling woken by Postgres `NOTIFY`** instead of polling every few seconds: changes arrive in milliseconds, idle traffic is one request per 30 s, and it's still plain HTTP.
+- **An immutable snapshot behind `atomic.Pointer`:** thousands of requests read the config with no locks while it is replaced.
+- **One Lua script, using Redis's own clock,** for the token bucket: two gateways can never both take the last token, and clock differences between them don't matter.
+- **The rate limit is per consumer, not per key,** so creating more keys doesn't raise the limit.
+- **Tenant-ready from day one:** every record belongs to a workspace, so multi-tenancy needs no data migration.
+
+## Project layout
 
 | Folder | What |
 | --- | --- |
-| `backend/gateway/` | Go reverse proxy (data plane) |
-| `backend/control-plane/` | FastAPI admin API (control plane) |
-| `backend/mock-backend/` | Small FastAPI echo service to proxy to |
-| `frontend/` | React admin UI (v2, not started) |
-| `loadtest/` | k6 scripts |
-| `docs/` | Plan and architecture |
+| [`backend/gateway/`](backend/gateway) | The Go gateway: `cmd/gateway` (main) and `internal/` (config, proxy, middleware, ratelimit, ...) |
+| [`backend/control-plane/`](backend/control-plane) | The FastAPI admin API, organized by feature (services, routes, consumers, keys, gateway_config) |
+| [`backend/mock-backend/`](backend/mock-backend) | A small echo service to proxy to |
+| [`e2e/`](e2e) | End-to-end tests against the whole stack |
+| [`loadtest/`](loadtest) | The k6 load test and its results |
+| [`docs/`](docs) | [Plan](docs/PLAN.md), [roadmap and decisions](docs/ROADMAP.md), [developer guide](docs/DEVELOPMENT.md) |
+| `frontend/` | React admin UI (next phase, not started) |
+
+## Development
+
+Tests, quality checks, migrations, the race detector, fuzzing and the load test are in the [developer guide](docs/DEVELOPMENT.md). The short version:
+
+```powershell
+.\backend\control-plane\scripts\check.ps1   # ruff, mypy strict, pytest
+.\backend\gateway\scripts\check.ps1         # gofmt, go vet, go test
+docker compose run --rm e2e                 # end-to-end tests
+docker compose run --rm loadtest            # k6 load test
+```
+
+## Status and what's next
+
+The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. Next on the [roadmap](docs/ROADMAP.md):
+
+- **Multi-tenancy:** several workspaces with their own admins and routes.
+- **Admin UI:** a React dashboard for services, routes, consumers and keys.
+- Later: plans and monthly quotas, usage analytics, Prometheus metrics, a developer portal.
