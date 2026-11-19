@@ -350,7 +350,13 @@ return { allowed, math.floor(tokens), retry_after_ms }
 
 The full, commented script is `backend/gateway/internal/ratelimit/tokenbucket.lua` (step 4.1). Two changes from the first draft: the script reads **Redis's clock** (`TIME`) instead of a time passed in by the gateway, so gateways whose clocks differ can't confuse a bucket; and it returns **`retry_after_ms`**, the exact time until the next token, for `Retry-After`. The Go side (`ratelimit.Limiter.Allow`) uses go-redis (`EVALSHA`, falling back to `EVAL` when Redis has forgotten the script) with a 50 ms timeout: a slower Redis counts as down.
 
-The gateway sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every response, and `Retry-After` on a 429. If Redis is unreachable, the gateway lets the request through and logs a warning (fail open).
+**Rate-limit middleware (step 4.2)**
+
+- Runs after auth: it needs the consumer and its `rate_limit_per_min` (from the snapshot), and requests refused with 401/403 cost no budget. Public routes (`auth_required = false`) have no consumer and are not limited in the MVP; a per-IP limit for them is a v2 idea.
+- Allowed: `X-RateLimit-Limit` and `X-RateLimit-Remaining` on the response. Empty bucket: `429 {"error":"rate_limit_exceeded"}` with the same headers and `Retry-After` in whole seconds (rounded up, at least 1).
+- Fail open: if Redis doesn't answer within 50 ms, the request goes through without rate-limit headers. The warning is throttled to one line per 10 s, with a count of the held-back ones, so an outage can't flood the log. After Redis comes back, limiting resumes within about 3 s (go-redis retries dialing in the background instead of on every request).
+- The request log's `ratelimit` field is `""` (not limited), `"ok"`, `"limited"` (429) or `"unavailable"` (Redis down, let through).
+- The Redis client connects lazily (Redis down at startup is fine), has 50 ms read/write/pool timeouts and no retries.
 
 **Error responses**
 
@@ -363,14 +369,14 @@ The gateway sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every respon
 | 404 | No route matches | `{"error":"route_not_found"}` |
 | 405 | A route's path fits but none allows the method; `Allow` lists the methods | `{"error":"method_not_allowed"}` |
 | 503 | No config loaded yet (gateway just started); `Retry-After: 1` | `{"error":"config_not_loaded"}` |
-| 429 | Rate limit hit | `{"error":"rate_limit_exceeded"}` |
+| 429 | Rate limit hit (with `Retry-After` and `X-RateLimit-*`) | `{"error":"rate_limit_exceeded"}` |
 | 502 | Upstream refused or reset the connection | `{"error":"bad_gateway"}` |
 | 504 | Upstream exceeded the route timeout | `{"error":"gateway_timeout"}` |
 
 **Log line**
 
 ```json
-{"ts":"2026-11-15T16:00:00Z","level":"INFO","msg":"request","request_id":"a1b2","method":"GET","path":"/v1/orders/7","route_id":"r1","consumer_id":"c1","key_id":"k1","status":200,"latency_ms":12.4,"upstream_ms":9.1,"gateway_ms":3.3,"client_ip":"172.18.0.1","bytes":245}
+{"ts":"2026-11-15T16:00:00Z","level":"INFO","msg":"request","request_id":"a1b2","method":"GET","path":"/v1/orders/7","route_id":"r1","consumer_id":"c1","key_id":"k1","ratelimit":"ok","status":200,"latency_ms":12.4,"upstream_ms":9.1,"gateway_ms":3.3,"client_ip":"172.18.0.1","bytes":245}
 ```
 
 Logs use Go's `log/slog` with the JSON handler. The API key itself never appears in a log, and neither does the query string (it can hold tokens or personal data). Times are milliseconds with microsecond precision. `upstream_ms` is the wait until the backend's response headers; `gateway_ms` = `latency_ms` − `upstream_ms` is the time the gateway added. `status` 499 means the client hung up; `aborted: true` marks an answer cut off mid-stream. `GET /health` is not logged. A panic adds an `ERROR` line with the stack trace and the request ID.
@@ -489,7 +495,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Control plane | `ADMIN_EMAIL`, `ADMIN_PASSWORD` | seeds the first admin |
 | Gateway | `CONTROL_PLANE_URL` | `http://control-plane:8000` (required) |
 | Gateway | `INTERNAL_TOKEN` | same shared secret (required; never logged) |
-| Gateway | `REDIS_URL` | `redis://redis:6379/0` |
+| Gateway | `REDIS_URL` | `redis://redis:6379/0` (required; `rediss://` for TLS; treated as a secret, since it may hold a password) |
 | Gateway | `CONFIG_WAIT` | `30s` (how long the control plane may hold a config request; whole seconds, 1 to 60) |
 | Gateway | `LISTEN_ADDR` | `:8080` (set in `docker-compose.yml`, next to the port mapping that depends on it) |
 | Gateway | `SHUTDOWN_TIMEOUT` | optional, default `5s` (time given to in-flight requests on stop) |
@@ -552,7 +558,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 **M4: MVP done**
 
 - [x] Token-bucket Lua script and the Go wrapper around it
-- [ ] Rate-limit middleware with headers and 429
+- [x] Rate-limit middleware with headers and 429
 - [ ] End-to-end test script: create service, route, consumer, key, then call through the gateway
 - [ ] k6 load test and a note of the p95 latency the gateway adds
 - [ ] README with setup steps and an architecture picture

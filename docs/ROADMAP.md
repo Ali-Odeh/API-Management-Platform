@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 4.2 (rate-limit middleware)
+**Last updated:** Nov 19, 2026 · **Current step:** 4.3 (end-to-end test script)
 
 ## Overview
 
@@ -12,11 +12,11 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
-| M4: MVP done | ✅⬜⬜⬜⬜ 1/5 | 🔄 In progress |
+| M4: MVP done | ✅✅⬜⬜⬜ 2/5 | 🔄 In progress |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 20 of 24 steps done (83%). The rate-limit counter works in Redis; next it guards requests.
+**MVP:** 21 of 24 steps done (88%). Every consumer now has a request budget: 429 when it is used up.
 
 ## Quality today
 
@@ -34,11 +34,12 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 346 passing (89 tests plus 257 table cases and fuzz seeds), about 3 s; the 8 Redis tests need Docker's Redis; mock backend 7 |
-| Coverage | **98.4%** total (minimum 90%, enforced): 6 packages at 100%, config 99.0%, server 97.4%, ratelimit 90.9%, main 90.2% |
+| Tests | 362 passing (102 tests plus 260 table cases and fuzz seeds), about 3 s; the Redis tests need Docker's Redis; mock backend 7 |
+| Coverage | **98.1%** total (minimum 90%, enforced): 6 packages at 100%, config 99.0%, server 97.4%, ratelimit 95.2%, main 87.0% |
 | Fuzz tests | 5 (paths, matching, prefix stripping, request IDs); about 1.6 million random inputs in the first runs; 10 s each in CI |
 | Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; whole chain without network **≈ 8.5 µs**; one rate-limit check **≈ 0.48 ms** (Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
+| Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
 | Race detector | clean, including 1,000 requests while the config changes every ms (`go test -race` in a Linux container; also in CI) |
@@ -108,8 +109,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | # | Step | Status |
 | --- | --- | --- |
 | 4.1 | Token-bucket Lua script and its Go wrapper | ✅ `792c9aa`, `34d5446`, *this commit* |
-| 4.2 | Rate-limit middleware with headers and 429 | 👉 Next |
-| 4.3 | End-to-end test script across the whole stack | ⬜ |
+| 4.2 | Rate-limit middleware with headers and 429 | ✅ `fca379a`, `31c3dd5`, *this commit* |
+| 4.3 | End-to-end test script across the whole stack | 👉 Next |
 | 4.4 | k6 load test and the p95 latency the gateway adds | ⬜ |
 | 4.5 | Final README with setup steps and an architecture picture | ⬜ |
 
@@ -219,3 +220,10 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 19 | 4.1 | Script also returns `retry_after_ms` | An exact `Retry-After` for 429 in 4.2 |
 | Nov 19 | 4.1 | go-redis v9 (first external dependency), script embedded with `go:embed`, 50 ms timeout | Official client with EVALSHA/EVAL fallback; real Lua file; a slow Redis must not slow requests |
 | Nov 19 | 4.1 | Rate-limit tests against a real Redis (DB 15 locally, a service in CI), skipped without `REDIS_TEST_URL` | Atomicity is the point, and only a real Redis proves it |
+| Nov 19 | 4.2 | Rate limit after auth; public routes not limited in the MVP | Needs the consumer; 401/403 cost no budget; per-IP limits for public routes are a v2 idea |
+| Nov 19 | 4.2 | Fail-open warning throttled to one per 10 s with a count | An outage at 1,000 req/s would otherwise write 1,000 warnings per second |
+| Nov 19 | 4.2 | `Retry-After` in whole seconds, rounded up, at least 1; `X-RateLimit-*` headers | Retrying early would only be refused; the X- names are what GitHub and Kong send |
+| Nov 19 | 4.2 | `ratelimit` field in the request log (`ok` / `limited` / `unavailable`) | Shows exactly when requests were let through because Redis was down |
+| Nov 19 | 4.2 | `REDIS_URL` required and a Secret; lazy client, 50 ms timeouts, no retries | It may hold a password; Redis down at startup is fine; a slow Redis must not slow requests |
+| Nov 19 | 4.2 | go-redis "maintenance notifications" turned off | They resolved the hostname while building the client: 2–4 s late start whenever Redis was down |
+| Nov 19 | 4.2 | Redis tests: no `FLUSHDB`, own consumer IDs; the real-program test retries a round that failed open | Packages run in parallel on one test database; a slow Redis rightly fails open, which proves nothing |
