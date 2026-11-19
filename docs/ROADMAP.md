@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 4.1 (token-bucket Lua script)
+**Last updated:** Nov 19, 2026 · **Current step:** 4.2 (rate-limit middleware)
 
 ## Overview
 
@@ -12,11 +12,11 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
-| M4: MVP done | ⬜⬜⬜⬜⬜ 0/5 | 👉 Next |
+| M4: MVP done | ✅⬜⬜⬜⬜ 1/5 | 🔄 In progress |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 19 of 24 steps done (79%). M3 done: the Go gateway routes, authenticates, proxies and logs. 🎉
+**MVP:** 20 of 24 steps done (83%). The rate-limit counter works in Redis; next it guards requests.
 
 ## Quality today
 
@@ -34,10 +34,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 336 passing (79 tests plus 257 table cases and fuzz seeds), about 3 s; mock backend 7 |
-| Coverage | **98.6%** total (minimum 90%, enforced): 6 packages at 100%, config 99.0%, server 97.4%, main 90.2% |
+| Tests | 346 passing (89 tests plus 257 table cases and fuzz seeds), about 3 s; the 8 Redis tests need Docker's Redis; mock backend 7 |
+| Coverage | **98.4%** total (minimum 90%, enforced): 6 packages at 100%, config 99.0%, server 97.4%, ratelimit 90.9%, main 90.2% |
 | Fuzz tests | 5 (paths, matching, prefix stripping, request IDs); about 1.6 million random inputs in the first runs; 10 s each in CI |
-| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; whole chain without network **≈ 8.5 µs** |
+| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; whole chain without network **≈ 8.5 µs**; one rate-limit check **≈ 0.48 ms** (Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
@@ -107,8 +107,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | # | Step | Status |
 | --- | --- | --- |
-| 4.1 | Token-bucket Lua script and its Go wrapper | ⬜ |
-| 4.2 | Rate-limit middleware with headers and 429 | ⬜ |
+| 4.1 | Token-bucket Lua script and its Go wrapper | ✅ `792c9aa`, `34d5446`, *this commit* |
+| 4.2 | Rate-limit middleware with headers and 429 | 👉 Next |
 | 4.3 | End-to-end test script across the whole stack | ⬜ |
 | 4.4 | k6 load test and the p95 latency the gateway adds | ⬜ |
 | 4.5 | Final README with setup steps and an architecture picture | ⬜ |
@@ -215,3 +215,7 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 19 | 3.7 | `//` is not a clean path (fix) | The trailing-slash rule also matched the root, so `/%2F` passed the check |
 | Nov 19 | 3.7 | Benchmarks run by hand, numbers in ROADMAP | CI timing is too noisy; the numbers back the linear-scan decision of 3.3 |
 | Nov 19 | 3.7 | Gateway coverage gate 90% in `check.ps1` and CI | Same bar as the control plane; enforced by tools, not memory |
+| Nov 19 | 4.1 | Lua script reads **Redis's clock** (`TIME`), not a time from the gateway (plan draft passed `now_ms`) | Gateways with different clocks can't make time seem to run backwards in a bucket |
+| Nov 19 | 4.1 | Script also returns `retry_after_ms` | An exact `Retry-After` for 429 in 4.2 |
+| Nov 19 | 4.1 | go-redis v9 (first external dependency), script embedded with `go:embed`, 50 ms timeout | Official client with EVALSHA/EVAL fallback; real Lua file; a slow Redis must not slow requests |
+| Nov 19 | 4.1 | Rate-limit tests against a real Redis (DB 15 locally, a service in CI), skipped without `REDIS_TEST_URL` | Atomicity is the point, and only a real Redis proves it |

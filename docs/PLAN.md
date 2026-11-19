@@ -331,18 +331,24 @@ Details (step 3.2):
 Each consumer has one bucket with capacity equal to its `rate_limit_per_min`, refilled continuously. All of a consumer's keys share that bucket, because the limit is set on the consumer: a bucket per key would let a consumer multiply its limit just by creating more keys (changed Nov 16, 2026). One Lua script does the whole check so two gateway instances cannot both spend the last token:
 
 ```lua
--- KEYS[1] = rl:{consumer_id}   ARGV = capacity, refill_per_sec, now_ms
+-- KEYS[1] = rl:{consumer_id}   ARGV[1] = capacity (requests per minute)
+local capacity = tonumber(ARGV[1])
+local refill_per_ms = capacity / 60000
+local t = redis.call('TIME')   -- Redis's clock: one clock for every gateway
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 local b = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
-local tokens = tonumber(b[1]) or tonumber(ARGV[1])
-local ts = tonumber(b[2]) or tonumber(ARGV[3])
-local elapsed = math.max(0, tonumber(ARGV[3]) - ts) / 1000
-tokens = math.min(tonumber(ARGV[1]), tokens + elapsed * tonumber(ARGV[2]))
-local allowed = tokens >= 1
-if allowed then tokens = tokens - 1 end
-redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', ARGV[3])
-redis.call('EXPIRE', KEYS[1], 120)
-return { allowed and 1 or 0, math.floor(tokens) }
+local tokens = tonumber(b[1]) or capacity
+local ts = tonumber(b[2]) or now
+tokens = math.min(capacity, tokens + math.max(0, now - ts) * refill_per_ms)
+local allowed, retry_after_ms = 0, 0
+if tokens >= 1 then tokens = tokens - 1; allowed = 1
+else retry_after_ms = math.ceil((1 - tokens) / refill_per_ms) end
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'ts', now)
+redis.call('PEXPIRE', KEYS[1], 120000)
+return { allowed, math.floor(tokens), retry_after_ms }
 ```
+
+The full, commented script is `backend/gateway/internal/ratelimit/tokenbucket.lua` (step 4.1). Two changes from the first draft: the script reads **Redis's clock** (`TIME`) instead of a time passed in by the gateway, so gateways whose clocks differ can't confuse a bucket; and it returns **`retry_after_ms`**, the exact time until the next token, for `Retry-After`. The Go side (`ratelimit.Limiter.Allow`) uses go-redis (`EVALSHA`, falling back to `EVAL` when Redis has forgotten the script) with a 50 ms timeout: a slower Redis counts as down.
 
 The gateway sets `X-RateLimit-Limit` and `X-RateLimit-Remaining` on every response, and `Retry-After` on a 429. If Redis is unreachable, the gateway lets the request through and logs a warning (fail open).
 
@@ -545,7 +551,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 
 **M4: MVP done**
 
-- [ ] Token-bucket Lua script and the Go wrapper around it
+- [x] Token-bucket Lua script and the Go wrapper around it
 - [ ] Rate-limit middleware with headers and 429
 - [ ] End-to-end test script: create service, route, consumer, key, then call through the gateway
 - [ ] k6 load test and a note of the p95 latency the gateway adds
@@ -576,7 +582,7 @@ Each service has its own tests, and one end-to-end script proves the whole stack
 | Gateway unit tests | `go test`, `httptest` | Route matching, auth, error mapping, middleware order; the whole program start to stop against a fake control plane; requests under load while the config changes (`-race`); coverage at least 90% |
 | Gateway fuzz tests | `go test -fuzz` | Path checks, matching, prefix stripping and request IDs against independent reference rules; 10 s each in CI |
 | Gateway benchmarks | `go test -bench` (by hand) | Matching vs. number of routes, key lookup vs. number of keys, the whole chain without network |
-| Rate limiter tests | `go test` against a real Redis in Compose | Bucket refill, burst, two clients sharing one key |
+| Rate limiter tests | `go test` against a real Redis (Docker locally, database 15; a Redis service in CI); skipped without `REDIS_TEST_URL` | Burst, refill, `retry_after`, separate buckets, lowered limit, expiry, script reload, 100 concurrent requests for 50 tokens |
 | End to end | Shell or pytest script against the Compose stack | 200, 401, 403, 404, 429, 502, 504 |
 | Load | k6 | Throughput and p95 latency with and without the gateway |
 
