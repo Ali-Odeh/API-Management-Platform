@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 4.3 (end-to-end test script)
+**Last updated:** Nov 19, 2026 · **Current step:** 4.4 (k6 load test)
 
 ## Overview
 
@@ -12,11 +12,11 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
-| M4: MVP done | ✅✅⬜⬜⬜ 2/5 | 🔄 In progress |
+| M4: MVP done | ✅✅✅⬜⬜ 3/5 | 🔄 In progress |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 21 of 24 steps done (88%). Every consumer now has a request budget: 429 when it is used up.
+**MVP:** 22 of 24 steps done (92%). The whole MVP story is proven end to end, on every push.
 
 ## Quality today
 
@@ -52,8 +52,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend |
+| CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
+| End-to-end tests | **15 stories pass in about 4 s** (`docker compose run --rm e2e`); fresh stack healthy in 17 s; nothing left behind |
 
 ## Step 0: Go basics (Ali, in parallel)
 
@@ -110,8 +111,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- | --- |
 | 4.1 | Token-bucket Lua script and its Go wrapper | ✅ `792c9aa`, `34d5446`, *this commit* |
 | 4.2 | Rate-limit middleware with headers and 429 | ✅ `fca379a`, `31c3dd5`, *this commit* |
-| 4.3 | End-to-end test script across the whole stack | 👉 Next |
-| 4.4 | k6 load test and the p95 latency the gateway adds | ⬜ |
+| 4.3 | End-to-end test script across the whole stack | ✅ `970742a`, `cc12051`, *this commit* |
+| 4.4 | k6 load test and the p95 latency the gateway adds | 👉 Next |
 | 4.5 | Final README with setup steps and an architecture picture | ⬜ |
 
 **Outcome:** the MVP definition of done from PLAN.md section 1.
@@ -227,3 +228,7 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 19 | 4.2 | `REDIS_URL` required and a Secret; lazy client, 50 ms timeouts, no retries | It may hold a password; Redis down at startup is fine; a slow Redis must not slow requests |
 | Nov 19 | 4.2 | go-redis "maintenance notifications" turned off | They resolved the hostname while building the client: 2–4 s late start whenever Redis was down |
 | Nov 19 | 4.2 | Redis tests: no `FLUSHDB`, own consumer IDs; the real-program test retries a round that failed open | Packages run in parallel on one test database; a slow Redis rightly fails open, which proves nothing |
+| Nov 19 | 4.3 | End-to-end tests in pytest + httpx, in a new top-level `e2e/` folder | Readable stories in a language the team knows; separate from each service's own tests |
+| Nov 19 | 4.3 | Runner in its own container, Compose profile `test` (`docker compose run --rm e2e`) | Apps run only in Docker; same internal addresses on Windows and in CI; never started by `up` |
+| Nov 19 | 4.3 | Tests create uniquely named objects and always delete them; wait by polling, no fixed sleeps | Never touch real data; fast and not flaky (config arrives in ~70 ms) |
+| Nov 19 | 4.3 | CI e2e job on a fresh stack after the unit jobs, throwaway `.env` | Every push proves the whole platform works, not just each part |

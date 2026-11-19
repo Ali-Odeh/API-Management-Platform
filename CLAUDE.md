@@ -25,6 +25,7 @@ backend/
                    each feature folder: router.py, models.py, schemas.py, crud.py
   mock-backend/    FastAPI echo service (port 9000)
 frontend/          React dashboard (v2); compose service name stays `dashboard`
+e2e/               end-to-end tests (pytest) against the whole stack: docker compose run --rm e2e
 loadtest/          k6 scripts
 docs/PLAN.md       the plan
 docker-compose.yml
@@ -42,6 +43,7 @@ The user expects production-style code: scalable, maintainable, readable, clean 
 - Split each step into 2–3 logical commits.
 - `.github/workflows/ci.yml` runs the same checks on GitHub for every push and pull request; keep it in step with `check.ps1`. `backend/control-plane/openapi.json` is the committed API contract: after an API change, run `check.ps1 -Fix` (or `scripts/export_openapi.py`) and commit the diff.
 - Before every commit, `backend/control-plane/scripts/check.ps1` must pass: ruff lint and format, mypy strict on `app/`, pytest with coverage of at least 90% (currently 100%). Config lives in `backend/control-plane/pyproject.toml`.
+- For changes that cross services (anything a request touches end to end), run the end-to-end tests too: `docker compose run --rm e2e` (about 5 s; it starts the stack if needed). CI runs them on a fresh stack. They create their own objects and always delete them, so they never touch existing data.
 - For gateway changes, `backend/gateway/scripts/check.ps1` must pass too: gofmt, go vet, go test with coverage of at least 90% (currently 98.1%). It runs with local Go on Windows; the rate-limit tests need Docker's Redis (`docker compose up -d`; they use database 15 via `REDIS_TEST_URL`). Test packages run in parallel against that one database, so Redis tests never `FLUSHDB` and each uses its own consumer IDs. CI adds `-race`, a 10 s run of every fuzz test and an image build. To run `-race` locally, use the Linux Go image: `docker run --rm -v "${PWD}:/src" -w /src golang:1.27 go test -race ./...` from `backend/gateway`.
 
 ## Reminders for later milestones
