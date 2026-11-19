@@ -109,6 +109,33 @@ services:
       redis:
         condition: service_healthy
 
+  # Load test with k6 (step 4.4), also in the "test" profile. Run with:
+  #   docker compose run --rm loadtest
+  # or with another rate / duration per run:
+  #   docker compose run --rm -e RATE=500 -e DURATION=60 loadtest
+  # See loadtest/README.md.
+  loadtest:
+    image: grafana/k6:1.0.0
+    profiles: ["test"]
+    working_dir: /loadtest
+    command: ["run", "gateway.js"]
+    environment:
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      RATE: ${RATE:-300}
+      DURATION: ${DURATION:-30}
+    volumes:
+      - ./loadtest:/loadtest
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      mock-backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   # dashboard (5173) is added in v2.
 
 volumes:

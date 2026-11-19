@@ -1,0 +1,3 @@
+# k6 writes summary.json here on every run; results stay local.
+*
+!.gitignore
