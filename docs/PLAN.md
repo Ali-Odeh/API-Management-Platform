@@ -562,7 +562,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Rate-limit middleware with headers and 429
 - [x] End-to-end test script: create service, route, consumer, key, then call through the gateway
 - [x] k6 load test and a note of the p95 latency the gateway adds (about 1 ms at p95; see loadtest/README.md)
-- [ ] README with setup steps and an architecture picture
+- [x] README with setup steps and an architecture picture (developer commands in docs/DEVELOPMENT.md; `scripts/init-env` creates `.env`)
 
 **MT: Multi-tenancy (after the MVP)**
 

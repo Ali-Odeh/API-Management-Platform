@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** 4.5 (final README)
+**Last updated:** Nov 19, 2026 · **Current step:** MVP done; next milestone to choose (MT or v2a)
 
 ## Overview
 
@@ -12,11 +12,11 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
-| M4: MVP done | ✅✅✅✅⬜ 4/5 | 🔄 In progress |
+| M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
 | MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
 | v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
 
-**MVP:** 23 of 24 steps done (96%). Measured under load: the gateway adds about 1 ms at p95.
+**MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
 
 ## Quality today
 
@@ -114,9 +114,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | 4.2 | Rate-limit middleware with headers and 429 | ✅ `fca379a`, `31c3dd5`, *this commit* |
 | 4.3 | End-to-end test script across the whole stack | ✅ `970742a`, `cc12051`, *this commit* |
 | 4.4 | k6 load test and the p95 latency the gateway adds | ✅ `3452329`, `8a21d3a`, *this commit* |
-| 4.5 | Final README with setup steps and an architecture picture | 👉 Next |
+| 4.5 | Final README with setup steps and an architecture picture | ✅ `ede180f`, `4a7e125`, *this commit* |
 
-**Outcome:** the MVP definition of done from PLAN.md section 1.
+**Outcome:** the MVP definition of done from PLAN.md section 1, proven by the end-to-end tests on every push and measured by the load test.
 
 ## MT: Multi-tenancy (after the MVP)
 
@@ -238,3 +238,7 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 19 | 4.4 | Consumer limit 100,000/min (the control plane's maximum) | Every request does the full Redis check, but none gets a 429 |
 | Nov 19 | 4.4 | k6 in Docker (Compose profile `test`); `gateway_ms.py` reads the gateway's own times from its log | Nothing to install; an inside view to check k6's outside view |
 | Nov 19 | 4.4 | CI: 5 s smoke run at 20 requests/s, no timing claims | Shared CI machines are too noisy to measure; the smoke run keeps the script from breaking |
+| Nov 19 | 4.5 | README is the project's front page; developer commands move to `docs/DEVELOPMENT.md` | A reader sees what it is, the proof and a quick start in one screen; contributors get a full guide |
+| Nov 19 | 4.5 | Diagrams in Mermaid inside the README | GitHub renders them; they are edited like code; checked to render in Mermaid 11 |
+| Nov 19 | 4.5 | `scripts/init-env.ps1` / `.sh` create `.env` with random secrets, never overwrite it | The quick start needs no hand-filled secrets; checked from scratch on a clean copy |
+| Nov 19 | 4.5 | Quick start for both PowerShell and bash | GitHub readers use every OS; the walkthrough stays PowerShell |
