@@ -296,6 +296,15 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 - `GET /health` is the gateway's own; every other request is API traffic.
 - A plain scan of the sorted list: fast for hundreds of routes. MT adds the workspace as a first filter.
 
+**Proxy (step 3.4)**
+
+- One `httputil.ReverseProxy` and one connection pool serve every route; the target comes from the matched route per request, so config changes apply to the next request.
+- Path: `strip_prefix` removes the prefix (the bare prefix becomes `/`), the upstream's base path is joined in front (`http://svc/api` + `/7` → `/api/7`), the query is kept, and encoded characters (`%2F`, `%20`) reach the backend exactly as sent.
+- Headers: hop-by-hop headers and any client-sent `Forwarded` / `X-Forwarded-*` are removed (a client could fake them); fresh `X-Forwarded-For`, `-Host` and `-Proto` are set. The backend sees its own `Host`.
+- The route's `timeout_ms` covers the whole answer (as in Envoy). Over it: `504`. Refused, reset or unknown host: `502`. A connect or TLS timeout (5 s each) also counts as `504`. A client that hangs up gets nothing; the status is recorded as `499` for the log (nginx's convention).
+- Connection pool: up to 100 idle connections per backend (Go's default is 2) and 1000 in total, closed after 90 s unused. No `HTTP_PROXY` from the environment.
+- Not yet: retries (useful with several backend instances, v3 circuit breaker), a request body limit, WebSockets (the whole-answer timeout would cut them).
+
 **Config store**
 
 A background goroutine long-polls `/internal/config?wait=30` in a loop (section 3). It builds a new immutable snapshot (route list sorted by prefix length, key map by hash) and swaps it in with `atomic.Pointer`. Request handlers read the pointer without locks. If a request fails, the old snapshot stays in use and the goroutine retries after a short backoff.
@@ -449,7 +458,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | `redis` | 6379 | Rate-limit state |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
 | `gateway` | 8080 (host 8081) | Public entry point. Mapped to 8081 on the host because another local app already uses 127.0.0.1:8080 |
-| `mock-backend` | 9000 | Echoes requests so there is something to proxy to |
+| `mock-backend` | 9000 | Echoes requests so there is something to proxy to; `?delay_ms=N` answers late, to see a `504` |
 | `dashboard` | 5173 | Admin UI (v2) |
 
 **Environment variables**
@@ -518,7 +527,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 - [x] Go module, `main.go`, graceful shutdown, `/health`
 - [x] Config poller and atomic snapshot store
 - [x] Route matching by longest prefix and method
-- [ ] Reverse proxy with per-route timeout, 502 and 504 handling
+- [x] Reverse proxy with per-route timeout, 502 and 504 handling
 - [ ] Request ID, recover and logger middleware
 - [ ] API key auth middleware with 401 and 403
 - [ ] Unit tests for matching and auth
