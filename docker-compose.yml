@@ -86,6 +86,29 @@ services:
       timeout: 3s
       retries: 10
 
+  # End-to-end tests (step 4.3). In the "test" profile, so `docker compose up`
+  # never starts it. Run with:  docker compose run --rm e2e
+  # It waits for the stack to be healthy (starting it if needed), then plays
+  # the MVP story against the real services and cleans up its own data.
+  e2e:
+    build: ./e2e
+    profiles: ["test"]
+    # Only the admin login, nothing else from .env.
+    environment:
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+    volumes:
+      - ./e2e:/e2e
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      mock-backend:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   # dashboard (5173) is added in v2.
 
 volumes:
