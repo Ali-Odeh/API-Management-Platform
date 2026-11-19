@@ -53,6 +53,7 @@ func logRequest(log *slog.Logger, r *http.Request, info *reqctx.Info, sw *status
 		slog.String("route_id", info.RouteID),
 		slog.String("consumer_id", info.ConsumerID),
 		slog.String("key_id", info.KeyID),
+		slog.String("ratelimit", info.RateLimit),
 		slog.Int("status", sw.finalStatus()),
 		slog.Float64("latency_ms", millis(latency)),
 		slog.Float64("upstream_ms", millis(info.Upstream)),

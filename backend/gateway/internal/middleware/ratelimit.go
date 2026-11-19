@@ -1,0 +1,111 @@
+package middleware
+
+import (
+	"context"
+	"log/slog"
+	"math"
+	"net/http"
+	"strconv"
+	"sync/atomic"
+	"time"
+
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
+)
+
+// Values of the request log's "ratelimit" field.
+const (
+	RateLimitOK          = "ok"
+	RateLimitLimited     = "limited"
+	RateLimitUnavailable = "unavailable" // Redis did not answer; the request went through
+)
+
+// Rate-limit headers (the X- names GitHub and Kong use).
+const (
+	LimitHeader     = "X-RateLimit-Limit"
+	RemainingHeader = "X-RateLimit-Remaining"
+)
+
+// At most one "Redis unavailable" warning per this interval: an outage at
+// 1,000 requests/s must not write 1,000 log lines per second.
+const unavailableWarnEvery = 10 * time.Second
+
+// Allower is what the rate-limit layer needs. *ratelimit.Limiter fits it;
+// tests pass a fake, so they need no Redis.
+type Allower interface {
+	Allow(ctx context.Context, consumerID string, limitPerMin int) (ratelimit.Result, error)
+}
+
+// RateLimit runs after Auth and spends one token of the consumer's bucket:
+//
+//	budget left  → on to the backend, with X-RateLimit-Limit / -Remaining
+//	budget empty → 429 rate_limit_exceeded, with Retry-After (seconds)
+//	Redis down   → on to the backend anyway (fail open), warning in the log
+//
+// Public routes have no consumer and are not limited. Requests refused by
+// Auth (401/403) never get here, so they cost no budget.
+func RateLimit(limiter Allower, log *slog.Logger) Middleware {
+	warner := &throttledWarner{log: log, every: unavailableWarnEvery, now: time.Now}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key, ok := consumerFrom(r.Context())
+			if !ok {
+				next.ServeHTTP(w, r) // public route: nobody to count
+				return
+			}
+			info := reqctx.From(r.Context())
+
+			res, err := limiter.Allow(r.Context(), key.ConsumerID, key.RateLimitPerMin)
+			if err != nil {
+				// A broken limiter must not take the whole API down.
+				info.RateLimit = RateLimitUnavailable
+				warner.warn(err)
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			h := w.Header()
+			h.Set(LimitHeader, strconv.Itoa(res.Limit))
+			h.Set(RemainingHeader, strconv.Itoa(res.Remaining))
+			if !res.Allowed {
+				info.RateLimit = RateLimitLimited
+				h.Set("Retry-After", strconv.Itoa(retryAfterSeconds(res.RetryAfter)))
+				respond.Error(w, http.StatusTooManyRequests, "rate_limit_exceeded")
+				return
+			}
+			info.RateLimit = RateLimitOK
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// retryAfterSeconds turns the wait into whole seconds for Retry-After,
+// rounded up (retrying early would only be refused again), at least 1.
+func retryAfterSeconds(d time.Duration) int {
+	return max(1, int(math.Ceil(d.Seconds())))
+}
+
+// throttledWarner logs a warning at most once per interval and counts the
+// ones it held back. Many request goroutines call it at once, so it uses
+// atomics instead of a lock.
+type throttledWarner struct {
+	log     *slog.Logger
+	every   time.Duration
+	now     func() time.Time // replaced in tests
+	last    atomic.Int64     // time of the last warning, Unix nanoseconds
+	skipped atomic.Int64     // warnings held back since then
+}
+
+func (t *throttledWarner) warn(err error) {
+	now := t.now().UnixNano()
+	last := t.last.Load()
+	// Too soon, or another goroutine is logging this round: just count it.
+	if now-last < int64(t.every) || !t.last.CompareAndSwap(last, now) {
+		t.skipped.Add(1)
+		return
+	}
+	t.log.Warn("rate limiter unavailable, letting requests through (fail open)",
+		"error", err.Error(), "skipped_warnings", t.skipped.Swap(0))
+}

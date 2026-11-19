@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"log/slog"
@@ -74,9 +75,20 @@ func Auth(log *slog.Logger) Middleware {
 			}
 
 			r.Header.Set(ConsumerIDHeader, key.ConsumerID)
-			next.ServeHTTP(w, r)
+			// The next layers (the rate limit) need the consumer and its limit.
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), consumerKey{}, *key)))
 		})
 	}
+}
+
+// consumerKey is the context key for the authenticated consumer's key entry.
+type consumerKey struct{}
+
+// consumerFrom returns the key entry auth accepted for this request; ok is
+// false on public routes, where nobody is authenticated.
+func consumerFrom(ctx context.Context) (key config.Key, ok bool) {
+	key, ok = ctx.Value(consumerKey{}).(config.Key)
+	return key, ok
 }
 
 // authenticate finds the key in the snapshot. status is 0 when the request
