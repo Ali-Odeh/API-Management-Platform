@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 )
 
 type staticSource struct{ snap *config.Snapshot }
@@ -203,5 +205,32 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 
 	for e := range errs {
 		t.Errorf("bad answer during config changes: %s", e)
+	}
+}
+
+// The gateway's own work per request, without any network: request ID,
+// logger (real JSON, written to nowhere), recover, router, auth, then a
+// backend that answers at once. Run by hand:
+//
+//	go test -run=^$ -bench=. -benchmem ./cmd/gateway
+func BenchmarkAPIHandlerChain(b *testing.B) {
+	snap := &config.Snapshot{
+		Version: 1,
+		Routes:  []config.Route{{ID: "r1", PathPrefix: "/v1/orders", Methods: []string{"GET"}, AuthRequired: true}},
+		Keys:    map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
+	}
+	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	// The same chain as apiHandler, with an instant backend instead of the
+	// forwarder, so only the gateway's own cost is measured.
+	instant := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	chain := middleware.Chain(
+		proxy.NewRouter(staticSource{snap}, middleware.Auth(log)(instant)),
+		middleware.RequestID, middleware.Logger(log), middleware.Recover(log),
+	)
+
+	for b.Loop() {
+		req := httptest.NewRequest("GET", "/v1/orders/7", nil)
+		req.Header.Set("X-API-Key", testKey)
+		chain.ServeHTTP(httptest.NewRecorder(), req)
 	}
 }

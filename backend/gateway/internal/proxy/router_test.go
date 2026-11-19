@@ -34,6 +34,7 @@ func TestRouterAnswersItself(t *testing.T) {
 		{name: "encoded dot-dot", snap: loaded, method: "GET", path: "/v1/orders/%2e%2e/admin", wantStatus: 400, wantError: "invalid_path"},
 		{name: "encoded slash and dot-dot", snap: loaded, method: "GET", path: "/v1/orders/..%2fadmin", wantStatus: 400, wantError: "invalid_path"},
 		{name: "encoded dot segment", snap: loaded, method: "GET", path: "/v1/orders/%2e/7", wantStatus: 400, wantError: "invalid_path"},
+		{name: "encoded double slash (found by fuzzing)", snap: loaded, method: "GET", path: "/%2F", wantStatus: 400, wantError: "invalid_path"},
 		{name: "unclean path checked before config", snap: nil, method: "GET", path: "/v1/%2e%2e/x", wantStatus: 400, wantError: "invalid_path"},
 	}
 
@@ -101,6 +102,8 @@ func TestIsCleanPath(t *testing.T) {
 		"v1/orders":           false, // not absolute
 		"":                    false,
 		"/v1/orders/../../x/": false,
+		"//":                  false, // the root plus a slash is an empty segment (found by fuzzing)
+
 	}
 	for p, want := range tests {
 		if got := isCleanPath(p); got != want {

@@ -75,7 +75,9 @@ func isCleanPath(p string) bool {
 		return false
 	}
 	clean := path.Clean(p)
-	return p == clean || p == clean+"/"
+	// "/" + "/" is "//": an empty segment, not a trailing slash (found by
+	// FuzzIsCleanPath).
+	return p == clean || (clean != "/" && p == clean+"/")
 }
 
 // Match is what the router found for a request. Later steps read it with
