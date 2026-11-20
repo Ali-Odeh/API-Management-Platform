@@ -12,7 +12,7 @@ add fields):
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, func
+from sqlalchemy import DateTime, FetchedValue, ForeignKey, func
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 
@@ -22,10 +22,13 @@ class UUIDPrimaryKeyMixin:
 
 class TimestampMixin:
     # server_default: Postgres fills it in on INSERT.
-    # onupdate: SQLAlchemy sets it again on every UPDATE through the ORM.
+    # server_onupdate: the `set_updated_at` trigger sets it on every UPDATE that
+    # changes the row, also for bulk statements and plain SQL, which the ORM's
+    # own `onupdate` never saw. FetchedValue tells SQLAlchemy the database owns
+    # the value, so crud reads it back (db.refresh) after a change.
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), server_default=func.now(), server_onupdate=FetchedValue()
     )
 
 
