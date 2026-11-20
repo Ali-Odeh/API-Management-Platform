@@ -336,7 +336,7 @@ erDiagram
 | Table | Rule |
 | --- | --- |
 | `workspaces` | `slug` unique (`varchar(50)`, as today), CHECK `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$` and 3–50 chars (a valid DNS label), immutable; reserved slugs refused with 422: `www`, `api`, `app`, `admin`, `platform`, `portal`, `auth`, `login`, `mail`, `status`, `docs`, `static`, `internal`, `gateway`, `health`; `status` CHECK in (`active`, `suspended`, `deleted`, `purged`); limit columns NULL or > 0 |
-| `users` | `auth_user_id` unique, NULL until the person's first request links it (MT.1); `email` unique and always stored lowercase, CHECK `email = lower(email)` |
+| `users` | `auth_user_id` unique; NULL only for a row made before its GoTrue account was resolved (the migrated MVP admin, until startup links it); `email` unique and always stored lowercase, CHECK `email = lower(email)` |
 | `workspace_members` | unique (`workspace_id`, `user_id`); `role` CHECK in (`owner`, `api_admin`, `viewer`); index on `user_id` (for "my workspaces") |
 | `services` | unique (`workspace_id`, `name`); unique (`id`, `workspace_id`) as the target of composite FKs; `lb_algorithm` CHECK in (`round_robin`); positive health-check numbers |
 | `service_targets` | FK (`service_id`, `workspace_id`) → `services` (`id`, `workspace_id`), ON DELETE CASCADE; unique (`service_id`, `url`); `weight` 1–1000 |
@@ -369,7 +369,7 @@ The agent writes the Alembic migrations to match this exactly; column lengths an
 | Table | Columns | Notes |
 | --- | --- | --- |
 | `workspaces` | `name`, `slug` (unique), `status` (`active`, `suspended`, `deleted`, `purged`), `status_reason`, `deleted_at`, `purge_after`, `rate_limit_per_min`, `max_concurrent`, `max_services`, `max_routes`, `max_consumers` | `slug` is immutable and never reused (it is the gateway subdomain). Limit columns are nullable: NULL = the platform default. `default` can't be suspended or deleted |
-| `users` | `auth_user_id` (unique, GoTrue's `sub`), `email`, `is_platform_admin`, `is_active` | Replaces `admins`. Created just in time on the first request with a new GoTrue JWT; a row that already exists for the token's email (the migrated admin, the first Platform Admin, or an account GoTrue made again) is linked instead, keeping its rights and `is_active`. Not tenant data: no `workspace_id` |
+| `users` | `auth_user_id` (unique, GoTrue's `sub`), `email`, `is_platform_admin`, `is_active` | Replaces `admins`. Created just in time on the first request with a new GoTrue JWT and bound to that account's id for good. A row is **never** linked by a token's email: a token from another account whose email a row already holds gets `403 account_conflict`. Rows made before their first login are linked only through GoTrue's admin API (exact email): the Platform Admin at startup, and anyone being disabled or enabled. Not tenant data: no `workspace_id` |
 | `workspace_members` | `workspace_id` (FK), `user_id` (FK), `role` (`owner`, `api_admin`, `viewer`), `added_by` | Unique on (`workspace_id`, `user_id`). One person can be a member of several workspaces with different roles |
 | `services` | `workspace_id` (FK), `name`, `timeout_ms` (default 5000), `is_active`, `lb_algorithm` (`round_robin`), `hc_path` (default `/health`), `hc_interval_s` (10), `hc_unhealthy_threshold` (3), `hc_healthy_threshold` (2), `passive_failures` (5), `passive_eject_s` (30) | Unique on (`workspace_id`, `name`). `upstream_url` moved to `service_targets` |
 | `service_targets` | `workspace_id` (FK), `service_id` (FK), `url`, `weight` (1–1000, default 100), `is_active` | Unique on (`service_id`, `url`). At least one active target for a service to be routable |
@@ -422,7 +422,7 @@ The admin API lives under `/api/v1`. Every call carries a **GoTrue access token*
 
 **How a request is authorized**
 
-1. **Who:** verify the GoTrue JWT (signature, expiry, audience `authenticated`, a UUID `sub` and an email). Missing or invalid → `401`. The `users` row is found by `sub`, or created just in time from the token's claims. `users.is_active = false` → `403 user_disabled`.
+1. **Who:** verify the GoTrue JWT (signature, expiry, audience `authenticated`, a UUID `sub` and an email). Missing or invalid → `401`. The `users` row is found by `sub`, or created just in time from the token's claims (`403 account_conflict` if another account's row holds that email). `users.is_active = false` → `403 user_disabled`.
 2. **Which workspace and which role:** one query resolves the slug and the caller's membership. Unknown workspace, a deleted one, or not a member → `404` (it doesn't reveal that the workspace exists). The Platform Admin passes this step for every workspace.
 3. **May they:** the endpoint declares a permission, e.g. `Depends(require_permission("services:write"))`. Not allowed → `403`. A suspended workspace refuses every write with `403 workspace_suspended`.
 
@@ -439,7 +439,7 @@ Roles are ordered `owner > api_admin > viewer`. Each endpoint checks a permissio
 | `audit:read` | | ✅ | ✅ |
 | `members:write`, `workspace:write`, `workspace:delete` | | | ✅ |
 
-The **Platform Admin** (`users.is_platform_admin`) may do everything in every workspace, plus the platform endpoints. Platform endpoints require MFA: a token without `aal: "aal2"` → `403 mfa_required`; anyone else → `403 platform_admin_required`. A 403 caused by the account carries a short code as `detail` (`user_disabled`, `mfa_required`, `platform_admin_required`) so the dashboard can act on it.
+The **Platform Admin** (`users.is_platform_admin`) may do everything in every workspace, plus the platform endpoints. Platform endpoints require MFA: a token without `aal: "aal2"` → `403 mfa_required`; anyone else → `403 platform_admin_required`. A 403 caused by the account carries a short code as `detail` (`user_disabled`, `account_conflict`, `mfa_required`, `platform_admin_required`) so the dashboard can act on it.
 
 **Endpoints**
 
@@ -469,7 +469,7 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | DELETE | `/api/v1/workspaces/{slug}/keys/{id}` | `keys:write` | Revoke a key |
 | GET | `/api/v1/workspaces/{slug}/audit-events` | `audit:read` | The workspace's audit log |
 | GET | `/api/v1/audit-events` | Platform Admin | All audit events |
-| PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}`; also bans or unbans them in GoTrue. Disabling yourself → `409`; GoTrue unreachable → `502` and nothing changes |
+| PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}`; also bans or unbans them in GoTrue (an account not linked yet is found by exact email). The row is locked across the GoTrue call. Disabling yourself → `409`. GoTrue failing or timing out → `502` with the safe side kept: a disable stays (repeat to finish the ban), an enable isn't made |
 | GET | `/internal/config` | internal token | Config for the gateway |
 | GET | `/health` | none | Liveness |
 
@@ -877,7 +877,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | `postgres` | 5432 (host 5434) | Databases `apim` (ours) and `auth` (GoTrue's). Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
 | `auth-db-init` | — | One-shot job before GoTrue starts (MT): creates GoTrue's login (`gotrue`), the `auth` database and schema, and the `postgres` role GoTrue's migrations expect; safe to repeat |
 | `auth` | 9999 | GoTrue (MT, pinned `v2.197.0`): login, MFA, refresh, invitations, recovery |
-| `mailpit` | 1025 (SMTP), 8025 (UI) | Catches every email locally and in CI (MT) |
+| `mailpit` | 1025 (SMTP), 8025 (UI, bound to 127.0.0.1) | Catches every email locally and in CI (MT); its inbox holds invitation and reset links, so it isn't reachable from the network |
 | `redis` | 6379 | Rate-limit state |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
 | `gateway` | 8080 (host 8081) | Public entry point. Mapped to 8081 on the host because another local app already uses 127.0.0.1:8080 |
@@ -893,7 +893,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Control plane | `GOTRUE_URL` | `http://auth:9999` |
 | Control plane | `GOTRUE_JWT_SECRET` | the secret GoTrue signs with, to verify its tokens (same value as GoTrue's) |
 | Control plane | `GOTRUE_SERVICE_ROLE_KEY` | token for GoTrue's admin API (invite, ban, create user); a secret |
-| Control plane | `PLATFORM_ADMIN_EMAIL` | the first Platform Admin, created in GoTrue at startup if missing |
+| Control plane | `PLATFORM_ADMIN_EMAIL` | the first Platform Admin: at startup looked up in GoTrue (admin API), created or invited only if missing (a pending invitation is never resent), and its row linked to that account |
 | Control plane | `PLATFORM_ADMIN_PASSWORD` | optional: that account's first password (12+ characters); empty → GoTrue emails an invitation instead. Never overwrites an existing account's password |
 | Control plane | `UPSTREAM_ALLOW` | `mock-backend` locally and in CI; empty in production |
 | Control plane | `WORKSPACE_RATE_LIMIT_PER_MIN`, `WORKSPACE_MAX_CONCURRENT` | defaults `6000`, `200` |
