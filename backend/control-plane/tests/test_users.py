@@ -349,6 +349,34 @@ async def test_unlinked_account_is_found_and_banned(
     assert waiting.auth_user_id == account
 
 
+@pytest.mark.parametrize("enable", [False, True], ids=["disable", "enable"])
+async def test_failed_lookup_of_an_unlinked_account_keeps_the_safe_side(
+    client: AsyncClient,
+    db: AsyncSession,
+    mfa_headers: Headers,
+    gotrue: FakeGoTrue,
+    enable: bool,
+) -> None:
+    # The row isn't linked yet, and finding its GoTrue account fails: same
+    # rule as a failed ban. A disable still closes the API; an enable isn't made.
+    waiting = await make_user(db, email="later@example.com", linked=False, is_active=not enable)
+    account = gotrue.add_account("later@example.com")
+    gotrue.lookup_failing = True
+
+    r = await client.patch(f"{USERS}/{waiting.id}", json={"is_active": enable}, headers=mfa_headers)
+
+    assert r.status_code == 502
+    assert r.json() == {"detail": "Auth service unavailable" if enable else DISABLED_NOT_BANNED}
+    await db.refresh(waiting)
+    assert waiting.is_active is False and waiting.auth_user_id is None
+    assert gotrue.ban_calls == []
+
+    gotrue.lookup_failing = False  # a retry finds, links and bans or unbans
+    r = await client.patch(f"{USERS}/{waiting.id}", json={"is_active": enable}, headers=mfa_headers)
+    assert r.status_code == 200 and r.json()["is_active"] is enable
+    assert (account in gotrue.banned) is (not enable)
+
+
 async def test_user_without_a_gotrue_account_is_disabled_here_only(
     client: AsyncClient, db: AsyncSession, mfa_headers: Headers, gotrue: FakeGoTrue
 ) -> None:

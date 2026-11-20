@@ -175,9 +175,10 @@ async def update_user(
 
     The row stays locked until the end, so parallel changes to one person
     run one after the other and GoTrue ends in the same state as the row.
-    When GoTrue fails (or times out, maybe after acting), the row keeps the
-    safe side: a disable is kept (the API is closed at once; retrying
-    finishes the ban), an enable is not made (retrying finishes it).
+    When any GoTrue call fails (finding the account or banning it, or a
+    timeout, maybe after GoTrue acted), the row keeps the safe side: a
+    disable is kept (the API is closed at once; retrying finishes the ban),
+    an enable is not made (retrying finishes it).
     """
     user = await get_user(db, user_id, lock=True)
     if data.is_active is None:  # nothing sent: nothing to change
@@ -188,8 +189,8 @@ async def update_user(
 
     if not data.is_active:
         user.is_active = False
-    auth_user_id = await _linked_account(gotrue, user)
     try:
+        auth_user_id = await _linked_account(gotrue, user)
         if auth_user_id is not None:
             # Sent even when nothing changed, so a retry brings GoTrue in step.
             await gotrue.set_banned(auth_user_id, banned=not data.is_active)

@@ -60,6 +60,7 @@ class FakeGoTrue:
         self.banned: set[uuid.UUID] = set()
         self.ban_calls: list[tuple[uuid.UUID, bool]] = []
         self.failing = False  # True: every call fails like an unreachable GoTrue
+        self.lookup_failing = False  # True: only find_user_by_email fails
         # True: set_banned acts, then fails, like a timeout after GoTrue applied it.
         self.fail_after_ban = False
         self.ban_delay = 0.0  # seconds set_banned takes, so parallel calls overlap
@@ -72,6 +73,8 @@ class FakeGoTrue:
 
     async def find_user_by_email(self, email: str) -> uuid.UUID | None:
         self._maybe_fail()
+        if self.lookup_failing:
+            raise UpstreamError("Auth service unavailable")
         return self.accounts.get(email)
 
     async def create_user(self, email: str, password: str) -> uuid.UUID | None:
