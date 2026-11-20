@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 20, 2026 · **Current step:** MT designed (decisions in [MT_ROLES_DECISIONS.md](MT_ROLES_DECISIONS.md)); next: MT.1
+**Last updated:** Nov 21, 2026 · **Current step:** MT.1 done (GoTrue login, `users`, Platform Admin with MFA); next: MT.2
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0/12 | ⏳ Next |
+| MT: Multi-tenancy and login | ✅⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 1/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 333 passing (about 35–65 s) |
+| Tests | 451 passing (about 85–125 s); no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **15 stories pass in about 4 s** (`docker compose run --rm e2e`); fresh stack healthy in 17 s; nothing left behind |
+| End-to-end tests | **21 stories pass in about 6 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed, the test person reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -128,7 +128,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | # | Step | Status |
 | --- | --- | --- |
-| MT.1 | Identity: GoTrue, `users`, JWT verification, Platform Admin with MFA | ⬜ |
+| MT.1 | Identity: GoTrue, `users`, JWT verification, Platform Admin with MFA | ✅ |
 | MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ⬜ |
 | MT.3 | Audit log | ⬜ |
 | MT.4 | Members and owners | ⬜ |
@@ -159,6 +159,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - `set_updated_at` trigger on every table (today `updated_at` is set only by the ORM)
 
 **Done when:** the Platform Admin logs in through GoTrue (password, then TOTP) and calls the admin API with GoTrue's token; a disabled user is refused on the next request and can't refresh; all existing tests pass with GoTrue tokens; e2e logs in through GoTrue.
+
+**Status:** ✅ Done (Nov 21). Commits `04f3aab` (`updated_at` trigger), `b1a984f` (GoTrue and Mailpit in the stack), `17bccf1` (GoTrue login, `users` replace `admins`, disabling users), then the docs update. Every "done when" item is covered by e2e stories (`e2e/test_identity.py`) and unit tests. GoTrue `v2.197.0`, Mailpit `v1.33.0`. Choices made while building are in the decisions log (MT.1 rows).
 
 ### MT.2 Workspaces and roles [0, 2, 5, 13]
 
@@ -409,3 +411,15 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 19 | 4.5 | Diagrams in Mermaid inside the README | GitHub renders them; they are edited like code; checked to render in Mermaid 11 |
 | Nov 19 | 4.5 | `scripts/init-env.ps1` / `.sh` create `.env` with random secrets, never overwrite it | The quick start needs no hand-filled secrets; checked from scratch on a clean copy |
 | Nov 19 | 4.5 | Quick start for both PowerShell and bash | GitHub readers use every OS; the walkthrough stays PowerShell |
+| Nov 21 | MT.1 | `PLATFORM_ADMIN_PASSWORD` (optional) added next to `PLATFORM_ADMIN_EMAIL`: with it the account is created ready to log in; without it GoTrue sends an invitation email | The quick start, CI and e2e need a Platform Admin that can log in without reading an email; production can still leave it empty |
+| Nov 21 | MT.1 | GoTrue gets its own database login (`gotrue`, `GOTRUE_DB_PASSWORD`), made by a one-shot `auth-db-init` job; `CONNECT` on `auth` and `apim` revoked from `PUBLIC` | Least privilege: GoTrue can't open the platform's database; the job works on fresh and existing volumes (Postgres init scripts only run on a fresh one). GoTrue's migrations need a role named `postgres` and an existing `auth` schema, so the job creates both |
+| Nov 21 | MT.1 | Until MT.2, the service, route, consumer and key endpoints act on `default` and are open to **Platform Admins only**, without MFA; any other signed-in person gets `403 platform_admin_required` | There are no memberships before MT.2; the migrated admin keeps working exactly as before. No MFA there because in MT.2 they become Owner of `default`, and Owners don't need it |
+| Nov 21 | MT.1 | `users.auth_user_id` is nullable; a token whose `sub` is unknown is linked by email to an existing row (keeping its rights and `is_active`), else a new row with no rights is made | The migrated admin and the first Platform Admin exist before their first login, and an account GoTrue makes again for the same email stays the same person (a disabled one stays disabled) |
+| Nov 21 | MT.1 | Token checks: HS256 signature, `exp`, `aud = authenticated`, a UUID `sub` and an email; `role` is not checked | GoTrue v2.197 leaves `role` empty (`GOTRUE_JWT_DEFAULT_GROUP_NAME` is deprecated); the audience alone keeps the service-role key (no `aud`) from passing as a person, which a guard test checks on every endpoint |
+| Nov 21 | MT.1 | 403 details are short codes: `user_disabled`, `mfa_required`, and the new `platform_admin_required` | The dashboard can act on them (e.g. start the MFA step) without parsing sentences |
+| Nov 21 | MT.1 | `PATCH /api/v1/users/{id}`: `409` when a Platform Admin disables themselves; `502` (nothing changed) when GoTrue fails; the row is written first and committed only after GoTrue's ban or unban | Disabling yourself would lock the platform out; our row and GoTrue never disagree after a failure. A person who never logged in has no GoTrue account yet: only our row changes, and they are refused on arrival |
+| Nov 21 | MT.1 | GoTrue rate limits: `/token` 30 calls per 5 minutes per IP (default 150), MFA challenge and verify 10 per minute (default 15) | "Tightened sign-in rate limits" (PLAN.md section 9) with numbers that still leave room for e2e and k6 runs |
+| Nov 21 | MT.1 | `set_updated_at` moves `updated_at` only when the row really changed (`ROW(NEW.*) IS DISTINCT FROM ROW(OLD.*)`); the ORM now treats the column as database-owned (`server_onupdate`) | Writing the same values isn't a change; a guard test checks every table with `updated_at` has the trigger |
+| Nov 21 | MT.1 | e2e: the Platform Admin's MFA factor is enrolled by the tests (named `e2e`) and removed at the end; the test person `e2e-person@example.test` is reused by every run; e2e gets `GOTRUE_SERVICE_ROLE_KEY` only to set up and clean up these accounts | GoTrue lets a person hold several factors, so one the developer enrolled is untouched; there is no endpoint to delete a user, so a fixed address keeps runs from piling up rows. TOTP codes are computed in 6 lines (RFC 6238) instead of a new dependency |
+| Nov 21 | MT.1 | CI's e2e job builds `.env` with `scripts/init-env.sh` | The service-role key must be a JWT signed with that run's secret; the script makes one and gets tested on every push |
+| Nov 21 | MT.1 | Dependencies: `argon2-cffi` removed; `httpx` (already a test dependency) is now a runtime one, for the GoTrue admin client | No password hashing left in the control plane; httpx is async and already used by the tests |

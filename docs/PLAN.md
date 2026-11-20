@@ -336,7 +336,7 @@ erDiagram
 | Table | Rule |
 | --- | --- |
 | `workspaces` | `slug` unique (`varchar(50)`, as today), CHECK `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$` and 3–50 chars (a valid DNS label), immutable; reserved slugs refused with 422: `www`, `api`, `app`, `admin`, `platform`, `portal`, `auth`, `login`, `mail`, `status`, `docs`, `static`, `internal`, `gateway`, `health`; `status` CHECK in (`active`, `suspended`, `deleted`, `purged`); limit columns NULL or > 0 |
-| `users` | `auth_user_id` unique; `email` unique and always stored lowercase (as `admins.email` today) |
+| `users` | `auth_user_id` unique, NULL until the person's first request links it (MT.1); `email` unique and always stored lowercase, CHECK `email = lower(email)` |
 | `workspace_members` | unique (`workspace_id`, `user_id`); `role` CHECK in (`owner`, `api_admin`, `viewer`); index on `user_id` (for "my workspaces") |
 | `services` | unique (`workspace_id`, `name`); unique (`id`, `workspace_id`) as the target of composite FKs; `lb_algorithm` CHECK in (`round_robin`); positive health-check numbers |
 | `service_targets` | FK (`service_id`, `workspace_id`) → `services` (`id`, `workspace_id`), ON DELETE CASCADE; unique (`service_id`, `url`); `weight` 1–1000 |
@@ -347,7 +347,7 @@ erDiagram
 | `config_seq` | single row: CHECK `id = 1` |
 | `audit_events` | no FK on `workspace_id` (platform rows survive purges); `actor_type` CHECK in (`user`, `platform_admin`, `system`); indexes on (`workspace_id`, `created_at` DESC) and (`created_at`); the app's database user has INSERT and SELECT only |
 | every tenant table | index on `workspace_id`; every query filters by it; the FK to `workspaces` stays ON DELETE RESTRICT (as today), so the purge job deletes children first: `api_keys`, `routes`, `service_targets`, `services`, `consumers`, `workspace_members`, the workspace's `audit_events`, `workspace_config` |
-| every table | `updated_at` is set by a `BEFORE UPDATE` trigger (`set_updated_at`), not only by the ORM's `onupdate` as today, so updates from triggers, bulk statements and SQL keep it correct |
+| every table | `updated_at` is set by a `BEFORE UPDATE` trigger (`set_updated_at`), not by the ORM, so updates from triggers, bulk statements and SQL keep it correct; it moves only when the row really changed (MT.1) |
 
 The agent writes the Alembic migrations to match this exactly; column lengths and index names are its choice.
 
@@ -369,7 +369,7 @@ The agent writes the Alembic migrations to match this exactly; column lengths an
 | Table | Columns | Notes |
 | --- | --- | --- |
 | `workspaces` | `name`, `slug` (unique), `status` (`active`, `suspended`, `deleted`, `purged`), `status_reason`, `deleted_at`, `purge_after`, `rate_limit_per_min`, `max_concurrent`, `max_services`, `max_routes`, `max_consumers` | `slug` is immutable and never reused (it is the gateway subdomain). Limit columns are nullable: NULL = the platform default. `default` can't be suspended or deleted |
-| `users` | `auth_user_id` (unique, GoTrue's `sub`), `email`, `is_platform_admin`, `is_active` | Replaces `admins`. Created just in time on the first request with a new GoTrue JWT. Not tenant data: no `workspace_id` |
+| `users` | `auth_user_id` (unique, GoTrue's `sub`), `email`, `is_platform_admin`, `is_active` | Replaces `admins`. Created just in time on the first request with a new GoTrue JWT; a row that already exists for the token's email (the migrated admin, the first Platform Admin, or an account GoTrue made again) is linked instead, keeping its rights and `is_active`. Not tenant data: no `workspace_id` |
 | `workspace_members` | `workspace_id` (FK), `user_id` (FK), `role` (`owner`, `api_admin`, `viewer`), `added_by` | Unique on (`workspace_id`, `user_id`). One person can be a member of several workspaces with different roles |
 | `services` | `workspace_id` (FK), `name`, `timeout_ms` (default 5000), `is_active`, `lb_algorithm` (`round_robin`), `hc_path` (default `/health`), `hc_interval_s` (10), `hc_unhealthy_threshold` (3), `hc_healthy_threshold` (2), `passive_failures` (5), `passive_eject_s` (30) | Unique on (`workspace_id`, `name`). `upstream_url` moved to `service_targets` |
 | `service_targets` | `workspace_id` (FK), `service_id` (FK), `url`, `weight` (1–1000, default 100), `is_active` | Unique on (`service_id`, `url`). At least one active target for a service to be routable |
@@ -422,7 +422,7 @@ The admin API lives under `/api/v1`. Every call carries a **GoTrue access token*
 
 **How a request is authorized**
 
-1. **Who:** verify the GoTrue JWT (signature, expiry, audience). Missing or invalid → `401`. The `users` row is found by `sub`, or created just in time from the token's claims. `users.is_active = false` → `403 user_disabled`.
+1. **Who:** verify the GoTrue JWT (signature, expiry, audience `authenticated`, a UUID `sub` and an email). Missing or invalid → `401`. The `users` row is found by `sub`, or created just in time from the token's claims. `users.is_active = false` → `403 user_disabled`.
 2. **Which workspace and which role:** one query resolves the slug and the caller's membership. Unknown workspace, a deleted one, or not a member → `404` (it doesn't reveal that the workspace exists). The Platform Admin passes this step for every workspace.
 3. **May they:** the endpoint declares a permission, e.g. `Depends(require_permission("services:write"))`. Not allowed → `403`. A suspended workspace refuses every write with `403 workspace_suspended`.
 
@@ -439,7 +439,7 @@ Roles are ordered `owner > api_admin > viewer`. Each endpoint checks a permissio
 | `audit:read` | | ✅ | ✅ |
 | `members:write`, `workspace:write`, `workspace:delete` | | | ✅ |
 
-The **Platform Admin** (`users.is_platform_admin`) may do everything in every workspace, plus the platform endpoints. Platform endpoints require MFA: a token without `aal: "aal2"` → `403 mfa_required`.
+The **Platform Admin** (`users.is_platform_admin`) may do everything in every workspace, plus the platform endpoints. Platform endpoints require MFA: a token without `aal: "aal2"` → `403 mfa_required`; anyone else → `403 platform_admin_required`. A 403 caused by the account carries a short code as `detail` (`user_disabled`, `mfa_required`, `platform_admin_required`) so the dashboard can act on it.
 
 **Endpoints**
 
@@ -469,7 +469,7 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | DELETE | `/api/v1/workspaces/{slug}/keys/{id}` | `keys:write` | Revoke a key |
 | GET | `/api/v1/workspaces/{slug}/audit-events` | `audit:read` | The workspace's audit log |
 | GET | `/api/v1/audit-events` | Platform Admin | All audit events |
-| PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}` |
+| PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}`; also bans or unbans them in GoTrue. Disabling yourself → `409`; GoTrue unreachable → `502` and nothing changes |
 | GET | `/internal/config` | internal token | Config for the gateway |
 | GET | `/health` | none | Liveness |
 
@@ -875,7 +875,8 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Service | Port | Purpose |
 | --- | --- | --- |
 | `postgres` | 5432 (host 5434) | Databases `apim` (ours) and `auth` (GoTrue's). Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
-| `auth` | 9999 | GoTrue (MT): login, MFA, refresh, invitations, recovery |
+| `auth-db-init` | — | One-shot job before GoTrue starts (MT): creates GoTrue's login (`gotrue`), the `auth` database and schema, and the `postgres` role GoTrue's migrations expect; safe to repeat |
+| `auth` | 9999 | GoTrue (MT, pinned `v2.197.0`): login, MFA, refresh, invitations, recovery |
 | `mailpit` | 1025 (SMTP), 8025 (UI) | Catches every email locally and in CI (MT) |
 | `redis` | 6379 | Rate-limit state |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
@@ -893,17 +894,18 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Control plane | `GOTRUE_JWT_SECRET` | the secret GoTrue signs with, to verify its tokens (same value as GoTrue's) |
 | Control plane | `GOTRUE_SERVICE_ROLE_KEY` | token for GoTrue's admin API (invite, ban, create user); a secret |
 | Control plane | `PLATFORM_ADMIN_EMAIL` | the first Platform Admin, created in GoTrue at startup if missing |
+| Control plane | `PLATFORM_ADMIN_PASSWORD` | optional: that account's first password (12+ characters); empty → GoTrue emails an invitation instead. Never overwrites an existing account's password |
 | Control plane | `UPSTREAM_ALLOW` | `mock-backend` locally and in CI; empty in production |
 | Control plane | `WORKSPACE_RATE_LIMIT_PER_MIN`, `WORKSPACE_MAX_CONCURRENT` | defaults `6000`, `200` |
 | Control plane | `WORKSPACE_MAX_SERVICES`, `_ROUTES`, `_CONSUMERS` | defaults `100`, `500`, `5000` |
 | Control plane | `MAX_REQUEST_BODY`, `MAX_REQUEST_BODY_CEILING` | defaults `10MB`, `100MB` |
 | Control plane | `PURGE_AFTER_DAYS`, `AUDIT_RETENTION_DAYS` | defaults `30`, `365` |
-| GoTrue | `GOTRUE_DB_DATABASE_URL` | the `auth` database |
+| GoTrue | `GOTRUE_DB_DATABASE_URL` | the `auth` database, as its own login `gotrue` (password `GOTRUE_DB_PASSWORD`), which can't open `apim` |
 | GoTrue | `GOTRUE_JWT_SECRET`, `GOTRUE_JWT_EXP` | shared with the control plane; `600` (10 minutes) |
 | GoTrue | `GOTRUE_DISABLE_SIGNUP` | `true`: joining is only by being added to a workspace |
 | GoTrue | `GOTRUE_PASSWORD_MIN_LENGTH` | `12` |
 | GoTrue | `GOTRUE_SITE_URL`, `GOTRUE_SMTP_*` | the dashboard URL; Mailpit locally |
-| GoTrue | rate-limit settings | tightened for password sign-ins |
+| GoTrue | rate-limit settings | `GOTRUE_RATE_LIMIT_TOKEN_REFRESH=30` (calls to `/token` per 5 minutes per IP; default 150), `GOTRUE_MFA_RATE_LIMIT_CHALLENGE_AND_VERIFY=10` (per minute; default 15) |
 | Gateway | `CONTROL_PLANE_URL` | `http://control-plane:8000` (required) |
 | Gateway | `INTERNAL_TOKEN` | same shared secret (required; never logged) |
 | Gateway | `REDIS_URL` | `redis://redis:6379/0` (required; `rediss://` for TLS; treated as a secret, since it may hold a password) |
@@ -980,7 +982,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 
 Each step is one self-contained piece of work that an AI agent finishes completely (code, tests, docs, logical commits) before handing back. Outcomes and done criteria for each step are in ROADMAP.md; the reasons are in MT_ROLES_DECISIONS.md (decision numbers in brackets).
 
-- [ ] MT.1 Identity: GoTrue and Mailpit, `users` replaces `admins`, JWT verification, Platform Admin with MFA, disabling users [4, 12, 13]
+- [x] MT.1 Identity: GoTrue and Mailpit, `users` replaces `admins`, JWT verification, Platform Admin with MFA, disabling users [4, 12, 13]
 - [ ] MT.2 Workspaces and roles: memberships, permissions, URLs under `/workspaces/{slug}`, isolation tests [0, 2, 5, 13]
 - [ ] MT.3 Audit log: same-transaction records for every write, guard test, audit endpoints, retention [11]
 - [ ] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]

@@ -22,11 +22,15 @@ docker compose ps
 | `gateway` | `gateway:8080` | `localhost:8081` | The Go gateway: every API call goes through it |
 | `control-plane` | `control-plane:8000` | `localhost:8000` | Admin API, Swagger at `/docs` |
 | `mock-backend` | `mock-backend:9000` | `localhost:9000` | Echo service to proxy to (`?delay_ms=` answers late) |
-| `postgres` | `postgres:5432` | `localhost:5434` | Config database (for pgAdmin / DBeaver) |
+| `auth` | `auth:9999` | `localhost:9999` | GoTrue: login, MFA, refresh, invitations |
+| `mailpit` | `mailpit:1025` (SMTP) | `localhost:8025` | Catches every email GoTrue sends (web UI) |
+| `postgres` | `postgres:5432` | `localhost:5434` | Databases `apim` (config) and `auth` (GoTrue's own), for pgAdmin / DBeaver |
 | `redis` | `redis:6379` | `localhost:6379` | Rate-limit buckets |
 
 Host ports 5434 and 8081 avoid clashes with local Postgres servers (5432,
 5433) and another app on 8080. Containers always use the inside addresses.
+A one-shot `auth-db-init` job prepares GoTrue's database on every `up` and
+exits (it shows as "Exited (0)" in `docker compose ps -a`).
 
 ```powershell
 docker compose logs -f gateway         # one JSON line per request
@@ -38,8 +42,9 @@ docker compose down -v                 # stop and delete the database volume
 
 The code is mounted into the container and uvicorn runs with `--reload`, so
 saving a `.py` file restarts the app. At start the container applies
-migrations and creates the `default` workspace and the first admin from
-`ADMIN_EMAIL` / `ADMIN_PASSWORD`.
+migrations and makes sure the `default` workspace and the first Platform
+Admin exist (in GoTrue too, from `PLATFORM_ADMIN_EMAIL` /
+`PLATFORM_ADMIN_PASSWORD`; an existing account keeps its password).
 
 ```powershell
 .\backend\control-plane\scripts\check.ps1        # ruff, mypy strict, pytest (coverage >= 90%)
@@ -48,7 +53,8 @@ docker compose exec control-plane pytest -v      # tests only
 ```
 
 Tests use their own database, `apim_test`, recreated on every run; the real
-data in `apim` is never touched. `check.ps1 -Fix` also refreshes
+data in `apim` is never touched. They need no GoTrue: they sign tokens with
+the GoTrue secret (`tests/fakes.py`) and use an in-memory fake of its admin API. `check.ps1 -Fix` also refreshes
 `backend/control-plane/openapi.json`, the committed API contract: commit its
 diff after any API change.
 
@@ -59,17 +65,44 @@ docker compose exec control-plane alembic revision --autogenerate -m "describe t
 docker compose exec control-plane alembic upgrade head
 ```
 
-Log in from PowerShell:
+Log in from PowerShell. People log in with GoTrue (`localhost:9999`), never
+with the control plane; the Platform Admin is `PLATFORM_ADMIN_EMAIL` /
+`PLATFORM_ADMIN_PASSWORD` from `.env`:
 
 ```powershell
-$body  = @{ email = "admin@example.com"; password = "<ADMIN_PASSWORD from .env>" } | ConvertTo-Json
-$token = (Invoke-RestMethod -Method Post http://localhost:8000/api/v1/auth/login -ContentType 'application/json' -Body $body).access_token
-$h     = @{ Authorization = "Bearer $token" }
-Invoke-RestMethod http://localhost:8000/api/v1/auth/me -Headers $h
+$gt    = "http://localhost:9999"
+$pw    = (Select-String -Path .env -Pattern '^PLATFORM_ADMIN_PASSWORD=(.*)').Matches.Groups[1].Value
+$login = Invoke-RestMethod -Method Post "$gt/token?grant_type=password" -ContentType application/json `
+           -Body (@{ email = "admin@example.com"; password = $pw } | ConvertTo-Json)
+$h     = @{ Authorization = "Bearer $($login.access_token)" }
+Invoke-RestMethod http://localhost:8000/api/v1/me -Headers $h
 ```
 
-In Swagger (`http://localhost:8000/docs`): call `POST /api/v1/auth/login`,
-copy `access_token`, click **Authorize** and paste it.
+That token (`aal1`, password only) opens the service, route, consumer and key
+endpoints. Platform endpoints (`/api/v1/users/...`) also need MFA (`aal2`),
+else `403 mfa_required`. Add a TOTP factor once, then step up after each
+password login:
+
+```powershell
+# Once: enroll, and add the secret (or $f.totp.uri) to an authenticator app.
+$f = Invoke-RestMethod -Method Post "$gt/factors" -Headers $h -ContentType application/json `
+       -Body '{"factor_type":"totp","friendly_name":"my phone"}'
+$f.totp.secret
+
+# After each password login: challenge, then verify the app's 6-digit code.
+$factor = (Invoke-RestMethod "$gt/user" -Headers $h).factors | Select-Object -First 1
+$c   = Invoke-RestMethod -Method Post "$gt/factors/$($factor.id)/challenge" -Headers $h -ContentType application/json -Body '{}'
+$mfa = Invoke-RestMethod -Method Post "$gt/factors/$($factor.id)/verify" -Headers $h -ContentType application/json `
+         -Body (@{ challenge_id = $c.id; code = "123456" } | ConvertTo-Json)
+$h   = @{ Authorization = "Bearer $($mfa.access_token)" }
+```
+
+Access tokens last 10 minutes; log in again (or use `refresh_token` with
+`grant_type=refresh_token`) after that. In Swagger (`http://localhost:8000/docs`):
+click **Authorize** and paste an access token.
+
+Emails GoTrue sends (invitations, password recovery) land in Mailpit:
+`http://localhost:8025`.
 
 Watch the gateway's long polling (two windows; `INTERNAL_TOKEN` is in `.env`):
 
@@ -122,8 +155,12 @@ go test -run=^$ -bench=. -benchmem ./internal/proxy ./internal/middleware ./cmd/
 
 ## End-to-end tests
 
-The MVP story against the real stack (15 checks, about 5 s). They run in
-their own container, create their own objects and always delete them:
+The MVP and MT stories against the real stack (21 checks, about 6 s): GoTrue
+login with password and TOTP, a disabled person locked out, then requests
+through the gateway. They run in their own container, create their own
+objects and always delete them. For MFA they enroll their own factor named
+`e2e` on the Platform Admin and remove it again, so a factor you enrolled is
+left alone; their test person `e2e-person@example.test` is reused by every run.
 
 ```powershell
 docker compose run --rm e2e
@@ -152,7 +189,7 @@ scripts.
 ## Conventions
 
 The rules the code follows (layers, errors, tests, commits) are in
-[CLAUDE.md](../CLAUDE.md), section "Code quality". In short: small steps from
-PLAN.md section 10, tests with every change, both `check.ps1` scripts green
-before a commit, and the decisions log in ROADMAP.md for anything that
-changes the plan.
+[AGENTS.md](../AGENTS.md), for people and coding agents alike. In short: one
+roadmap step at a time, tests with every change, both `check.ps1` scripts and
+the e2e tests green before handing back, and the decisions log in ROADMAP.md
+for anything that changes the plan.
