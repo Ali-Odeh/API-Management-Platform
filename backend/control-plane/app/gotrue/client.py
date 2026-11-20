@@ -37,8 +37,8 @@ class GoTrueAdmin(Protocol):
         """Create an account and email an invitation; None if the email is taken."""
         ...
 
-    async def set_banned(self, auth_user_id: uuid.UUID, *, banned: bool) -> None:
-        """Ban (no login, no refresh) or unban an account."""
+    async def set_banned(self, auth_user_id: uuid.UUID, *, banned: bool) -> bool:
+        """Ban or unban an account. Return False if it no longer exists."""
         ...
 
     async def aclose(self) -> None: ...
@@ -87,12 +87,13 @@ class GoTrueAdminClient:
     async def invite_user(self, email: str) -> uuid.UUID | None:
         return await self._create("/invite", {"email": email})
 
-    async def set_banned(self, auth_user_id: uuid.UUID, *, banned: bool) -> None:
+    async def set_banned(self, auth_user_id: uuid.UUID, *, banned: bool) -> bool:
         body = {"ban_duration": BAN_FOREVER if banned else UNBAN}
         response = await self._send("PUT", f"/admin/users/{auth_user_id}", json=body)
         # 404: the account is gone from GoTrue, so it can't log in anyway.
         if response.status_code not in (200, 404):
             raise UpstreamError(_UNAVAILABLE)
+        return response.status_code == 200
 
     async def aclose(self) -> None:
         await self._http.aclose()

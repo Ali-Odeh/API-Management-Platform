@@ -141,13 +141,34 @@ async def test_a_bound_admin_that_matches_is_quiet(
     assert not [r for r in caplog.records if r.levelname == "ERROR"]
 
 
+@pytest.mark.parametrize("replacement_exists", [True, False], ids=["mismatch", "missing"])
+async def test_unverified_binding_cannot_promote_an_existing_user(
+    db: AsyncSession, gotrue: FakeGoTrue, replacement_exists: bool
+) -> None:
+    person = await make_user(db, email="boss@example.com")
+    bound = person.auth_user_id
+    if replacement_exists:
+        gotrue.add_account(person.email)
+
+    await users_crud.ensure_platform_admin(
+        db, gotrue, email=person.email, password="a-long-password"
+    )
+
+    await db.refresh(person)
+    assert person.auth_user_id == bound
+    assert person.is_platform_admin is False
+
+
 # ---- Explicit recovery: relink_user (scripts/relink_user.py)
 
 
+@pytest.mark.parametrize("is_active", [True, False], ids=["active", "disabled"])
 async def test_relink_binds_the_account_gotrue_holds_now(
-    db: AsyncSession, gotrue: FakeGoTrue
+    db: AsyncSession, gotrue: FakeGoTrue, is_active: bool
 ) -> None:
-    admin = await make_user(db, email="boss@example.com", is_platform_admin=True)
+    admin = await make_user(
+        db, email="boss@example.com", is_platform_admin=True, is_active=is_active
+    )
     previous = admin.auth_user_id
     new = gotrue.add_account("boss@example.com")
 
@@ -156,6 +177,29 @@ async def test_relink_binds_the_account_gotrue_holds_now(
     assert (old, bound) == (previous, new)
     await db.refresh(admin)
     assert admin.auth_user_id == new and admin.is_platform_admin
+    assert admin.is_active is is_active
+    assert gotrue.ban_calls == ([] if is_active else [(new, True)])
+    assert (new in gotrue.banned) is (not is_active)
+
+
+@pytest.mark.parametrize("account_missing", [True, False], ids=["missing", "timeout"])
+async def test_relink_keeps_the_old_binding_if_gotrue_cannot_confirm_the_ban(
+    db: AsyncSession, gotrue: FakeGoTrue, account_missing: bool
+) -> None:
+    person = await make_user(db, email="boss@example.com", is_active=False)
+    previous = person.auth_user_id
+    new = gotrue.add_account(person.email)
+    gotrue.account_missing_on_ban = account_missing
+    gotrue.fail_after_ban = not account_missing
+
+    with pytest.raises(NotFoundError if account_missing else UpstreamError):
+        await users_crud.relink_user(db, gotrue, email=person.email)
+
+    assert person.auth_user_id == previous
+    await db.rollback()
+    await db.refresh(person)
+    assert person.auth_user_id == previous and not person.is_active
+    assert gotrue.ban_calls == [(new, True)]
 
 
 async def test_relink_unknown_user_or_account_changes_nothing(

@@ -100,7 +100,7 @@ async def test_other_answers_raise(response: httpx.Response) -> None:
 async def test_set_banned(banned: bool, duration: str) -> None:
     gotrue = Recorder(httpx.Response(200, json={"id": str(NEW_ID)}))
 
-    await _client(gotrue).set_banned(NEW_ID, banned=banned)
+    assert await _client(gotrue).set_banned(NEW_ID, banned=banned) is True
 
     assert gotrue.last.method == "PUT"
     assert str(gotrue.last.url) == f"http://auth:9999/admin/users/{NEW_ID}"
@@ -108,7 +108,7 @@ async def test_set_banned(banned: bool, duration: str) -> None:
 
 
 async def test_banning_an_account_gotrue_no_longer_has_is_fine() -> None:
-    await _client(Recorder(httpx.Response(404))).set_banned(NEW_ID, banned=True)
+    assert await _client(Recorder(httpx.Response(404))).set_banned(NEW_ID, banned=True) is False
 
 
 async def test_set_banned_failure_raises() -> None:

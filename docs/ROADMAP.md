@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 475 passing (about 70–125 s), including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 480 passing (about 70–125 s), including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -427,3 +427,4 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.1 | The e2e and load-test services pass `PLATFORM_ADMIN_*` and the service-role key with `:-`; the runners check them on start | Compose interpolates the whole file for every command, so `:?` there stopped `docker compose up` for an invited admin (empty password) |
 | Nov 21 | MT.1 | Mailpit's UI is bound to 127.0.0.1 | Its inbox holds invitation and password-reset links |
 | Nov 21 | MT.1 | Upgrading an MVP install: prepare the new `.env` **before** any Compose command (the new file needs the GoTrue secrets even for `down`), keeping the Postgres values and internal token from the old one and setting `PLATFORM_ADMIN_EMAIL` to the old `ADMIN_EMAIL`; keep the old file as `.env.mvp` until the stack is healthy and the admin's GoTrue login is checked (steps in DEVELOPMENT.md) | The volume keeps its original Postgres user and password; the migrated admin keeps its id and history and is linked at startup. A test upgrades a populated MVP database |
+| Nov 21 | MT.1 | Startup grants Platform Admin only after resolving a first binding or verifying the existing GoTrue UUID. Explicit relinking requires a confirmed GoTrue ban on a disabled user's replacement account before saving the binding | A binding conflict cannot promote the previous identity. A disabled user stays blocked from refreshing tokens after recovery |

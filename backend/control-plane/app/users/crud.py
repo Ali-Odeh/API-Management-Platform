@@ -105,35 +105,40 @@ async def ensure_platform_admin(
 
     Runs at every startup. A row that is already bound to a GoTrue account
     stays bound to it: startup only checks that GoTrue still gives that
-    email the same id, and logs a conflict if not (see `relink_user` for
-    the deliberate fix). Only a row without a GoTrue id (the migrated MVP
-    admin, or a new one) is linked automatically, to the account found
-    through the trusted admin API, which is created (with the password) or
-    invited (without one) only when missing: a restart never resends a
-    pending invitation, and an existing account keeps its password.
+    email the same id before granting admin rights, and logs a conflict if
+    it differs (see `relink_user` for the deliberate fix). Only a row without
+    a GoTrue id (the migrated MVP admin, or a new one) is linked automatically
+    to the account found through the trusted admin API. It is created (with
+    the password) or invited (without one) only when missing. A restart never
+    resends a pending invitation, and an existing account keeps its password.
     """
     email = normalize_email(email)
     user = await _by_email(db, email)
     if user is None:
         user = User(email=email)
         db.add(user)
-    user.is_platform_admin = True
+    else:
+        user = await get_user(db, user.id, lock=True)
 
+    found: uuid.UUID | None
     if user.auth_user_id is None:
-        user.auth_user_id = await _resolve_gotrue_account(gotrue, email, password)
+        found = await _resolve_gotrue_account(gotrue, email, password)
+        user.auth_user_id = found
     else:
         found = await gotrue.find_user_by_email(email)
-        if found != user.auth_user_id:
-            logger.error(
-                "Platform Admin %s is bound to GoTrue account %s, but GoTrue gives that "
-                "email %s. The binding is kept, so that account can't sign in. If the new "
-                "account is right, rebind on purpose: "
-                "docker compose exec control-plane python -m scripts.relink_user %s",
-                email,
-                user.auth_user_id,
-                found or "no account",
-                email,
-            )
+    if found == user.auth_user_id:
+        user.is_platform_admin = True
+    else:
+        logger.error(
+            "Platform Admin %s is bound to GoTrue account %s, but GoTrue gives that "
+            "email %s. The binding and privileges are kept. If the new account is "
+            "right, rebind on purpose: "
+            "docker compose exec control-plane python -m scripts.relink_user %s",
+            email,
+            user.auth_user_id,
+            found or "no account",
+            email,
+        )
     await db.commit()
     await db.refresh(user)
     return user
@@ -147,7 +152,8 @@ async def relink_user(
     The explicit recovery for a binding that no longer fits (e.g. GoTrue's
     database was reset and the account made again). Never automatic: an
     operator runs it on purpose (scripts/relink_user.py). The account is
-    found through the trusted admin API by exact email. Returns (old, new).
+    found through the trusted admin API by exact email. For a disabled user,
+    ban the replacement before saving its binding. Returns (old, new).
     """
     user = await _by_email(db, email)
     if user is None:
@@ -160,6 +166,8 @@ async def relink_user(
     if taken is not None and taken.id != user.id:
         raise ConflictError(f"That GoTrue account is already bound to {taken.email}")
     old = user.auth_user_id
+    if old != found and not user.is_active and not await gotrue.set_banned(found, banned=True):
+        raise NotFoundError(f"GoTrue has no account for {user.email}")
     user.auth_user_id = found
     await db.commit()
     return old, found

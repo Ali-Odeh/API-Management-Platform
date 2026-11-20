@@ -114,6 +114,10 @@ naming both ids. Once you are sure the new account is right, rebind on purpose:
 docker compose exec control-plane python -m scripts.relink_user admin@example.com
 ```
 
+For a disabled user, the command confirms the GoTrue ban on the replacement
+account before saving the new binding. If GoTrue cannot confirm the ban, the
+old binding stays in place and the command can be retried.
+
 ## Control plane (FastAPI)
 
 The code is mounted into the container and uvicorn runs with `--reload`, so
