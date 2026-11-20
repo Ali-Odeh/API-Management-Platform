@@ -102,15 +102,21 @@ func TestBucketRefills(t *testing.T) {
 	l, _ := newTestLimiter(t)
 	const limit = 600 // 10 per second: one token every 100 ms
 
-	// Empty the bucket (it refills a little while we drain it).
-	for i := 0; allow(t, l, c1, limit).Allowed; i++ {
+	// Empty the bucket (it refills a little while we drain it). The denial
+	// that ends the loop is the one to check: another call made after it
+	// could rightly be allowed, because the bucket refills continuously and
+	// the next token may arrive during that call's Redis round trip.
+	var res Result
+	for i := 0; ; i++ {
+		if res = allow(t, l, c1, limit); !res.Allowed {
+			break
+		}
 		if i > 2*limit {
 			t.Fatal("the bucket never ran empty")
 		}
 	}
-	res := allow(t, l, c1, limit)
-	if res.Allowed || res.RetryAfter > 100*time.Millisecond {
-		t.Fatalf("right after draining: %+v, want denied within 100ms", res)
+	if res.RetryAfter <= 0 || res.RetryAfter > 100*time.Millisecond {
+		t.Fatalf("right after draining: %+v, want a RetryAfter in (0, 100ms]", res)
 	}
 
 	time.Sleep(res.RetryAfter + 30*time.Millisecond)
@@ -197,11 +203,8 @@ func TestConcurrentRequestsNeverOverspend(t *testing.T) {
 	close(start)
 	wg.Wait()
 
-	// 50 per minute refills one token every 1.2 s; a slower run may earn one.
-	want := int64(limit)
-	if time.Since(began) > 1200*time.Millisecond {
-		want++
-	}
+	// 50 per minute refills one token every 1.2 s; a slow run earns one per 1.2 s.
+	want := int64(limit) + int64(time.Since(began)/(1200*time.Millisecond))
 	if got := allowed.Load(); got < limit || got > want {
 		t.Errorf("%d of %d concurrent requests allowed, want exactly %d", got, requests, limit)
 	}

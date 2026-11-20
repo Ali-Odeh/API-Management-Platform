@@ -21,6 +21,7 @@ from app.core.security import generate_api_key, hash_api_key
 from app.keys.models import KEY_PREFIX_LENGTH, ApiKey
 from app.routes.models import Route
 from app.services.models import Service
+from app.users.models import User
 from app.workspaces.models import Workspace
 
 T = TypeVar("T")
@@ -34,6 +35,15 @@ async def _save(db: AsyncSession, obj: T) -> T:
 
 async def make_workspace(db: AsyncSession, slug: str = "other") -> Workspace:
     return await _save(db, Workspace(name=slug.title(), slug=slug))
+
+
+async def make_user(
+    db: AsyncSession, email: str = "someone@test.local", *, linked: bool = True, **fields: Any
+) -> User:
+    """A person; `linked` gives them a GoTrue account id, as after a first login."""
+    if linked:
+        fields.setdefault("auth_user_id", uuid.uuid4())
+    return await _save(db, User(email=email, **fields))
 
 
 async def make_service(

@@ -17,6 +17,83 @@ services:
       timeout: 3s
       retries: 10
 
+  # One-shot job (MT.1): creates GoTrue's login, its `auth` database and the
+  # `auth` schema on the shared Postgres. Safe to repeat, so it runs on every
+  # `up`, for fresh and existing volumes alike, and exits.
+  auth-db-init:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB}
+      GOTRUE_DB_PASSWORD: ${GOTRUE_DB_PASSWORD:?set GOTRUE_DB_PASSWORD in .env}
+    command: >-
+      sh -c 'psql --quiet -v ON_ERROR_STOP=1
+      -v auth_password="$$GOTRUE_DB_PASSWORD" -v apim_db="$$PGDATABASE"
+      -f /init-db.sql'
+    volumes:
+      - ./backend/auth/init-db.sql:/init-db.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # GoTrue (Supabase Auth), MT.1: login, refresh-token rotation, MFA (TOTP),
+  # invitations and recovery. The control plane only verifies its tokens.
+  # Pinned version: an update is a deliberate change. Only the variables it
+  # uses, never the whole .env (it doesn't need the platform's database).
+  auth:
+    image: supabase/gotrue:v2.197.0
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      PORT: "9999"
+      API_EXTERNAL_URL: http://localhost:9999
+      GOTRUE_SITE_URL: http://localhost:5173   # the dashboard (FE milestone)
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://gotrue:${GOTRUE_DB_PASSWORD}@postgres:5432/auth?sslmode=disable
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:?set GOTRUE_JWT_SECRET in .env}
+      GOTRUE_JWT_EXP: "600"                   # access tokens live 10 minutes
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      # Nobody signs up: people join by being added to a workspace (MT.4).
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_PASSWORD_MIN_LENGTH: "12"
+      GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED: "true"
+      GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: "10"
+      GOTRUE_MFA_TOTP_ENROLL_ENABLED: "true"
+      GOTRUE_MFA_TOTP_VERIFY_ENABLED: "true"
+      # Brute force: /token (password sign-ins and refreshes) allows 30 calls
+      # per 5 minutes per IP address (GoTrue's default is 150), MFA challenges
+      # and verifications 10 per minute (default 15).
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: "30"
+      GOTRUE_MFA_RATE_LIMIT_CHALLENGE_AND_VERIFY: "10"
+      # Emails (invitations, recovery) all land in Mailpit locally and in CI.
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_SMTP_HOST: mailpit
+      GOTRUE_SMTP_PORT: "1025"
+      GOTRUE_SMTP_ADMIN_EMAIL: no-reply@apim.localhost
+      GOTRUE_SMTP_SENDER_NAME: API Platform
+    ports:
+      - "9999:9999"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      auth-db-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+
+  # Catches every email GoTrue sends (MT.1); web UI on http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:v1.33.0
+    ports:
+      # This machine only: the inbox holds invitation and password-reset links.
+      - "127.0.0.1:8025:8025"
+
   redis:
     image: redis:7-alpine
     ports:
@@ -39,7 +116,7 @@ services:
 
   control-plane:
     build: ./backend/control-plane
-    env_file: .env          # DATABASE_URL, JWT_SECRET, INTERNAL_TOKEN, ADMIN_*
+    env_file: .env          # DATABASE_URL, INTERNAL_TOKEN, GOTRUE_*, PLATFORM_ADMIN_*
     environment:
       # Docker Desktop on Windows doesn't pass file-change events into
       # containers, so the --reload watcher polls for changes instead.
@@ -55,6 +132,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # At startup it makes sure the first Platform Admin exists in GoTrue.
+      auth:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -64,7 +144,7 @@ services:
   gateway:
     build: ./backend/gateway
     # Only the variables the gateway uses, not the whole .env: it never needs
-    # the database password or the JWT secret (least privilege). Values come
+    # the database password or the GoTrue secrets (least privilege). Values come
     # from .env; ":?" makes `docker compose` refuse to start if one is missing.
     # No depends_on: the gateway must cope with the control plane being down
     # (it keeps retrying and serves its last config) and with Redis being
@@ -93,13 +173,21 @@ services:
   e2e:
     build: ./e2e
     profiles: ["test"]
-    # Only the admin login, nothing else from .env.
+    # The Platform Admin's login, and GoTrue's admin key to set up (and clean
+    # up) its own test user and MFA factor. Nothing else from .env.
+    # ":-" (not ":?"): Compose reads the whole file for every command, so a
+    # required value here would stop `docker compose up` too, e.g. when the
+    # Platform Admin is invited by email and PLATFORM_ADMIN_PASSWORD is empty.
+    # The runner checks them itself when it starts (e2e/conftest.py).
     environment:
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+      GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:-}
     volumes:
       - ./e2e:/e2e
     depends_on:
+      auth:
+        condition: service_healthy
       control-plane:
         condition: service_healthy
       gateway:
@@ -120,13 +208,16 @@ services:
     working_dir: /loadtest
     command: ["run", "gateway.js"]
     environment:
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      # Checked by the script's setup (see the e2e service for why not ":?").
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
       RATE: ${RATE:-300}
       DURATION: ${DURATION:-30}
     volumes:
       - ./loadtest:/loadtest
     depends_on:
+      auth:
+        condition: service_healthy
       control-plane:
         condition: service_healthy
       gateway:

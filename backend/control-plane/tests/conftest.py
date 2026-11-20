@@ -28,21 +28,19 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
-from app.auth import crud as auth_crud
-from app.auth.models import Admin
 from app.core.config import get_settings
 from app.core.db import Base, SessionLocal, driver_dsn, engine
-from app.core.security import create_access_token
 from app.gateway_config.models import ConfigVersion
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
 from app.main import app
+from app.users.models import User
 from app.workspaces.crud import get_or_create_default_workspace
 from app.workspaces.models import Workspace
-from tests.factories import make_workspace
+from tests.factories import make_user, make_workspace
+from tests.fakes import FakeGoTrue, bearer, make_token
 
 ADMIN_EMAIL = "admin@test.local"
-ADMIN_PASSWORD = "correct-horse-battery-staple"
 
 
 # ---- 2. Fresh test database, once per run
@@ -114,19 +112,33 @@ async def other_workspace(db: AsyncSession) -> Workspace:
     return await make_workspace(db, slug="other")
 
 
-@pytest.fixture
-async def admin(db: AsyncSession, workspace: Workspace) -> Admin:
-    """One admin with a known password, in the default workspace."""
-    created = await auth_crud.create_admin(
-        db, email=ADMIN_EMAIL, password=ADMIN_PASSWORD, workspace_id=workspace.id
-    )
-    await db.commit()
-    return created
+@pytest.fixture(autouse=True)
+def gotrue() -> FakeGoTrue:
+    """GoTrue's admin API in memory, wired in where the app looks for it."""
+    fake = FakeGoTrue()
+    app.state.gotrue = fake
+    return fake
 
 
 @pytest.fixture
-def auth_headers(admin: Admin) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(str(admin.id))}"}
+async def admin(db: AsyncSession, workspace: Workspace) -> User:
+    """The Platform Admin, already linked to a GoTrue account (the MVP admin's
+    successor). The `default` workspace exists too."""
+    return await make_user(db, email=ADMIN_EMAIL, is_platform_admin=True)
+
+
+@pytest.fixture
+def auth_headers(admin: User) -> dict[str, str]:
+    """The admin's GoTrue token after a password login (aal1: no MFA)."""
+    assert admin.auth_user_id is not None
+    return bearer(make_token(admin.auth_user_id, admin.email))
+
+
+@pytest.fixture
+def mfa_headers(admin: User) -> dict[str, str]:
+    """The admin's GoTrue token after password and TOTP (aal2), for platform endpoints."""
+    assert admin.auth_user_id is not None
+    return bearer(make_token(admin.auth_user_id, admin.email, aal="aal2"))
 
 
 # ---- The gateway's view: a running config provider and the internal token

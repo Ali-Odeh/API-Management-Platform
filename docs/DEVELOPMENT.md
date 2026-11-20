@@ -22,11 +22,15 @@ docker compose ps
 | `gateway` | `gateway:8080` | `localhost:8081` | The Go gateway: every API call goes through it |
 | `control-plane` | `control-plane:8000` | `localhost:8000` | Admin API, Swagger at `/docs` |
 | `mock-backend` | `mock-backend:9000` | `localhost:9000` | Echo service to proxy to (`?delay_ms=` answers late) |
-| `postgres` | `postgres:5432` | `localhost:5434` | Config database (for pgAdmin / DBeaver) |
+| `auth` | `auth:9999` | `localhost:9999` | GoTrue: login, MFA, refresh, invitations |
+| `mailpit` | `mailpit:1025` (SMTP) | `localhost:8025` | Catches every email GoTrue sends (web UI) |
+| `postgres` | `postgres:5432` | `localhost:5434` | Databases `apim` (config) and `auth` (GoTrue's own), for pgAdmin / DBeaver |
 | `redis` | `redis:6379` | `localhost:6379` | Rate-limit buckets |
 
 Host ports 5434 and 8081 avoid clashes with local Postgres servers (5432,
 5433) and another app on 8080. Containers always use the inside addresses.
+A one-shot `auth-db-init` job prepares GoTrue's database on every `up` and
+exits (it shows as "Exited (0)" in `docker compose ps -a`).
 
 ```powershell
 docker compose logs -f gateway         # one JSON line per request
@@ -34,12 +38,93 @@ docker compose down                    # stop, keep data
 docker compose down -v                 # stop and delete the database volume
 ```
 
+### Upgrading an MVP install (keep your data)
+
+Before MT.1 the admin logged in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`; now
+GoTrue does, with new secrets in `.env`. The new `docker-compose.yml` needs
+those secrets for **every** command (even `docker compose down`), so prepare
+the new `.env` first, while the old stack may still be running. Keep the
+Postgres values (the volume was created with that user and password, and
+keeps them), take the new secrets from `init-env`, and make the old admin the
+Platform Admin. The old file stays as `.env.mvp` until the upgrade is checked.
+
+1. Prepare the new settings:
+
+   ```powershell
+   Rename-Item .env .env.mvp               # the backup: keep it until step 3 passes
+   .\scripts\init-env.ps1                  # a new .env; note the printed password
+   $old  = @{}
+   Get-Content .env.mvp | Where-Object { $_ -match '^([A-Z_]+)=(.*)$' } | ForEach-Object { $old[$Matches[1]] = $Matches[2] }
+   $keep = 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DB', 'DATABASE_URL', 'INTERNAL_TOKEN'
+   $lines = Get-Content .env | ForEach-Object {
+       if ($_ -match '^([A-Z_]+)=' -and $keep -contains $Matches[1]) { "$($Matches[1])=$($old[$Matches[1]])" }
+       elseif ($_ -match '^PLATFORM_ADMIN_EMAIL=') { "PLATFORM_ADMIN_EMAIL=$($old['ADMIN_EMAIL'])" }
+       else { $_ }
+   }
+   [IO.File]::WriteAllText("$PWD\.env", ($lines -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+   docker compose config --quiet           # no output: the new Compose file accepts it
+   ```
+
+2. Restart on the new code (no `-v` anywhere: the volume and its data stay):
+
+   ```powershell
+   docker compose down
+   docker compose up -d --build --wait
+   ```
+
+3. Check that the upgraded stack works: the Platform Admin logs in through
+   GoTrue and is the migrated admin (same id as before):
+
+   ```powershell
+   $email = (Select-String -Path .env -Pattern '^PLATFORM_ADMIN_EMAIL=(.*)').Matches.Groups[1].Value
+   $pw    = (Select-String -Path .env -Pattern '^PLATFORM_ADMIN_PASSWORD=(.*)').Matches.Groups[1].Value
+   $login = Invoke-RestMethod -Method Post "http://localhost:9999/token?grant_type=password" -ContentType application/json `
+              -Body (@{ email = $email; password = $pw } | ConvertTo-Json)
+   Invoke-RestMethod http://localhost:8000/api/v1/me -Headers @{ Authorization = "Bearer $($login.access_token)" }
+   docker compose logs control-plane | Select-String "is bound to GoTrue account"   # no output: no binding conflict
+   ```
+
+4. Only now delete the backup (it holds the old secrets):
+
+   ```powershell
+   Remove-Item .env.mvp
+   ```
+
+If step 2 or 3 fails, `.env.mvp` still has the old settings; `docker compose
+logs control-plane auth` shows why.
+
+What happens on start: the migration turns `admins` into `users` (same id,
+email and timestamps, now Platform Admin; the old password hash is dropped,
+since GoTrue hashes differently). The control plane then creates the GoTrue
+account (password = the new `PLATFORM_ADMIN_PASSWORD`; set any 12+ characters
+before step 2 if you prefer) and links the migrated row to it, because the
+row has no GoTrue id yet. Services, routes, consumers and keys are untouched.
+`tests/test_mvp_upgrade.py` checks all of this on a populated MVP database.
+
+### Rebinding a person to another GoTrue account
+
+A person's row stays bound to the GoTrue account it was first linked to;
+nothing rebinds it automatically, because a matching email doesn't prove it
+is the same person. If GoTrue's database was reset (or the account deleted
+and made again), the old binding no longer fits: that account gets
+`403 account_conflict`, and at every start the control plane logs an `ERROR`
+naming both ids. Once you are sure the new account is right, rebind on purpose:
+
+```powershell
+docker compose exec control-plane python -m scripts.relink_user admin@example.com
+```
+
+For a disabled user, the command confirms the GoTrue ban on the replacement
+account before saving the new binding. If GoTrue cannot confirm the ban, the
+old binding stays in place and the command can be retried.
+
 ## Control plane (FastAPI)
 
 The code is mounted into the container and uvicorn runs with `--reload`, so
 saving a `.py` file restarts the app. At start the container applies
-migrations and creates the `default` workspace and the first admin from
-`ADMIN_EMAIL` / `ADMIN_PASSWORD`.
+migrations and makes sure the `default` workspace and the first Platform
+Admin exist (in GoTrue too, from `PLATFORM_ADMIN_EMAIL` /
+`PLATFORM_ADMIN_PASSWORD`; an existing account keeps its password).
 
 ```powershell
 .\backend\control-plane\scripts\check.ps1        # ruff, mypy strict, pytest (coverage >= 90%)
@@ -48,7 +133,8 @@ docker compose exec control-plane pytest -v      # tests only
 ```
 
 Tests use their own database, `apim_test`, recreated on every run; the real
-data in `apim` is never touched. `check.ps1 -Fix` also refreshes
+data in `apim` is never touched. They need no GoTrue: they sign tokens with
+the GoTrue secret (`tests/fakes.py`) and use an in-memory fake of its admin API. `check.ps1 -Fix` also refreshes
 `backend/control-plane/openapi.json`, the committed API contract: commit its
 diff after any API change.
 
@@ -59,17 +145,44 @@ docker compose exec control-plane alembic revision --autogenerate -m "describe t
 docker compose exec control-plane alembic upgrade head
 ```
 
-Log in from PowerShell:
+Log in from PowerShell. People log in with GoTrue (`localhost:9999`), never
+with the control plane; the Platform Admin is `PLATFORM_ADMIN_EMAIL` /
+`PLATFORM_ADMIN_PASSWORD` from `.env`:
 
 ```powershell
-$body  = @{ email = "admin@example.com"; password = "<ADMIN_PASSWORD from .env>" } | ConvertTo-Json
-$token = (Invoke-RestMethod -Method Post http://localhost:8000/api/v1/auth/login -ContentType 'application/json' -Body $body).access_token
-$h     = @{ Authorization = "Bearer $token" }
-Invoke-RestMethod http://localhost:8000/api/v1/auth/me -Headers $h
+$gt    = "http://localhost:9999"
+$pw    = (Select-String -Path .env -Pattern '^PLATFORM_ADMIN_PASSWORD=(.*)').Matches.Groups[1].Value
+$login = Invoke-RestMethod -Method Post "$gt/token?grant_type=password" -ContentType application/json `
+           -Body (@{ email = "admin@example.com"; password = $pw } | ConvertTo-Json)
+$h     = @{ Authorization = "Bearer $($login.access_token)" }
+Invoke-RestMethod http://localhost:8000/api/v1/me -Headers $h
 ```
 
-In Swagger (`http://localhost:8000/docs`): call `POST /api/v1/auth/login`,
-copy `access_token`, click **Authorize** and paste it.
+That token (`aal1`, password only) opens the service, route, consumer and key
+endpoints. Platform endpoints (`/api/v1/users/...`) also need MFA (`aal2`),
+else `403 mfa_required`. Add a TOTP factor once, then step up after each
+password login:
+
+```powershell
+# Once: enroll, and add the secret (or $f.totp.uri) to an authenticator app.
+$f = Invoke-RestMethod -Method Post "$gt/factors" -Headers $h -ContentType application/json `
+       -Body '{"factor_type":"totp","friendly_name":"my phone"}'
+$f.totp.secret
+
+# After each password login: challenge, then verify the app's 6-digit code.
+$factor = (Invoke-RestMethod "$gt/user" -Headers $h).factors | Select-Object -First 1
+$c   = Invoke-RestMethod -Method Post "$gt/factors/$($factor.id)/challenge" -Headers $h -ContentType application/json -Body '{}'
+$mfa = Invoke-RestMethod -Method Post "$gt/factors/$($factor.id)/verify" -Headers $h -ContentType application/json `
+         -Body (@{ challenge_id = $c.id; code = "123456" } | ConvertTo-Json)
+$h   = @{ Authorization = "Bearer $($mfa.access_token)" }
+```
+
+Access tokens last 10 minutes; log in again (or use `refresh_token` with
+`grant_type=refresh_token`) after that. In Swagger (`http://localhost:8000/docs`):
+click **Authorize** and paste an access token.
+
+Emails GoTrue sends (invitations, password recovery) land in Mailpit:
+`http://localhost:8025`.
 
 Watch the gateway's long polling (two windows; `INTERNAL_TOKEN` is in `.env`):
 
@@ -122,8 +235,12 @@ go test -run=^$ -bench=. -benchmem ./internal/proxy ./internal/middleware ./cmd/
 
 ## End-to-end tests
 
-The MVP story against the real stack (15 checks, about 5 s). They run in
-their own container, create their own objects and always delete them:
+The MVP and MT stories against the real stack (21 checks, about 6 s): GoTrue
+login with password and TOTP, a disabled person locked out, then requests
+through the gateway. They run in their own container, create their own
+objects and always delete them. For MFA they enroll their own factor named
+`e2e` on the Platform Admin and remove it again, so a factor you enrolled is
+left alone; their test person `e2e-person@example.test` is reused by every run.
 
 ```powershell
 docker compose run --rm e2e
@@ -152,7 +269,7 @@ scripts.
 ## Conventions
 
 The rules the code follows (layers, errors, tests, commits) are in
-[CLAUDE.md](../CLAUDE.md), section "Code quality". In short: small steps from
-PLAN.md section 10, tests with every change, both `check.ps1` scripts green
-before a commit, and the decisions log in ROADMAP.md for anything that
-changes the plan.
+[AGENTS.md](../AGENTS.md), for people and coding agents alike. In short: one
+roadmap step at a time, tests with every change, both `check.ps1` scripts and
+the e2e tests green before handing back, and the decisions log in ROADMAP.md
+for anything that changes the plan.

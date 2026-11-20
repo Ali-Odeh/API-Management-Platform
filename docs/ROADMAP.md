@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** MVP done; next milestone to choose (MT or v2a)
+**Last updated:** Nov 21, 2026 · **Current step:** MT.1 done (GoTrue login, `users`, Platform Admin with MFA); next: MT.2
 
 ## Overview
 
@@ -13,8 +13,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
-| v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
+| MT: Multi-tenancy and login | ✅⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 1/12 | 🔄 In progress |
+| v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
+| v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
+| FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
 
@@ -24,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 333 passing (about 35–65 s) |
+| Tests | 480 passing (about 70–125 s), including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -54,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **15 stories pass in about 4 s** (`docker compose run --rm e2e`); fresh stack healthy in 17 s; nothing left behind |
+| End-to-end tests | **21 stories pass in about 6 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed, the test person reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -118,30 +120,197 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 **Outcome:** the MVP definition of done from PLAN.md section 1, proven by the end-to-end tests on every push and measured by the load test.
 
-## MT: Multi-tenancy (after the MVP)
+## MT: Multi-tenancy and login
+
+**What and how:** PLAN.md (sections 3–11). **Why:** MT_ROLES_DECISIONS.md (decision numbers in brackets).
+
+**How these steps are worked:** each step is one self-contained piece of work. The agent plans its own sub-tasks, finishes the **whole** step (code, migrations, tests, docs) and hands back only when every "done when" item holds and both `check.ps1` scripts and the e2e tests are green. Work is committed as logical commits along the way, not one big commit. Rules in `AGENTS.md`.
 
 | # | Step | Status |
 | --- | --- | --- |
-| MT.1 | Workspaces API: create and list | ⬜ |
-| MT.2 | Admin roles per workspace and inviting admins | ⬜ |
-| MT.3 | Route `path_prefix` unique per workspace | ⬜ |
-| MT.4 | Gateway finds the tenant (e.g. subdomain) | ⬜ |
-| MT.5 | `/internal/config` grouped by workspace | ⬜ |
-| MT.6 | Isolation tests across workspaces | ⬜ |
+| MT.1 | Identity: GoTrue, `users`, JWT verification, Platform Admin with MFA | ✅ |
+| MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ⬜ |
+| MT.3 | Audit log | ⬜ |
+| MT.4 | Members and owners | ⬜ |
+| MT.5 | Workspace lifecycle and quotas | ⬜ |
+| MT.6 | Incremental config protocol | ⬜ |
+| MT.7 | Gateway tenancy | ⬜ |
+| MT.8 | Workspace limits in the gateway | ⬜ |
+| MT.9 | SSRF protection | ⬜ |
+| MT.10 | Load balancing and health checks | ⬜ |
+| MT.11 | CORS and body size limit | ⬜ |
+| MT.12 | MT end to end, load test, docs | ⬜ |
 
-## v2a: Admin UI (after the MVP)
+The order follows dependencies: identity before roles, roles before audit and members, the config protocol before the gateway's tenancy, targets after SSRF (both live in the gateway's transport).
+
+### MT.1 Identity [4, 12, 13]
+
+**Outcome:** people log in with GoTrue; the control plane trusts GoTrue's token and keeps its own `users`. The old login is gone.
+
+- Compose: `auth` (GoTrue, pinned version, own `auth` database on the same Postgres) and `mailpit`; `scripts/init-env` generates the new secrets
+- GoTrue settings from PLAN.md section 9: no public sign-up, 10-minute tokens, 12-character passwords, SMTP to Mailpit, tightened sign-in rate limits
+- `users` table (Alembic) replaces `admins`: the migration moves the existing admin, makes them `is_platform_admin` and drops the argon2 hash
+- JWT verification dependency (signature, expiry, audience); just-in-time `users` row on the first request; `is_active = false` → `403 user_disabled`
+- First Platform Admin created in GoTrue at startup from `PLATFORM_ADMIN_EMAIL` if missing
+- Platform endpoints require `aal2` (MFA) → `403 mfa_required`
+- `PATCH /api/v1/users/{id}` (Platform Admin): disable or enable, also banning or unbanning in GoTrue
+- Remove the login endpoint, argon2, token issuing and the MVP auth settings; `GET /api/v1/me`
+- Test helpers sign tokens with the test GoTrue secret, so unit tests don't need a GoTrue process
+- `set_updated_at` trigger on every table (today `updated_at` is set only by the ORM)
+
+**Done when:** the Platform Admin logs in through GoTrue (password, then TOTP) and calls the admin API with GoTrue's token; a disabled user is refused on the next request and can't refresh; all existing tests pass with GoTrue tokens; e2e logs in through GoTrue.
+
+**Status:** ✅ Done (Nov 21). Commits `04f3aab` (`updated_at` trigger), `b1a984f` (GoTrue and Mailpit in the stack), `17bccf1` (GoTrue login, `users` replace `admins`, disabling users), then the docs update (`a567a15`). Review fixes: `85fddbb` (users bound to their GoTrue account; locked, failure-safe disable/enable), `42f8427` (Compose starts without a Platform Admin password; Mailpit on 127.0.0.1), `7a7d885` (populated MVP upgrade test, `.env` upgrade guide), the docs update `384b1f4`; second review: `c2c144d` (a bound admin is never rebound automatically; `scripts/relink_user`), `f8cb671` (a failed GoTrue lookup keeps a disable), the docs update `d33613e`; then `02f65d8` (Platform Admin granted only on a verified or first binding; relinking a disabled user needs GoTrue's confirmed ban) and `f74a6ae` (a flaky rate-limit test fixed). Every "done when" item is covered by e2e stories (`e2e/test_identity.py`) and unit tests. GoTrue `v2.197.0`, Mailpit `v1.33.0`. Choices made while building are in the decisions log (MT.1 rows).
+
+### MT.2 Workspaces and roles [0, 2, 5, 13]
+
+**Outcome:** every admin endpoint lives under a workspace, and every call is checked against the caller's role in that workspace.
+
+- `workspace_members` (`owner`, `api_admin`, `viewer`); the MT.1 admin becomes Owner of `default`
+- Permission map in code and `require_permission(...)`; one query resolves slug + membership; 404 for unknown or not-a-member, 403 for too low a role; Platform Admin passes for every workspace
+- Move every endpoint to `/api/v1/workspaces/{slug}/...`; remove the unscoped URLs; `GET /api/v1/me/workspaces`
+- `GET, POST /api/v1/workspaces` (Platform Admin, MFA): create `{name, slug, owner_email}` (owner must already exist until MT.4 adds invitations), list
+- Route `path_prefix` unique per workspace instead of globally
+- Every `crud.py` function takes `workspace_id` first
+- **Permission guard test** and **isolation test**, both discovering every endpoint from the app
+- `openapi.json` regenerated and committed; e2e moved to the new URLs
+
+**Done when:** a Viewer can read but gets 403 on every write; a member of workspace A gets 404 on every endpoint of workspace B and 422 when referencing B's objects; the two guard tests cover every endpoint and fail if a new one is added without a permission.
+
+### MT.3 Audit log [11]
+
+**Outcome:** every admin change leaves a record of who, what, when and before/after.
+
+- `audit_events` table; the application's database user gets only `INSERT` and `SELECT` on it
+- `audit.record(...)` written in the same transaction as each change; `changes` holds changed fields only; no secrets (keys by prefix only)
+- Every existing write endpoint records its event (`service.create`, `route.update`, `key.revoke`, ...)
+- **Audit guard test:** every mutating endpoint writes exactly one event; a failed change writes none
+- `GET /api/v1/workspaces/{slug}/audit-events` (`audit:read`) and `GET /api/v1/audit-events` (Platform Admin), with filters and pagination
+- Retention job (default 365 days) running as a separate database user
+
+**Done when:** the guard test covers every mutating endpoint; a rolled-back change leaves no event; Platform Admin actions in a workspace appear in that workspace's log with `actor_type = platform_admin`.
+
+### MT.4 Members and owners [8, 9]
+
+**Outcome:** Owners build their team; a workspace can never lose its last owner.
+
+- `POST /members {email, role}`: existing user → member at once; new person → GoTrue invite email (Mailpit) → member at first login; existing member → 409
+- `PATCH` (change role) and `DELETE` (remove) by Owners; `DELETE /api/v1/me/workspaces/{slug}` (leave)
+- Owner rules: several owners; nobody changes their own role; the last active human owner can't be demoted, removed or leave (`409 last_owner`); owner rows locked with `SELECT ... FOR UPDATE`
+- Platform Admin can assign an owner in any workspace (audited)
+- `POST /api/v1/workspaces` now accepts a new `owner_email` (invites them)
+- Audit: `member.add`, `member.role_change`, `member.remove`, `member.leave`, `member.owner_assigned_by_platform`
+
+**Done when:** an invitation email arrives in Mailpit and leads to a working membership; a concurrency test with two owners demoting each other at the same moment always leaves one owner; all rules above have tests.
+
+### MT.5 Workspace lifecycle and quotas [6, 10]
+
+**Outcome:** workspaces can be suspended, deleted, restored and purged; each has adjustable limits.
+
+- `workspaces`: `status`, `status_reason`, `deleted_at`, `purge_after`, limit columns (NULL = platform default)
+- Suspend / unsuspend (Platform Admin): writes → `403 workspace_suspended`, reads still work
+- Delete `{confirm: "<slug>"}` (Owner or Platform Admin) → hidden from members; restore within 30 days (Platform Admin)
+- Daily purge job deletes all workspace data after 30 days, keeps the row with status `purged`; slugs are never reused; `default` can't be suspended or deleted
+- Quotas (services, routes, consumers) → `409 quota_exceeded`; `PATCH /limits` (Platform Admin)
+- Lifecycle audit events as platform-level events (`workspace_id` NULL)
+
+**Done when:** every transition and its refusals are tested; a purged workspace's slug can't be taken again; quotas are enforced under parallel creation (no overshoot).
+
+### MT.6 Incremental config protocol [7]
+
+**Outcome:** a change in one workspace sends only that workspace to the gateways.
+
+- Control plane: `config_seq` replaces `config_version`; `workspace_config (version, seq)`; statement-level triggers with transition tables bump the touched workspaces (now also on `workspaces` changes). Follow the Postgres rules in PLAN.md section 5: three triggers per table (no `OR` with transition tables) and config-column filtering inside the function (no `UPDATE OF` with transition tables); an update that changes only `updated_at` or `last_used_at` bumps nothing (test)
+- `/internal/config?since=&wait=` with `{seq, full, workspaces, deleted}` exactly as in PLAN.md section 6; effective limits in the answer; per `(workspace, version)` cache; `?workspaces=` filter
+- Gateway: snapshot becomes `ByHost` + `Workspaces`; merge that reuses unchanged workspaces; `full` handling and the protocol-error fallback to `since=0`
+- Until MT.7 the gateway still routes every request to `default`, so all e2e stories keep working
+
+**Done when:** a change in workspace A produces an answer containing only A (test); gateway start, database reset and deleted workspaces are covered by tests; the existing race test (requests during constant config changes) passes with `-race`; config propagation is still measured in milliseconds.
+
+### MT.7 Gateway tenancy [1, 10, 17]
+
+**Outcome:** the gateway serves each workspace on its own subdomain and never mixes them.
+
+- `tenant` middleware: Host → workspace (`GATEWAY_BASE_DOMAIN`, port dropped, bare domain → `default`); `404 workspace_not_found`; `403 workspace_suspended`
+- Route matching and key lookup inside the workspace only; a key of another workspace → `401 invalid_api_key`
+- Strip client `X-Workspace-ID`, set the trusted one
+- `workspace_id` on every gateway log line and every control-plane log line
+- Fuzz test for host parsing
+
+**Done when:** e2e shows two workspaces with the same `/v1/orders` reaching different backends via `acme.localhost` and `globex.localhost`; a key used on the other workspace's host gets 401; a suspended workspace gets 403 within one config update.
+
+### MT.8 Workspace limits in the gateway [6]
+
+**Outcome:** one workspace can't take the gateway from the others.
+
+- Lua script with the workspace bucket and the consumer bucket in one call (spend only if both allow); public routes use the workspace bucket; log `limited_workspace`
+- In-flight semaphore per workspace per instance → `503 workspace_overloaded` with `Retry-After: 1`
+- Fail-open behavior unchanged when Redis is down
+
+**Done when:** Redis tests show both buckets, refusal by either, and atomicity under 100 parallel requests; a slow backend in workspace A can't use more than its in-flight share while workspace B keeps answering (test); e2e covers the workspace rate limit.
+
+### MT.9 SSRF protection [3]
+
+**Outcome:** no tenant can make the gateway reach internal addresses.
+
+- `egress` package: IP policy (default deny list from PLAN.md section 7, `UPSTREAM_ALLOW` exceptions), guarded `net.Dialer` with the `Control` hook; IPv4-mapped IPv6 handled
+- `502 upstream_not_allowed` and a warning log with workspace and target
+- Control plane: scheme check and early 422 for internal IP literals and known internal names on save
+- Compose and CI set `UPSTREAM_ALLOW=mock-backend`
+- Fuzz test for the policy; a DNS-rebinding test (a name resolving to an internal IP at connect time is refused)
+
+**Done when:** e2e shows a service pointing at `http://redis:6379` refused with `upstream_not_allowed`; all other e2e stories pass with the allow list.
+
+### MT.10 Load balancing and health checks [14]
+
+**Outcome:** a service runs on several backend instances; traffic avoids broken ones.
+
+- `service_targets` table; migration turns each `upstream_url` into one target; target endpoints; health-check settings on services
+- Gateway `upstream` package: smooth weighted round robin, active checks (interval, thresholds), passive ejection, `503 no_healthy_upstream`, `target_id` in the log
+- Balancer and health state survive config updates when a service's targets didn't change; checkers stop when targets leave
+- Health checks use the SSRF dialer
+- Compose gets a second mock-backend instance for tests
+
+**Done when:** unit tests show the weighted distribution over many picks, skipping, recovery and passive ejection; e2e shows traffic spread over two targets and moving off a stopped one within the configured thresholds.
+
+### MT.11 CORS and body size limit [15, 16]
+
+**Outcome:** browser apps can call APIs through the gateway; oversized bodies never reach a backend.
+
+- Route CORS settings; preflight answered by the gateway before auth, not forwarded, not rate-limited; headers on normal answers (`Vary: Origin`, no `*` with credentials)
+- Route `max_body_bytes` with platform default and ceiling (control-plane settings; effective value in the snapshot); `413 request_too_large` from `Content-Length`; `MaxBytesReader` for bodies without a length
+
+**Done when:** e2e covers a preflight from an allowed and a refused origin, a credentialed call, and a 413 both with and without `Content-Length`.
+
+### MT.12 MT end to end [all]
+
+**Outcome:** the MT definition of done (PLAN.md section 1) is proven on every push.
+
+- e2e stories for everything in PLAN.md section 11 "MT adds"; invitation emails read through Mailpit's API
+- k6 load test updated for host-based routing and two targets; numbers recorded here
+- README, `docs/DEVELOPMENT.md` and this file updated (quality tables, commands, new services)
+- Decisions taken during MT added to the decisions log below
+
+**Done when:** CI is green on a fresh stack, including the MT e2e stories and the k6 smoke run; the gateway overhead measured again and written down.
+
+## v2 and v3: backend (after MT)
+
+Plans and analytics (v2), then the developer portal API and extras (v3). Planned in detail, step by step, once MT is done. Backend only: their pages are built in FE.
+
+## FE: Frontend (last)
+
+**The whole frontend is built last, all at once**, after every backend milestone, by Claude, against the final control-plane API and its committed `openapi.json`. Pages and areas are listed in PLAN.md section 8. The app is called by its three areas: **Dashboard** (workspace members, by role), **Platform** (Platform Admin) and **Developer portal**; not "Admin UI", because most of its users are not admins.
 
 | # | Step | Status |
 | --- | --- | --- |
-| A.1 | Vite project, layout, auth guard, generated API types | ⬜ |
-| A.2 | Pages: Login, Services, Routes, Consumers, Consumer detail | ⬜ |
-| A.3 | CORS on the control plane for the dashboard origin | ⬜ |
-
-Later phases (v2b plans and analytics, v3 portal and extras) are planned after these.
+| FE.1 | Foundation: Vite, React, TypeScript, layout, GoTrue login and MFA, account page, workspace switcher, role-aware routing and buttons, generated API types (Vite proxies `/api`, so no CORS is needed) | ⬜ |
+| FE.2 | Dashboard: Overview, Services and service detail (targets, health), Routes (CORS, body limit), Consumers and keys, Members, Activity, Settings, Plans, Logs | ⬜ |
+| FE.3 | Platform: Workspaces (create, suspend, restore, limits), Users (disable, enable), platform activity | ⬜ |
+| FE.4 | Developer portal: sign-up and login, API catalog, API docs with try-it, own keys, own usage | ⬜ |
 
 ## Decisions log
 
-Choices made along the way that differ from, or add to, the original plan.
+Choices made along the way that differ from, or add to, the original plan. The MT design decisions (Nov 20, 2026) are recorded in [MT_ROLES_DECISIONS.md](MT_ROLES_DECISIONS.md); choices made while building MT are added here as before.
 
 | Date | Step | Decision | Why |
 | --- | --- | --- | --- |
@@ -242,3 +411,21 @@ Choices made along the way that differ from, or add to, the original plan.
 | Nov 19 | 4.5 | Diagrams in Mermaid inside the README | GitHub renders them; they are edited like code; checked to render in Mermaid 11 |
 | Nov 19 | 4.5 | `scripts/init-env.ps1` / `.sh` create `.env` with random secrets, never overwrite it | The quick start needs no hand-filled secrets; checked from scratch on a clean copy |
 | Nov 19 | 4.5 | Quick start for both PowerShell and bash | GitHub readers use every OS; the walkthrough stays PowerShell |
+| Nov 21 | MT.1 | `PLATFORM_ADMIN_PASSWORD` (optional) added next to `PLATFORM_ADMIN_EMAIL`: with it the account is created ready to log in; without it GoTrue sends an invitation email | The quick start, CI and e2e need a Platform Admin that can log in without reading an email; production can still leave it empty |
+| Nov 21 | MT.1 | GoTrue gets its own database login (`gotrue`, `GOTRUE_DB_PASSWORD`), made by a one-shot `auth-db-init` job; `CONNECT` on `auth` and `apim` revoked from `PUBLIC` | Least privilege: GoTrue can't open the platform's database; the job works on fresh and existing volumes (Postgres init scripts only run on a fresh one). GoTrue's migrations need a role named `postgres` and an existing `auth` schema, so the job creates both |
+| Nov 21 | MT.1 | Until MT.2, the service, route, consumer and key endpoints act on `default` and are open to **Platform Admins only**, without MFA; any other signed-in person gets `403 platform_admin_required` | There are no memberships before MT.2; the migrated admin keeps working exactly as before. No MFA there because in MT.2 they become Owner of `default`, and Owners don't need it |
+| Nov 21 | MT.1 | `users.auth_user_id` is nullable only until the account is resolved; a token whose `sub` is unknown gets a new row with no rights, or `403 account_conflict` if its email is already taken. **Never linked by email** (changed after review; the first build linked by email) | A token's email doesn't prove it is the same person: a different GoTrue account with that address must not inherit an admin's rights. Rows made before their first login are linked through the trusted admin API instead: the Platform Admin at startup (which also links the migrated MVP admin), anyone at disable or enable |
+| Nov 21 | MT.1 | Token checks: HS256 signature, `exp`, `aud = authenticated`, a UUID `sub` and an email; `role` is not checked | GoTrue v2.197 leaves `role` empty (`GOTRUE_JWT_DEFAULT_GROUP_NAME` is deprecated); the audience alone keeps the service-role key (no `aud`) from passing as a person, which a guard test checks on every endpoint |
+| Nov 21 | MT.1 | 403 details are short codes: `user_disabled`, `mfa_required`, and the new `platform_admin_required` | The dashboard can act on them (e.g. start the MFA step) without parsing sentences |
+| Nov 21 | MT.1 | `PATCH /api/v1/users/{id}`: `409` when a Platform Admin disables themselves; the row is locked (`FOR UPDATE`) before it is read and across the GoTrue call; on a GoTrue failure or timeout `502`, keeping the safe side (a disable stays, an enable isn't made); an unlinked person's account is found by exact email so the ban still blocks refresh, and a failed lookup counts like a failed ban (changed after review; the first build rolled everything back, and before the second review a failed lookup still did) | Parallel changes run in turn, so GoTrue ends like the row. A timeout can come after GoTrue acted, so "nothing changed" couldn't be promised; the safe side closes the API at once, and a retry (the call is idempotent) brings both in step |
+| Nov 21 | MT.1 | GoTrue rate limits: `/token` 30 calls per 5 minutes per IP (default 150), MFA challenge and verify 10 per minute (default 15) | "Tightened sign-in rate limits" (PLAN.md section 9) with numbers that still leave room for e2e and k6 runs |
+| Nov 21 | MT.1 | `set_updated_at` moves `updated_at` only when the row really changed (`ROW(NEW.*) IS DISTINCT FROM ROW(OLD.*)`); the ORM now treats the column as database-owned (`server_onupdate`) | Writing the same values isn't a change; a guard test checks every table with `updated_at` has the trigger |
+| Nov 21 | MT.1 | e2e: the Platform Admin's MFA factor is enrolled by the tests (named `e2e`) and removed at the end; the test person `e2e-person@example.test` is reused by every run; e2e gets `GOTRUE_SERVICE_ROLE_KEY` only to set up and clean up these accounts | GoTrue lets a person hold several factors, so one the developer enrolled is untouched; there is no endpoint to delete a user, so a fixed address keeps runs from piling up rows. TOTP codes are computed in 6 lines (RFC 6238) instead of a new dependency |
+| Nov 21 | MT.1 | CI's e2e job builds `.env` with `scripts/init-env.sh` | The service-role key must be a JWT signed with that run's secret; the script makes one and gets tested on every push |
+| Nov 21 | MT.1 | Dependencies: `argon2-cffi` removed; `httpx` (already a test dependency) is now a runtime one, for the GoTrue admin client | No password hashing left in the control plane; httpx is async and already used by the tests |
+| Nov 21 | MT.1 | Startup links the Platform Admin only when the row has no GoTrue id yet (the migrated MVP admin, a new admin), to the account found through GoTrue's admin API (exact email over the paged substring `filter`), created or invited only if missing. A bound row is never rebound at startup: a different (or missing) account for that email is logged as an `ERROR` and nothing changes; `python -m scripts.relink_user <email>` rebinds on purpose (changed after the second review; startup used to rebind) | Restarts never resend a pending invitation. A recreated or foreign account with the configured email must not take over the admin's row by itself; an operator decides, and the log says how |
+| Nov 21 | MT.1 | The e2e and load-test services pass `PLATFORM_ADMIN_*` and the service-role key with `:-`; the runners check them on start | Compose interpolates the whole file for every command, so `:?` there stopped `docker compose up` for an invited admin (empty password) |
+| Nov 21 | MT.1 | Mailpit's UI is bound to 127.0.0.1 | Its inbox holds invitation and password-reset links |
+| Nov 21 | MT.1 | Upgrading an MVP install: prepare the new `.env` **before** any Compose command (the new file needs the GoTrue secrets even for `down`), keeping the Postgres values and internal token from the old one and setting `PLATFORM_ADMIN_EMAIL` to the old `ADMIN_EMAIL`; keep the old file as `.env.mvp` until the stack is healthy and the admin's GoTrue login is checked (steps in DEVELOPMENT.md) | The volume keeps its original Postgres user and password; the migrated admin keeps its id and history and is linked at startup. A test upgrades a populated MVP database |
+| Nov 21 | MT.1 | Startup grants Platform Admin only after resolving a first binding or verifying the existing GoTrue UUID. Explicit relinking requires a confirmed GoTrue ban on a disabled user's replacement account before saving the binding | A binding conflict cannot promote the previous identity. A disabled user stays blocked from refreshing tokens after recovery |
+| Nov 21 | MT.1 | Timing tests against the token bucket assert on the response that proves the point (e.g. the denial that ended a drain), never on an extra call afterwards, and allow for every token a slow run can earn | The bucket refills continuously, so an extra call can rightly get a token that arrived during its Redis round trip: `TestBucketRefills` failed about 1 run in 120 for that reason |

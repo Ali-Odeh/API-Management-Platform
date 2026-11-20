@@ -8,7 +8,7 @@ import uuid
 
 from fastapi import APIRouter, Response, status
 
-from app.core.deps import CurrentAdmin, DbSession
+from app.core.deps import DbSession, WorkspaceId
 from app.core.openapi import error_responses
 from app.core.pagination import Page, Pagination
 from app.keys import crud
@@ -23,10 +23,10 @@ _KEY_NOT_FOUND = error_responses({404: "API key not found"})
 
 @router.get("/consumers/{consumer_id}/keys", responses=_CONSUMER_NOT_FOUND)
 async def list_keys(
-    consumer_id: uuid.UUID, admin: CurrentAdmin, db: DbSession, page: Pagination
+    consumer_id: uuid.UUID, workspace_id: WorkspaceId, db: DbSession, page: Pagination
 ) -> Page[KeyOut]:
     keys, total = await crud.list_keys(
-        db, workspace_id=admin.workspace_id, consumer_id=consumer_id, page=page
+        db, workspace_id=workspace_id, consumer_id=consumer_id, page=page
     )
     return Page[KeyOut](items=[KeyOut.model_validate(k) for k in keys], total=total)
 
@@ -39,13 +39,13 @@ async def list_keys(
 async def create_key(
     consumer_id: uuid.UUID,
     body: KeyCreate,
-    admin: CurrentAdmin,
+    workspace_id: WorkspaceId,
     db: DbSession,
     response: Response,
 ) -> KeyCreated:
     """Generate a key. **The `key` field is shown only in this response.**"""
     key, raw_key = await crud.create_key(
-        db, workspace_id=admin.workspace_id, consumer_id=consumer_id, data=body
+        db, workspace_id=workspace_id, consumer_id=consumer_id, data=body
     )
     # A secret must never be stored by a browser or proxy cache.
     response.headers["Cache-Control"] = "no-store"
@@ -53,6 +53,6 @@ async def create_key(
 
 
 @router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_KEY_NOT_FOUND)
-async def revoke_key(key_id: uuid.UUID, admin: CurrentAdmin, db: DbSession) -> None:
+async def revoke_key(key_id: uuid.UUID, workspace_id: WorkspaceId, db: DbSession) -> None:
     """Revoke a key. It stays in the list as revoked; revoking again changes nothing."""
-    await crud.revoke_key(db, workspace_id=admin.workspace_id, key_id=key_id)
+    await crud.revoke_key(db, workspace_id=workspace_id, key_id=key_id)

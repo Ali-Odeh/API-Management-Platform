@@ -1,37 +1,6 @@
 {
   "components": {
     "schemas": {
-      "AdminOut": {
-        "properties": {
-          "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
-          },
-          "email": {
-            "title": "Email",
-            "type": "string"
-          },
-          "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
-          },
-          "workspace_id": {
-            "format": "uuid",
-            "title": "Workspace Id",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "email",
-          "workspace_id",
-          "created_at"
-        ],
-        "title": "AdminOut",
-        "type": "object"
-      },
       "ConfigSnapshot": {
         "properties": {
           "keys": {
@@ -450,31 +419,6 @@
           "revoked_at"
         ],
         "title": "KeyOut",
-        "type": "object"
-      },
-      "LoginRequest": {
-        "properties": {
-          "email": {
-            "examples": [
-              "admin@example.com"
-            ],
-            "maxLength": 255,
-            "minLength": 3,
-            "title": "Email",
-            "type": "string"
-          },
-          "password": {
-            "maxLength": 255,
-            "minLength": 1,
-            "title": "Password",
-            "type": "string"
-          }
-        },
-        "required": [
-          "email",
-          "password"
-        ],
-        "title": "LoginRequest",
         "type": "object"
       },
       "Page_ConsumerOut_": {
@@ -969,28 +913,57 @@
         "title": "ServiceUpdate",
         "type": "object"
       },
-      "TokenResponse": {
+      "UserOut": {
         "properties": {
-          "access_token": {
-            "title": "Access Token",
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
             "type": "string"
           },
-          "expires_in": {
-            "description": "Seconds until the token expires",
-            "title": "Expires In",
-            "type": "integer"
-          },
-          "token_type": {
-            "default": "bearer",
-            "title": "Token Type",
+          "email": {
+            "title": "Email",
             "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "is_platform_admin": {
+            "title": "Is Platform Admin",
+            "type": "boolean"
           }
         },
         "required": [
-          "access_token",
-          "expires_in"
+          "id",
+          "email",
+          "is_platform_admin",
+          "is_active",
+          "created_at"
         ],
-        "title": "TokenResponse",
+        "title": "UserOut",
+        "type": "object"
+      },
+      "UserUpdate": {
+        "description": "PATCH /api/v1/users/{id}: disable or enable a person.",
+        "properties": {
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "title": "UserUpdate",
         "type": "object"
       },
       "ValidationError": {
@@ -1045,95 +1018,6 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/v1/auth/login": {
-      "post": {
-        "description": "Email + password in, access token out.",
-        "operationId": "login_api_v1_auth_login_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/LoginRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TokenResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Missing, invalid or expired admin token"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Login",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
-    "/api/v1/auth/me": {
-      "get": {
-        "description": "The admin who owns the token.",
-        "operationId": "me_api_v1_auth_me_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Missing, invalid or expired admin token"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Me",
-        "tags": [
-          "auth"
-        ]
-      }
-    },
     "/api/v1/consumers": {
       "get": {
         "operationId": "list_consumers_api_v1_consumers_get",
@@ -1203,7 +1087,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "422": {
             "content": {
@@ -1257,7 +1151,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "409": {
             "content": {
@@ -1319,7 +1223,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -1385,7 +1299,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -1462,7 +1386,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -1567,7 +1501,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -1644,7 +1588,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -1716,7 +1670,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -1747,6 +1711,53 @@
         "summary": "Revoke Key",
         "tags": [
           "keys"
+        ]
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "description": "The signed-in person (their row is created on their first request).",
+        "operationId": "me_api_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "me"
         ]
       }
     },
@@ -1820,7 +1831,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "422": {
             "content": {
@@ -1874,7 +1895,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "409": {
             "content": {
@@ -1935,7 +1966,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -2001,7 +2042,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -2077,7 +2128,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -2172,7 +2233,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "422": {
             "content": {
@@ -2226,7 +2297,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "409": {
             "content": {
@@ -2287,7 +2368,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -2363,7 +2454,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -2439,7 +2540,17 @@
                 }
               }
             },
-            "description": "Missing, invalid or expired admin token"
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
           },
           "404": {
             "content": {
@@ -2480,6 +2591,115 @@
         "summary": "Update Service",
         "tags": [
           "services"
+        ]
+      }
+    },
+    "/api/v1/users/{user_id}": {
+      "patch": {
+        "description": "Disable or enable a person: `{\"is_active\": false}` locks them out at once.",
+        "operationId": "update_user_api_v1_users__user_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "User not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "You can't disable yourself"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Auth service unavailable. An enable was not made; a disable was kept (the API is closed) and the ban is finished by repeating the request"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update User",
+        "tags": [
+          "platform"
         ]
       }
     },

@@ -9,14 +9,13 @@ from typing import Any
 
 from httpx import AsyncClient
 
-from app.auth.models import Admin
-from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD
-
 API = "/api/v1"
 CONFIG = "/internal/config"
 
 
-async def test_admin_flow_as_seen_by_the_gateway(gateway: AsyncClient, admin: Admin) -> None:
+async def test_admin_flow_as_seen_by_the_gateway(
+    gateway: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     async def config() -> dict[str, Any]:
         r = await gateway.get(CONFIG)
         assert r.status_code == 200
@@ -28,11 +27,8 @@ async def test_admin_flow_as_seen_by_the_gateway(gateway: AsyncClient, admin: Ad
     start = await config()
     assert start["routes"] == [] and start["keys"] == []
 
-    # 1. Log in.
-    login = await gateway.post(
-        f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
-    )
-    admin = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    # 1. Log in (with GoTrue; here a token signed like GoTrue's).
+    admin = auth_headers
 
     # 2. Register the backend and route /v1/orders to it.
     service = (

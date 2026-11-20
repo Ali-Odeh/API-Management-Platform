@@ -11,6 +11,7 @@ docker-compose.yml.
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,11 +19,20 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str
-    jwt_secret: str
-    jwt_expire_minutes: int = 60  # optional: has a default
     internal_token: str
-    admin_email: str
-    admin_password: str
+
+    # GoTrue (MT.1): it logs people in; we verify its tokens and call its admin API.
+    gotrue_url: str = "http://auth:9999"
+    # The secret GoTrue signs its access tokens with (HS256), so we can verify them.
+    gotrue_jwt_secret: str = Field(min_length=32)
+    # Opens GoTrue's admin API (create, invite, ban users). A secret.
+    gotrue_service_role_key: str
+
+    # The first Platform Admin, made sure of at every startup. With a password
+    # the GoTrue account is created with it; without one GoTrue sends an
+    # invitation email instead.
+    platform_admin_email: str
+    platform_admin_password: str = ""
 
 
 @lru_cache
