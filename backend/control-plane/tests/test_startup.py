@@ -7,12 +7,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.core.errors import UpstreamError
+from app.core.errors import ConflictError, NotFoundError, UpstreamError
 from app.gotrue import client as gotrue_client
 from app.main import app
 from app.users import crud as users_crud
 from app.users.models import User
 from app.workspaces.models import Workspace
+from scripts import relink_user as relink_script
 from tests.factories import make_user
 from tests.fakes import FakeGoTrue
 
@@ -89,19 +90,120 @@ async def test_the_migrated_admin_is_linked_through_the_admin_api(
     assert "boss@example.com" not in gotrue.passwords  # the password was not reset
 
 
-async def test_the_link_follows_the_account_gotrue_holds_now(
-    db: AsyncSession, gotrue: FakeGoTrue
+async def test_a_bound_admin_stays_bound_when_gotrue_disagrees(
+    db: AsyncSession, gotrue: FakeGoTrue, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # GoTrue's database was reset: the configured email now belongs to a new
-    # account. The trusted admin API decides, not a token's email claim.
-    stale = await make_user(db, email="boss@example.com", is_platform_admin=True)
-    account = gotrue.add_account("boss@example.com")
+    # GoTrue now gives the configured email another account (e.g. its database
+    # was reset). A matching email proves nothing: keep the binding, report it.
+    admin = await make_user(db, email="boss@example.com", is_platform_admin=True)
+    bound = admin.auth_user_id
+    other = gotrue.add_account("boss@example.com")
+
+    for _ in range(2):  # every restart reports it, none rebinds
+        user = await users_crud.ensure_platform_admin(
+            db, gotrue, email="boss@example.com", password="a-long-password"
+        )
+
+    assert user.id == admin.id and user.auth_user_id == bound
+    assert "boss@example.com" not in gotrue.passwords  # nothing created either
+    conflicts = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(conflicts) == 2
+    assert str(bound) in conflicts[0].getMessage()
+    assert str(other) in conflicts[0].getMessage()
+    assert "scripts.relink_user" in conflicts[0].getMessage()
+
+
+async def test_a_bound_admin_whose_account_is_gone_is_reported_not_recreated(
+    db: AsyncSession, gotrue: FakeGoTrue, caplog: pytest.LogCaptureFixture
+) -> None:
+    admin = await make_user(db, email="boss@example.com", is_platform_admin=True)
 
     user = await users_crud.ensure_platform_admin(
         db, gotrue, email="boss@example.com", password="a-long-password"
     )
 
-    assert user.id == stale.id and user.auth_user_id == account
+    assert user.auth_user_id == admin.auth_user_id
+    assert gotrue.accounts == {} and gotrue.invited == []
+    assert "no account" in caplog.records[-1].getMessage()
+
+
+async def test_a_bound_admin_that_matches_is_quiet(
+    db: AsyncSession, gotrue: FakeGoTrue, caplog: pytest.LogCaptureFixture
+) -> None:
+    admin = await make_user(db, email="boss@example.com", is_platform_admin=True)
+    assert admin.auth_user_id is not None
+    gotrue.accounts["boss@example.com"] = admin.auth_user_id
+
+    await users_crud.ensure_platform_admin(
+        db, gotrue, email="boss@example.com", password="a-long-password"
+    )
+
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+# ---- Explicit recovery: relink_user (scripts/relink_user.py)
+
+
+async def test_relink_binds_the_account_gotrue_holds_now(
+    db: AsyncSession, gotrue: FakeGoTrue
+) -> None:
+    admin = await make_user(db, email="boss@example.com", is_platform_admin=True)
+    previous = admin.auth_user_id
+    new = gotrue.add_account("boss@example.com")
+
+    old, bound = await users_crud.relink_user(db, gotrue, email="Boss@Example.com")
+
+    assert (old, bound) == (previous, new)
+    await db.refresh(admin)
+    assert admin.auth_user_id == new and admin.is_platform_admin
+
+
+async def test_relink_unknown_user_or_account_changes_nothing(
+    db: AsyncSession, gotrue: FakeGoTrue
+) -> None:
+    with pytest.raises(NotFoundError, match="User not found"):
+        await users_crud.relink_user(db, gotrue, email="nobody@example.com")
+
+    admin = await make_user(db, email="boss@example.com")
+    with pytest.raises(NotFoundError, match="no account"):
+        await users_crud.relink_user(db, gotrue, email="boss@example.com")
+    await db.refresh(admin)
+    assert admin.auth_user_id is not None
+
+
+async def test_relink_never_takes_another_persons_account(
+    db: AsyncSession, gotrue: FakeGoTrue
+) -> None:
+    other = await make_user(db, email="other@example.com")
+    assert other.auth_user_id is not None
+    await make_user(db, email="boss@example.com")
+    gotrue.accounts["boss@example.com"] = other.auth_user_id  # a broken GoTrue answer
+
+    with pytest.raises(ConflictError, match="other@example.com"):
+        await users_crud.relink_user(db, gotrue, email="boss@example.com")
+
+
+async def test_relink_script(
+    db: AsyncSession, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake = FakeGoTrue()
+    monkeypatch.setattr(gotrue_client, "create_gotrue_admin", lambda settings: fake)
+    admin = await make_user(db, email="boss@example.com")
+    previous = admin.auth_user_id
+    new = fake.add_account("boss@example.com")
+
+    assert await relink_script.relink("boss@example.com") == 0
+    assert await relink_script.relink("nobody@example.com") == 1
+
+    out = capsys.readouterr()
+    assert f"{previous} -> {new}" in out.out
+    assert "Not changed: User not found" in out.err
+    assert fake.closed
+
+
+def test_relink_script_needs_one_email(capsys: pytest.CaptureFixture[str]) -> None:
+    assert relink_script.main([]) == 2
+    assert "relink_user" in capsys.readouterr().err
 
 
 async def test_an_existing_person_is_made_platform_admin(

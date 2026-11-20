@@ -1,5 +1,6 @@
 """All database work for users, plus the GoTrue calls that go with it."""
 
+import logging
 import uuid
 
 from sqlalchemy import select
@@ -11,6 +12,8 @@ from app.core.identity import TokenClaims
 from app.gotrue.client import GoTrueAdmin
 from app.users.models import User
 from app.users.schemas import UserUpdate
+
+logger = logging.getLogger(__name__)
 
 # The token's GoTrue account isn't the one this email belongs to here.
 ACCOUNT_CONFLICT = "account_conflict"
@@ -98,26 +101,68 @@ async def _resolve_gotrue_account(gotrue: GoTrueAdmin, email: str, password: str
 async def ensure_platform_admin(
     db: AsyncSession, gotrue: GoTrueAdmin, *, email: str, password: str
 ) -> User:
-    """Make sure the first Platform Admin exists, in GoTrue and here, and is linked.
+    """Make sure the first Platform Admin exists, in GoTrue and here.
 
-    Runs at every startup. The GoTrue account is looked up through the
-    trusted admin API; only when there is none is it created (with the
-    password) or invited (without one). An existing account keeps its
-    password, as the MVP's seeded admin did. The row (the migrated MVP admin,
-    or a new one) is bound to that account's id, so its first login works.
+    Runs at every startup. A row that is already bound to a GoTrue account
+    stays bound to it: startup only checks that GoTrue still gives that
+    email the same id, and logs a conflict if not (see `relink_user` for
+    the deliberate fix). Only a row without a GoTrue id (the migrated MVP
+    admin, or a new one) is linked automatically, to the account found
+    through the trusted admin API, which is created (with the password) or
+    invited (without one) only when missing: a restart never resends a
+    pending invitation, and an existing account keeps its password.
     """
     email = normalize_email(email)
-    auth_user_id = await _resolve_gotrue_account(gotrue, email, password)
-
     user = await _by_email(db, email)
     if user is None:
         user = User(email=email)
         db.add(user)
     user.is_platform_admin = True
-    user.auth_user_id = auth_user_id
+
+    if user.auth_user_id is None:
+        user.auth_user_id = await _resolve_gotrue_account(gotrue, email, password)
+    else:
+        found = await gotrue.find_user_by_email(email)
+        if found != user.auth_user_id:
+            logger.error(
+                "Platform Admin %s is bound to GoTrue account %s, but GoTrue gives that "
+                "email %s. The binding is kept, so that account can't sign in. If the new "
+                "account is right, rebind on purpose: "
+                "docker compose exec control-plane python -m scripts.relink_user %s",
+                email,
+                user.auth_user_id,
+                found or "no account",
+                email,
+            )
     await db.commit()
     await db.refresh(user)
     return user
+
+
+async def relink_user(
+    db: AsyncSession, gotrue: GoTrueAdmin, *, email: str
+) -> tuple[uuid.UUID | None, uuid.UUID]:
+    """Bind a person's row to the GoTrue account that holds their email now.
+
+    The explicit recovery for a binding that no longer fits (e.g. GoTrue's
+    database was reset and the account made again). Never automatic: an
+    operator runs it on purpose (scripts/relink_user.py). The account is
+    found through the trusted admin API by exact email. Returns (old, new).
+    """
+    user = await _by_email(db, email)
+    if user is None:
+        raise NotFoundError("User not found")
+    user = await get_user(db, user.id, lock=True)
+    found = await gotrue.find_user_by_email(user.email)
+    if found is None:
+        raise NotFoundError(f"GoTrue has no account for {user.email}")
+    taken = await _by_auth_user_id(db, found)
+    if taken is not None and taken.id != user.id:
+        raise ConflictError(f"That GoTrue account is already bound to {taken.email}")
+    old = user.auth_user_id
+    user.auth_user_id = found
+    await db.commit()
+    return old, found
 
 
 async def update_user(
@@ -143,7 +188,7 @@ async def update_user(
 
     if not data.is_active:
         user.is_active = False
-    auth_user_id = await _linked_account(db, gotrue, user)
+    auth_user_id = await _linked_account(gotrue, user)
     try:
         if auth_user_id is not None:
             # Sent even when nothing changed, so a retry brings GoTrue in step.
@@ -159,7 +204,7 @@ async def update_user(
     return user
 
 
-async def _linked_account(db: AsyncSession, gotrue: GoTrueAdmin, user: User) -> uuid.UUID | None:
+async def _linked_account(gotrue: GoTrueAdmin, user: User) -> uuid.UUID | None:
     """The person's GoTrue account; one not linked yet is found by its exact email
     through the trusted admin API (and linked), so a ban reaches it too."""
     if user.auth_user_id is None:
