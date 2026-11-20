@@ -149,22 +149,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Throwaway values for this run only. Real secrets never belong in a repo.
+      # Fresh random secrets for this run only, made by the same script a
+      # developer uses (so the script is tested too). Real secrets never
+      # belong in a repo.
       - name: Write a throwaway .env
-        run: |
-          cat > .env <<'EOF'
-          POSTGRES_USER=app
-          POSTGRES_PASSWORD=ci-only-postgres-password
-          POSTGRES_DB=apim
-          DATABASE_URL=postgresql+asyncpg://app:ci-only-postgres-password@postgres:5432/apim
-          JWT_SECRET=ci-only-jwt-secret-not-used-anywhere-else
-          INTERNAL_TOKEN=ci-only-internal-token
-          ADMIN_EMAIL=admin@example.com
-          ADMIN_PASSWORD=ci-only-password
-          CONTROL_PLANE_URL=http://control-plane:8000
-          REDIS_URL=redis://redis:6379/0
-          CONFIG_WAIT=30s
-          EOF
+        run: sh scripts/init-env.sh
 
       - name: Lint the end-to-end tests and the load-test helper (ruff)
         run: |
