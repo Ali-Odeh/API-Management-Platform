@@ -41,36 +41,78 @@ docker compose down -v                 # stop and delete the database volume
 ### Upgrading an MVP install (keep your data)
 
 Before MT.1 the admin logged in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`; now
-GoTrue does, with new secrets in `.env`. To upgrade without losing the
-Postgres volume: keep the Postgres values (the volume was created with that
-user and password, and keeps them), get the new secrets from `init-env`, and
-make the old admin the Platform Admin.
+GoTrue does, with new secrets in `.env`. The new `docker-compose.yml` needs
+those secrets for **every** command (even `docker compose down`), so prepare
+the new `.env` first, while the old stack may still be running. Keep the
+Postgres values (the volume was created with that user and password, and
+keeps them), take the new secrets from `init-env`, and make the old admin the
+Platform Admin. The old file stays as `.env.mvp` until the upgrade is checked.
+
+1. Prepare the new settings:
+
+   ```powershell
+   Rename-Item .env .env.mvp               # the backup: keep it until step 3 passes
+   .\scripts\init-env.ps1                  # a new .env; note the printed password
+   $old  = @{}
+   Get-Content .env.mvp | Where-Object { $_ -match '^([A-Z_]+)=(.*)$' } | ForEach-Object { $old[$Matches[1]] = $Matches[2] }
+   $keep = 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DB', 'DATABASE_URL', 'INTERNAL_TOKEN'
+   $lines = Get-Content .env | ForEach-Object {
+       if ($_ -match '^([A-Z_]+)=' -and $keep -contains $Matches[1]) { "$($Matches[1])=$($old[$Matches[1]])" }
+       elseif ($_ -match '^PLATFORM_ADMIN_EMAIL=') { "PLATFORM_ADMIN_EMAIL=$($old['ADMIN_EMAIL'])" }
+       else { $_ }
+   }
+   [IO.File]::WriteAllText("$PWD\.env", ($lines -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+   docker compose config --quiet           # no output: the new Compose file accepts it
+   ```
+
+2. Restart on the new code (no `-v` anywhere: the volume and its data stay):
+
+   ```powershell
+   docker compose down
+   docker compose up -d --build --wait
+   ```
+
+3. Check that the upgraded stack works: the Platform Admin logs in through
+   GoTrue and is the migrated admin (same id as before):
+
+   ```powershell
+   $email = (Select-String -Path .env -Pattern '^PLATFORM_ADMIN_EMAIL=(.*)').Matches.Groups[1].Value
+   $pw    = (Select-String -Path .env -Pattern '^PLATFORM_ADMIN_PASSWORD=(.*)').Matches.Groups[1].Value
+   $login = Invoke-RestMethod -Method Post "http://localhost:9999/token?grant_type=password" -ContentType application/json `
+              -Body (@{ email = $email; password = $pw } | ConvertTo-Json)
+   Invoke-RestMethod http://localhost:8000/api/v1/me -Headers @{ Authorization = "Bearer $($login.access_token)" }
+   docker compose logs control-plane | Select-String "is bound to GoTrue account"   # no output: no binding conflict
+   ```
+
+4. Only now delete the backup (it holds the old secrets):
+
+   ```powershell
+   Remove-Item .env.mvp
+   ```
+
+If step 2 or 3 fails, `.env.mvp` still has the old settings; `docker compose
+logs control-plane auth` shows why.
+
+What happens on start: the migration turns `admins` into `users` (same id,
+email and timestamps, now Platform Admin; the old password hash is dropped,
+since GoTrue hashes differently). The control plane then creates the GoTrue
+account (password = the new `PLATFORM_ADMIN_PASSWORD`; set any 12+ characters
+before step 2 if you prefer) and links the migrated row to it, because the
+row has no GoTrue id yet. Services, routes, consumers and keys are untouched.
+`tests/test_mvp_upgrade.py` checks all of this on a populated MVP database.
+
+### Rebinding a person to another GoTrue account
+
+A person's row stays bound to the GoTrue account it was first linked to;
+nothing rebinds it automatically, because a matching email doesn't prove it
+is the same person. If GoTrue's database was reset (or the account deleted
+and made again), the old binding no longer fits: that account gets
+`403 account_conflict`, and at every start the control plane logs an `ERROR`
+naming both ids. Once you are sure the new account is right, rebind on purpose:
 
 ```powershell
-docker compose down                     # no -v: the volume and its data stay
-Rename-Item .env .env.mvp
-.\scripts\init-env.ps1                  # a new .env; note the printed password
-$old  = @{}
-Get-Content .env.mvp | Where-Object { $_ -match '^([A-Z_]+)=(.*)$' } | ForEach-Object { $old[$Matches[1]] = $Matches[2] }
-$keep = 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DB', 'DATABASE_URL', 'INTERNAL_TOKEN'
-$lines = Get-Content .env | ForEach-Object {
-    if ($_ -match '^([A-Z_]+)=' -and $keep -contains $Matches[1]) { "$($Matches[1])=$($old[$Matches[1]])" }
-    elseif ($_ -match '^PLATFORM_ADMIN_EMAIL=') { "PLATFORM_ADMIN_EMAIL=$($old['ADMIN_EMAIL'])" }
-    else { $_ }
-}
-[IO.File]::WriteAllText("$PWD\.env", ($lines -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
-docker compose up -d --build --wait
-Remove-Item .env.mvp                    # it holds the old secrets
+docker compose exec control-plane python -m scripts.relink_user admin@example.com
 ```
-
-On start, the migration turns `admins` into `users`: same id, email and
-timestamps, now Platform Admin; the old password hash is dropped (GoTrue
-hashes differently). The control plane then creates the GoTrue account
-(password = the new `PLATFORM_ADMIN_PASSWORD`; set it to anything of 12+
-characters before `up` if you prefer) and links the migrated row to it, so
-logging in as below works at once. Services, routes, consumers and keys are
-untouched. `tests/test_mvp_upgrade.py` checks all of this on a populated MVP
-database.
 
 ## Control plane (FastAPI)
 
