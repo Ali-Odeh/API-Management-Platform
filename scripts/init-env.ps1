@@ -64,9 +64,6 @@ $values = @{
     INTERNAL_TOKEN          = New-Secret 24
     PLATFORM_ADMIN_EMAIL    = "admin@example.com"
     PLATFORM_ADMIN_PASSWORD = $adminPassword
-    JWT_SECRET              = New-Secret 32
-    ADMIN_EMAIL             = "admin@example.com"
-    ADMIN_PASSWORD          = $adminPassword
 }
 
 # Keep every line and comment of the example; fill only empty KEY= lines.

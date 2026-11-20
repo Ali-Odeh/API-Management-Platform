@@ -115,7 +115,7 @@ services:
 
   control-plane:
     build: ./backend/control-plane
-    env_file: .env          # DATABASE_URL, JWT_SECRET, INTERNAL_TOKEN, ADMIN_*
+    env_file: .env          # DATABASE_URL, INTERNAL_TOKEN, GOTRUE_*, PLATFORM_ADMIN_*
     environment:
       # Docker Desktop on Windows doesn't pass file-change events into
       # containers, so the --reload watcher polls for changes instead.
@@ -172,10 +172,12 @@ services:
   e2e:
     build: ./e2e
     profiles: ["test"]
-    # Only the admin login, nothing else from .env.
+    # The Platform Admin's login, and GoTrue's admin key to set up (and clean
+    # up) its own test user and MFA factor. Nothing else from .env.
     environment:
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?set PLATFORM_ADMIN_EMAIL in .env}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?set PLATFORM_ADMIN_PASSWORD in .env}
+      GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:?set GOTRUE_SERVICE_ROLE_KEY in .env}
     volumes:
       - ./e2e:/e2e
     depends_on:
@@ -201,8 +203,8 @@ services:
     working_dir: /loadtest
     command: ["run", "gateway.js"]
     environment:
-      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?set PLATFORM_ADMIN_EMAIL in .env}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?set PLATFORM_ADMIN_PASSWORD in .env}
       RATE: ${RATE:-300}
       DURATION: ${DURATION:-30}
     volumes:

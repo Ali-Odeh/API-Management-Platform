@@ -43,10 +43,13 @@ jobs:
     # Throwaway values for this run only. Real secrets never belong in a repo.
     env:
       DATABASE_URL: postgresql+asyncpg://app:app@localhost:5432/apim
-      JWT_SECRET: ci-only-jwt-secret-not-used-anywhere-else
       INTERNAL_TOKEN: ci-only-internal-token
-      ADMIN_EMAIL: admin@example.com
-      ADMIN_PASSWORD: ci-only-password
+      # Unit tests sign their own GoTrue-shaped tokens with this secret and use
+      # a fake GoTrue, so no GoTrue process runs here (the e2e job has one).
+      GOTRUE_JWT_SECRET: ci-only-gotrue-jwt-secret-at-least-32-chars
+      GOTRUE_SERVICE_ROLE_KEY: ci-only-service-role-key
+      PLATFORM_ADMIN_EMAIL: admin@example.com
+      PLATFORM_ADMIN_PASSWORD: ci-only-platform-admin-password
 
     steps:
       - uses: actions/checkout@v4
@@ -139,7 +142,8 @@ jobs:
         run: docker build --tag gateway:ci .
 
   # The whole platform in Docker Compose, then the end-to-end stories
-  # (e2e/): admin API -> config -> gateway -> auth -> rate limit -> backend.
+  # (e2e/): GoTrue login (with MFA) -> admin API -> config -> gateway -> auth
+  # -> rate limit -> backend.
   # Runs after the unit checks, so a broken unit doesn't waste a stack start.
   e2e:
     runs-on: ubuntu-latest

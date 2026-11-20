@@ -14,6 +14,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 
 const CONTROL_PLANE = __ENV.CONTROL_PLANE_URL || 'http://control-plane:8000';
+const GOTRUE = __ENV.GOTRUE_URL || 'http://auth:9999';
 const GATEWAY = __ENV.GATEWAY_URL || 'http://gateway:8080';
 const BACKEND = __ENV.MOCK_BACKEND_URL || 'http://mock-backend:9000';
 const RATE = Number(__ENV.RATE || 300);
@@ -72,12 +73,22 @@ function admin(method, path, body, token) {
   return res.status === 204 ? null : res.json();
 }
 
+// The Platform Admin logs in with GoTrue (password only: the service, route
+// and consumer endpoints don't need MFA) and uses its access token.
+function login() {
+  const res = http.post(
+    `${GOTRUE}/token?grant_type=password`,
+    JSON.stringify({ email: __ENV.PLATFORM_ADMIN_EMAIL, password: __ENV.PLATFORM_ADMIN_PASSWORD }),
+    { headers: { 'Content-Type': 'application/json' }, tags: { run: 'setup' } },
+  );
+  if (res.status !== 200) {
+    throw new Error(`GoTrue login: ${res.status} ${res.body}`);
+  }
+  return res.json().access_token;
+}
+
 export function setup() {
-  const login = admin('POST', '/auth/login', {
-    email: __ENV.ADMIN_EMAIL,
-    password: __ENV.ADMIN_PASSWORD,
-  });
-  const token = login.access_token;
+  const token = login();
 
   const service = admin('POST', '/services', { name: `lt-${RUN_ID}-backend`, upstream_url: BACKEND }, token);
   const route = (label, authRequired) =>

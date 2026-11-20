@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from app.core.deps import CurrentAdmin, DbSession
+from app.core.deps import DbSession, WorkspaceId
 from app.core.openapi import error_responses
 from app.core.pagination import Page, Pagination
 from app.services import crud
@@ -18,29 +18,35 @@ _HAS_ROUTES = error_responses({409: "Service still has routes"})
 
 
 @router.get("")
-async def list_services(admin: CurrentAdmin, db: DbSession, page: Pagination) -> Page[ServiceOut]:
-    services, total = await crud.list_services(db, workspace_id=admin.workspace_id, page=page)
+async def list_services(
+    workspace_id: WorkspaceId, db: DbSession, page: Pagination
+) -> Page[ServiceOut]:
+    services, total = await crud.list_services(db, workspace_id=workspace_id, page=page)
     return Page[ServiceOut](items=[ServiceOut.model_validate(s) for s in services], total=total)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, responses=_CONFLICT)
-async def create_service(body: ServiceCreate, admin: CurrentAdmin, db: DbSession) -> ServiceOut:
-    service = await crud.create_service(db, workspace_id=admin.workspace_id, data=body)
+async def create_service(
+    body: ServiceCreate, workspace_id: WorkspaceId, db: DbSession
+) -> ServiceOut:
+    service = await crud.create_service(db, workspace_id=workspace_id, data=body)
     return ServiceOut.model_validate(service)
 
 
 @router.get("/{service_id}", responses=_NOT_FOUND)
-async def get_service(service_id: uuid.UUID, admin: CurrentAdmin, db: DbSession) -> ServiceOut:
-    service = await crud.get_service(db, workspace_id=admin.workspace_id, service_id=service_id)
+async def get_service(
+    service_id: uuid.UUID, workspace_id: WorkspaceId, db: DbSession
+) -> ServiceOut:
+    service = await crud.get_service(db, workspace_id=workspace_id, service_id=service_id)
     return ServiceOut.model_validate(service)
 
 
 @router.patch("/{service_id}", responses=_NOT_FOUND | _CONFLICT)
 async def update_service(
-    service_id: uuid.UUID, body: ServiceUpdate, admin: CurrentAdmin, db: DbSession
+    service_id: uuid.UUID, body: ServiceUpdate, workspace_id: WorkspaceId, db: DbSession
 ) -> ServiceOut:
     service = await crud.update_service(
-        db, workspace_id=admin.workspace_id, service_id=service_id, data=body
+        db, workspace_id=workspace_id, service_id=service_id, data=body
     )
     return ServiceOut.model_validate(service)
 
@@ -48,5 +54,5 @@ async def update_service(
 @router.delete(
     "/{service_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_NOT_FOUND | _HAS_ROUTES
 )
-async def delete_service(service_id: uuid.UUID, admin: CurrentAdmin, db: DbSession) -> None:
-    await crud.delete_service(db, workspace_id=admin.workspace_id, service_id=service_id)
+async def delete_service(service_id: uuid.UUID, workspace_id: WorkspaceId, db: DbSession) -> None:
+    await crud.delete_service(db, workspace_id=workspace_id, service_id=service_id)

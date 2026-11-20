@@ -19,12 +19,12 @@ from app.core.db import Base
 # isort: split
 # Import every feature's models here so Base.metadata knows their tables
 # and `alembic revision --autogenerate` can see them.
-from app.auth import models as auth_models  # noqa: F401
 from app.consumers import models as consumer_models  # noqa: F401
 from app.gateway_config import models as gateway_config_models  # noqa: F401
 from app.keys import models as key_models  # noqa: F401
 from app.routes import models as route_models  # noqa: F401
 from app.services import models as service_models  # noqa: F401
+from app.users import models as user_models  # noqa: F401
 from app.workspaces import models as workspace_models  # noqa: F401
 
 config = context.config

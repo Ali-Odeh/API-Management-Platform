@@ -1,12 +1,18 @@
 """Shared setup for the end-to-end tests.
 
-The tests talk to the real Docker stack the way an admin and an app would:
-the admin API of the control plane, and API calls through the gateway. They
+The tests talk to the real Docker stack the way people and apps would: they
+log in with GoTrue (password, then a TOTP code for the Platform Admin), use
+the admin API of the control plane, and call APIs through the gateway. They
 create their own objects with unique names and always delete them again,
 so they never touch existing data.
 """
 
+import base64
+import hashlib
+import hmac
+import json
 import os
+import struct
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -18,6 +24,7 @@ import pytest
 
 # Addresses inside the Compose network (the e2e container runs there).
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://control-plane:8000")
+GOTRUE_URL = os.environ.get("GOTRUE_URL", "http://auth:9999")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8080")
 # The backend as the gateway reaches it.
 MOCK_BACKEND_URL = os.environ.get("MOCK_BACKEND_URL", "http://mock-backend:9000")
@@ -139,15 +146,146 @@ def _wait_until_up(url: str) -> None:
     pytest.exit(f"{url} is not up after {STACK_START_TIMEOUT:.0f} s; is the stack running?")
 
 
+# ---- # GoTrue: logging in like the dashboard will
+
+# The Platform Admin's MFA factor that the e2e tests enroll, use and remove.
+# A person may hold several factors, so one you enrolled yourself is untouched.
+E2E_FACTOR = "e2e"
+
+
+@dataclass
+class Session:
+    access_token: str
+    refresh_token: str
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"}
+
+    @property
+    def claims(self) -> dict[str, Any]:
+        """The token's payload, read without checking it (the control plane checks)."""
+        payload = self.access_token.split(".")[1]
+        result: dict[str, Any] = json.loads(base64.urlsafe_b64decode(payload + "=="))
+        return result
+
+
+def totp_code(secret: str) -> str:
+    """The 6-digit code an authenticator app shows (RFC 6238: HMAC-SHA1, 30 s steps)."""
+    key = base64.b32decode(secret.upper() + "=" * (-len(secret) % 8))
+    digest = hmac.new(key, struct.pack(">Q", int(time.time() // 30)), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    number = struct.unpack(">I", digest[offset : offset + 4])[0] & 0x7FFFFFFF
+    return f"{number % 1_000_000:06d}"
+
+
+class GoTrue:
+    """GoTrue's public API (as a person) and its admin API (with the service-role key)."""
+
+    def __init__(self, url: str, service_role_key: str) -> None:
+        self.http = httpx.Client(base_url=url, timeout=10)
+        self._admin_headers = {"Authorization": f"Bearer {service_role_key}"}
+
+    def sign_in(self, email: str, password: str) -> Session:
+        r = self.http.post(
+            "/token", params={"grant_type": "password"}, json={"email": email, "password": password}
+        )
+        assert r.status_code == 200, f"GoTrue login of {email} failed: {r.status_code} {r.text}"
+        return Session(r.json()["access_token"], r.json()["refresh_token"])
+
+    def refresh(self, refresh_token: str) -> httpx.Response:
+        return self.http.post(
+            "/token", params={"grant_type": "refresh_token"}, json={"refresh_token": refresh_token}
+        )
+
+    def add_totp(self, session: Session, name: str) -> tuple[str, str]:
+        """Enroll a TOTP factor; returns (factor id, secret), as the QR code would."""
+        r = self.http.post(
+            "/factors", json={"factor_type": "totp", "friendly_name": name}, headers=session.headers
+        )
+        assert r.status_code == 200, f"MFA enroll failed: {r.status_code} {r.text}"
+        return r.json()["id"], r.json()["totp"]["secret"]
+
+    def verify_totp(self, session: Session, factor_id: str, secret: str) -> Session:
+        """Challenge and verify the factor: the session steps up to aal2."""
+        r = self.http.post(f"/factors/{factor_id}/challenge", json={}, headers=session.headers)
+        assert r.status_code == 200, f"MFA challenge failed: {r.status_code} {r.text}"
+        r = self.http.post(
+            f"/factors/{factor_id}/verify",
+            json={"challenge_id": r.json()["id"], "code": totp_code(secret)},
+            headers=session.headers,
+        )
+        assert r.status_code == 200, f"MFA verify failed: {r.status_code} {r.text}"
+        return Session(r.json()["access_token"], r.json()["refresh_token"])
+
+    # Admin API (service-role key): only to set up and clean up test accounts.
+
+    def remove_factors(self, user_id: str, name: str) -> None:
+        r = self.http.get(f"/admin/users/{user_id}/factors", headers=self._admin_headers)
+        assert r.status_code == 200, r.text
+        for factor in r.json():
+            if factor["friendly_name"] == name:
+                self.http.delete(
+                    f"/admin/users/{user_id}/factors/{factor['id']}", headers=self._admin_headers
+                )
+
+    def ensure_account(self, email: str, password: str) -> None:
+        """A confirmed, unbanned account with this password (made on the first run)."""
+        r = self.http.post(
+            "/admin/users",
+            json={"email": email, "password": password, "email_confirm": True},
+            headers=self._admin_headers,
+        )
+        if r.status_code == 200:
+            return
+        assert r.json().get("error_code") == "email_exists", r.text
+        found = self.http.get(
+            "/admin/users", params={"filter": email}, headers=self._admin_headers
+        ).json()["users"]
+        user_id = next(u["id"] for u in found if u["email"] == email)
+        r = self.http.put(
+            f"/admin/users/{user_id}",
+            json={"password": password, "ban_duration": "none"},
+            headers=self._admin_headers,
+        )
+        assert r.status_code == 200, r.text
+
+
 @pytest.fixture(scope="session")
-def admin() -> Iterator[httpx.Client]:
+def gotrue() -> Iterator[GoTrue]:
+    _wait_until_up(GOTRUE_URL)
+    client = GoTrue(GOTRUE_URL, os.environ["GOTRUE_SERVICE_ROLE_KEY"])
+    yield client
+    client.http.close()
+
+
+@pytest.fixture(scope="session")
+def platform_admin_password_session(gotrue: GoTrue) -> Session:
+    """The Platform Admin after the password step only (aal1)."""
+    return gotrue.sign_in(os.environ["PLATFORM_ADMIN_EMAIL"], os.environ["PLATFORM_ADMIN_PASSWORD"])
+
+
+@pytest.fixture(scope="session")
+def platform_admin_session(
+    gotrue: GoTrue, platform_admin_password_session: Session
+) -> Iterator[Session]:
+    """The Platform Admin after password and TOTP (aal2), as the dashboard will log in."""
+    session = platform_admin_password_session
+    user_id = session.claims["sub"]
+    gotrue.remove_factors(user_id, E2E_FACTOR)  # left over by a run that was killed
+    factor_id, secret = gotrue.add_totp(session, E2E_FACTOR)
+    try:
+        yield gotrue.verify_totp(session, factor_id, secret)
+    finally:
+        gotrue.remove_factors(user_id, E2E_FACTOR)
+
+
+@pytest.fixture(scope="session")
+def admin(platform_admin_session: Session) -> Iterator[httpx.Client]:
+    """The control plane's admin API, called with the Platform Admin's GoTrue token."""
     _wait_until_up(CONTROL_PLANE_URL)
-    login = {"email": os.environ["ADMIN_EMAIL"], "password": os.environ["ADMIN_PASSWORD"]}
-    r = httpx.post(f"{CONTROL_PLANE_URL}/api/v1/auth/login", json=login, timeout=10)
-    assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
     with httpx.Client(
-        base_url=f"{CONTROL_PLANE_URL}/api/v1", headers=headers, timeout=10
+        base_url=f"{CONTROL_PLANE_URL}/api/v1", headers=platform_admin_session.headers, timeout=10
     ) as client:
         yield client
 

@@ -18,6 +18,19 @@ class AppError(Exception):
         self.detail = detail
 
 
+class ForbiddenError(AppError):
+    """Signed in, but not allowed. The detail is a short code the dashboard
+    can act on, e.g. "mfa_required" or "user_disabled"."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+
+
+class UpstreamError(AppError):
+    """A service we depend on (GoTrue) failed, so the change was not made."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+
+
 class NotFoundError(AppError):
     """The record doesn't exist, or belongs to another workspace."""
 

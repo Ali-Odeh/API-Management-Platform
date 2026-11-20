@@ -53,9 +53,6 @@ sed \
   -e "s|^INTERNAL_TOKEN=\$|INTERNAL_TOKEN=$(secret 24)|" \
   -e "s|^PLATFORM_ADMIN_EMAIL=\$|PLATFORM_ADMIN_EMAIL=admin@example.com|" \
   -e "s|^PLATFORM_ADMIN_PASSWORD=\$|PLATFORM_ADMIN_PASSWORD=$admin_password|" \
-  -e "s|^JWT_SECRET=\$|JWT_SECRET=$(secret 32)|" \
-  -e "s|^ADMIN_EMAIL=\$|ADMIN_EMAIL=admin@example.com|" \
-  -e "s|^ADMIN_PASSWORD=\$|ADMIN_PASSWORD=$admin_password|" \
   .env.example > .env
 
 echo "Created .env with random secrets."

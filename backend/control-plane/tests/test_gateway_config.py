@@ -8,14 +8,18 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import crud as auth_crud
 from app.core.db import engine
 from app.gateway_config.crud import get_config_version
 from app.gateway_config.models import CONFIG_CHANGED_CHANNEL
 from app.services.models import Service
 from app.workspaces.models import Workspace
-from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD
-from tests.factories import expect_violation, make_api_key, make_consumer, make_workspace
+from tests.factories import (
+    expect_violation,
+    make_api_key,
+    make_consumer,
+    make_user,
+    make_workspace,
+)
 
 Headers = dict[str, str]
 API = "/api/v1"
@@ -196,21 +200,16 @@ async def test_failed_writes_do_not_bump(
 async def test_reads_and_login_do_not_bump(
     client: AsyncClient, auth_headers: Headers, versions: Versions
 ) -> None:
-    for path in ("/services", "/routes", "/consumers", "/auth/me"):
+    for path in ("/services", "/routes", "/consumers", "/me"):
         assert (await client.get(f"{API}{path}", headers=auth_headers)).status_code == 200
-    login = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
-    assert (await client.post(f"{API}/auth/login", json=login)).status_code == 200
     await versions.assert_unchanged()
 
 
-async def test_admins_and_workspaces_do_not_bump(
+async def test_users_and_workspaces_do_not_bump(
     db: AsyncSession, workspace: Workspace, versions: Versions
 ) -> None:
     await make_workspace(db, slug="another")
-    await auth_crud.create_admin(
-        db, email="second@test.local", password="pw", workspace_id=workspace.id
-    )
-    await db.commit()
+    await make_user(db, email="second@test.local")
     await versions.assert_unchanged()
 
 
