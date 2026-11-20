@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 19, 2026 · **Current step:** MVP done; next milestone to choose (MT or v2a)
+**Last updated:** Nov 20, 2026 · **Current step:** MT designed (decisions in [MT_ROLES_DECISIONS.md](MT_ROLES_DECISIONS.md)); next: MT.1
 
 ## Overview
 
@@ -13,8 +13,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy | ⬜⬜⬜⬜⬜⬜ 0/6 | ⏳ After the MVP |
-| v2a: Admin UI | ⬜⬜⬜ 0/3 | ⏳ After the MVP |
+| MT: Multi-tenancy and login | ⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 0/12 | ⏳ Next |
+| v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
+| v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
+| FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
 
@@ -118,30 +120,195 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 **Outcome:** the MVP definition of done from PLAN.md section 1, proven by the end-to-end tests on every push and measured by the load test.
 
-## MT: Multi-tenancy (after the MVP)
+## MT: Multi-tenancy and login
+
+**What and how:** PLAN.md (sections 3–11). **Why:** MT_ROLES_DECISIONS.md (decision numbers in brackets).
+
+**How these steps are worked:** each step is one self-contained piece of work. The agent plans its own sub-tasks, finishes the **whole** step (code, migrations, tests, docs) and hands back only when every "done when" item holds and both `check.ps1` scripts and the e2e tests are green. Work is committed as logical commits along the way, not one big commit. Rules in `AGENTS.md`.
 
 | # | Step | Status |
 | --- | --- | --- |
-| MT.1 | Workspaces API: create and list | ⬜ |
-| MT.2 | Admin roles per workspace and inviting admins | ⬜ |
-| MT.3 | Route `path_prefix` unique per workspace | ⬜ |
-| MT.4 | Gateway finds the tenant (e.g. subdomain) | ⬜ |
-| MT.5 | `/internal/config` grouped by workspace | ⬜ |
-| MT.6 | Isolation tests across workspaces | ⬜ |
+| MT.1 | Identity: GoTrue, `users`, JWT verification, Platform Admin with MFA | ⬜ |
+| MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ⬜ |
+| MT.3 | Audit log | ⬜ |
+| MT.4 | Members and owners | ⬜ |
+| MT.5 | Workspace lifecycle and quotas | ⬜ |
+| MT.6 | Incremental config protocol | ⬜ |
+| MT.7 | Gateway tenancy | ⬜ |
+| MT.8 | Workspace limits in the gateway | ⬜ |
+| MT.9 | SSRF protection | ⬜ |
+| MT.10 | Load balancing and health checks | ⬜ |
+| MT.11 | CORS and body size limit | ⬜ |
+| MT.12 | MT end to end, load test, docs | ⬜ |
 
-## v2a: Admin UI (after the MVP)
+The order follows dependencies: identity before roles, roles before audit and members, the config protocol before the gateway's tenancy, targets after SSRF (both live in the gateway's transport).
+
+### MT.1 Identity [4, 12, 13]
+
+**Outcome:** people log in with GoTrue; the control plane trusts GoTrue's token and keeps its own `users`. The old login is gone.
+
+- Compose: `auth` (GoTrue, pinned version, own `auth` database on the same Postgres) and `mailpit`; `scripts/init-env` generates the new secrets
+- GoTrue settings from PLAN.md section 9: no public sign-up, 10-minute tokens, 12-character passwords, SMTP to Mailpit, tightened sign-in rate limits
+- `users` table (Alembic) replaces `admins`: the migration moves the existing admin, makes them `is_platform_admin` and drops the argon2 hash
+- JWT verification dependency (signature, expiry, audience); just-in-time `users` row on the first request; `is_active = false` → `403 user_disabled`
+- First Platform Admin created in GoTrue at startup from `PLATFORM_ADMIN_EMAIL` if missing
+- Platform endpoints require `aal2` (MFA) → `403 mfa_required`
+- `PATCH /api/v1/users/{id}` (Platform Admin): disable or enable, also banning or unbanning in GoTrue
+- Remove the login endpoint, argon2, token issuing and the MVP auth settings; `GET /api/v1/me`
+- Test helpers sign tokens with the test GoTrue secret, so unit tests don't need a GoTrue process
+- `set_updated_at` trigger on every table (today `updated_at` is set only by the ORM)
+
+**Done when:** the Platform Admin logs in through GoTrue (password, then TOTP) and calls the admin API with GoTrue's token; a disabled user is refused on the next request and can't refresh; all existing tests pass with GoTrue tokens; e2e logs in through GoTrue.
+
+### MT.2 Workspaces and roles [0, 2, 5, 13]
+
+**Outcome:** every admin endpoint lives under a workspace, and every call is checked against the caller's role in that workspace.
+
+- `workspace_members` (`owner`, `api_admin`, `viewer`); the MT.1 admin becomes Owner of `default`
+- Permission map in code and `require_permission(...)`; one query resolves slug + membership; 404 for unknown or not-a-member, 403 for too low a role; Platform Admin passes for every workspace
+- Move every endpoint to `/api/v1/workspaces/{slug}/...`; remove the unscoped URLs; `GET /api/v1/me/workspaces`
+- `GET, POST /api/v1/workspaces` (Platform Admin, MFA): create `{name, slug, owner_email}` (owner must already exist until MT.4 adds invitations), list
+- Route `path_prefix` unique per workspace instead of globally
+- Every `crud.py` function takes `workspace_id` first
+- **Permission guard test** and **isolation test**, both discovering every endpoint from the app
+- `openapi.json` regenerated and committed; e2e moved to the new URLs
+
+**Done when:** a Viewer can read but gets 403 on every write; a member of workspace A gets 404 on every endpoint of workspace B and 422 when referencing B's objects; the two guard tests cover every endpoint and fail if a new one is added without a permission.
+
+### MT.3 Audit log [11]
+
+**Outcome:** every admin change leaves a record of who, what, when and before/after.
+
+- `audit_events` table; the application's database user gets only `INSERT` and `SELECT` on it
+- `audit.record(...)` written in the same transaction as each change; `changes` holds changed fields only; no secrets (keys by prefix only)
+- Every existing write endpoint records its event (`service.create`, `route.update`, `key.revoke`, ...)
+- **Audit guard test:** every mutating endpoint writes exactly one event; a failed change writes none
+- `GET /api/v1/workspaces/{slug}/audit-events` (`audit:read`) and `GET /api/v1/audit-events` (Platform Admin), with filters and pagination
+- Retention job (default 365 days) running as a separate database user
+
+**Done when:** the guard test covers every mutating endpoint; a rolled-back change leaves no event; Platform Admin actions in a workspace appear in that workspace's log with `actor_type = platform_admin`.
+
+### MT.4 Members and owners [8, 9]
+
+**Outcome:** Owners build their team; a workspace can never lose its last owner.
+
+- `POST /members {email, role}`: existing user → member at once; new person → GoTrue invite email (Mailpit) → member at first login; existing member → 409
+- `PATCH` (change role) and `DELETE` (remove) by Owners; `DELETE /api/v1/me/workspaces/{slug}` (leave)
+- Owner rules: several owners; nobody changes their own role; the last active human owner can't be demoted, removed or leave (`409 last_owner`); owner rows locked with `SELECT ... FOR UPDATE`
+- Platform Admin can assign an owner in any workspace (audited)
+- `POST /api/v1/workspaces` now accepts a new `owner_email` (invites them)
+- Audit: `member.add`, `member.role_change`, `member.remove`, `member.leave`, `member.owner_assigned_by_platform`
+
+**Done when:** an invitation email arrives in Mailpit and leads to a working membership; a concurrency test with two owners demoting each other at the same moment always leaves one owner; all rules above have tests.
+
+### MT.5 Workspace lifecycle and quotas [6, 10]
+
+**Outcome:** workspaces can be suspended, deleted, restored and purged; each has adjustable limits.
+
+- `workspaces`: `status`, `status_reason`, `deleted_at`, `purge_after`, limit columns (NULL = platform default)
+- Suspend / unsuspend (Platform Admin): writes → `403 workspace_suspended`, reads still work
+- Delete `{confirm: "<slug>"}` (Owner or Platform Admin) → hidden from members; restore within 30 days (Platform Admin)
+- Daily purge job deletes all workspace data after 30 days, keeps the row with status `purged`; slugs are never reused; `default` can't be suspended or deleted
+- Quotas (services, routes, consumers) → `409 quota_exceeded`; `PATCH /limits` (Platform Admin)
+- Lifecycle audit events as platform-level events (`workspace_id` NULL)
+
+**Done when:** every transition and its refusals are tested; a purged workspace's slug can't be taken again; quotas are enforced under parallel creation (no overshoot).
+
+### MT.6 Incremental config protocol [7]
+
+**Outcome:** a change in one workspace sends only that workspace to the gateways.
+
+- Control plane: `config_seq` replaces `config_version`; `workspace_config (version, seq)`; statement-level triggers with transition tables bump the touched workspaces (now also on `workspaces` changes). Follow the Postgres rules in PLAN.md section 5: three triggers per table (no `OR` with transition tables) and config-column filtering inside the function (no `UPDATE OF` with transition tables); an update that changes only `updated_at` or `last_used_at` bumps nothing (test)
+- `/internal/config?since=&wait=` with `{seq, full, workspaces, deleted}` exactly as in PLAN.md section 6; effective limits in the answer; per `(workspace, version)` cache; `?workspaces=` filter
+- Gateway: snapshot becomes `ByHost` + `Workspaces`; merge that reuses unchanged workspaces; `full` handling and the protocol-error fallback to `since=0`
+- Until MT.7 the gateway still routes every request to `default`, so all e2e stories keep working
+
+**Done when:** a change in workspace A produces an answer containing only A (test); gateway start, database reset and deleted workspaces are covered by tests; the existing race test (requests during constant config changes) passes with `-race`; config propagation is still measured in milliseconds.
+
+### MT.7 Gateway tenancy [1, 10, 17]
+
+**Outcome:** the gateway serves each workspace on its own subdomain and never mixes them.
+
+- `tenant` middleware: Host → workspace (`GATEWAY_BASE_DOMAIN`, port dropped, bare domain → `default`); `404 workspace_not_found`; `403 workspace_suspended`
+- Route matching and key lookup inside the workspace only; a key of another workspace → `401 invalid_api_key`
+- Strip client `X-Workspace-ID`, set the trusted one
+- `workspace_id` on every gateway log line and every control-plane log line
+- Fuzz test for host parsing
+
+**Done when:** e2e shows two workspaces with the same `/v1/orders` reaching different backends via `acme.localhost` and `globex.localhost`; a key used on the other workspace's host gets 401; a suspended workspace gets 403 within one config update.
+
+### MT.8 Workspace limits in the gateway [6]
+
+**Outcome:** one workspace can't take the gateway from the others.
+
+- Lua script with the workspace bucket and the consumer bucket in one call (spend only if both allow); public routes use the workspace bucket; log `limited_workspace`
+- In-flight semaphore per workspace per instance → `503 workspace_overloaded` with `Retry-After: 1`
+- Fail-open behavior unchanged when Redis is down
+
+**Done when:** Redis tests show both buckets, refusal by either, and atomicity under 100 parallel requests; a slow backend in workspace A can't use more than its in-flight share while workspace B keeps answering (test); e2e covers the workspace rate limit.
+
+### MT.9 SSRF protection [3]
+
+**Outcome:** no tenant can make the gateway reach internal addresses.
+
+- `egress` package: IP policy (default deny list from PLAN.md section 7, `UPSTREAM_ALLOW` exceptions), guarded `net.Dialer` with the `Control` hook; IPv4-mapped IPv6 handled
+- `502 upstream_not_allowed` and a warning log with workspace and target
+- Control plane: scheme check and early 422 for internal IP literals and known internal names on save
+- Compose and CI set `UPSTREAM_ALLOW=mock-backend`
+- Fuzz test for the policy; a DNS-rebinding test (a name resolving to an internal IP at connect time is refused)
+
+**Done when:** e2e shows a service pointing at `http://redis:6379` refused with `upstream_not_allowed`; all other e2e stories pass with the allow list.
+
+### MT.10 Load balancing and health checks [14]
+
+**Outcome:** a service runs on several backend instances; traffic avoids broken ones.
+
+- `service_targets` table; migration turns each `upstream_url` into one target; target endpoints; health-check settings on services
+- Gateway `upstream` package: smooth weighted round robin, active checks (interval, thresholds), passive ejection, `503 no_healthy_upstream`, `target_id` in the log
+- Balancer and health state survive config updates when a service's targets didn't change; checkers stop when targets leave
+- Health checks use the SSRF dialer
+- Compose gets a second mock-backend instance for tests
+
+**Done when:** unit tests show the weighted distribution over many picks, skipping, recovery and passive ejection; e2e shows traffic spread over two targets and moving off a stopped one within the configured thresholds.
+
+### MT.11 CORS and body size limit [15, 16]
+
+**Outcome:** browser apps can call APIs through the gateway; oversized bodies never reach a backend.
+
+- Route CORS settings; preflight answered by the gateway before auth, not forwarded, not rate-limited; headers on normal answers (`Vary: Origin`, no `*` with credentials)
+- Route `max_body_bytes` with platform default and ceiling (control-plane settings; effective value in the snapshot); `413 request_too_large` from `Content-Length`; `MaxBytesReader` for bodies without a length
+
+**Done when:** e2e covers a preflight from an allowed and a refused origin, a credentialed call, and a 413 both with and without `Content-Length`.
+
+### MT.12 MT end to end [all]
+
+**Outcome:** the MT definition of done (PLAN.md section 1) is proven on every push.
+
+- e2e stories for everything in PLAN.md section 11 "MT adds"; invitation emails read through Mailpit's API
+- k6 load test updated for host-based routing and two targets; numbers recorded here
+- README, `docs/DEVELOPMENT.md` and this file updated (quality tables, commands, new services)
+- Decisions taken during MT added to the decisions log below
+
+**Done when:** CI is green on a fresh stack, including the MT e2e stories and the k6 smoke run; the gateway overhead measured again and written down.
+
+## v2 and v3: backend (after MT)
+
+Plans and analytics (v2), then the developer portal API and extras (v3). Planned in detail, step by step, once MT is done. Backend only: their pages are built in FE.
+
+## FE: Frontend (last)
+
+**The whole frontend is built last, all at once**, after every backend milestone, by Claude, against the final control-plane API and its committed `openapi.json`. Pages and areas are listed in PLAN.md section 8. The app is called by its three areas: **Dashboard** (workspace members, by role), **Platform** (Platform Admin) and **Developer portal**; not "Admin UI", because most of its users are not admins.
 
 | # | Step | Status |
 | --- | --- | --- |
-| A.1 | Vite project, layout, auth guard, generated API types | ⬜ |
-| A.2 | Pages: Login, Services, Routes, Consumers, Consumer detail | ⬜ |
-| A.3 | CORS on the control plane for the dashboard origin | ⬜ |
-
-Later phases (v2b plans and analytics, v3 portal and extras) are planned after these.
+| FE.1 | Foundation: Vite, React, TypeScript, layout, GoTrue login and MFA, account page, workspace switcher, role-aware routing and buttons, generated API types (Vite proxies `/api`, so no CORS is needed) | ⬜ |
+| FE.2 | Dashboard: Overview, Services and service detail (targets, health), Routes (CORS, body limit), Consumers and keys, Members, Activity, Settings, Plans, Logs | ⬜ |
+| FE.3 | Platform: Workspaces (create, suspend, restore, limits), Users (disable, enable), platform activity | ⬜ |
+| FE.4 | Developer portal: sign-up and login, API catalog, API docs with try-it, own keys, own usage | ⬜ |
 
 ## Decisions log
 
-Choices made along the way that differ from, or add to, the original plan.
+Choices made along the way that differ from, or add to, the original plan. The MT design decisions (Nov 20, 2026) are recorded in [MT_ROLES_DECISIONS.md](MT_ROLES_DECISIONS.md); choices made while building MT are added here as before.
 
 | Date | Step | Decision | Why |
 | --- | --- | --- | --- |
