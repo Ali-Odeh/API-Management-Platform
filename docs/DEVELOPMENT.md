@@ -38,6 +38,40 @@ docker compose down                    # stop, keep data
 docker compose down -v                 # stop and delete the database volume
 ```
 
+### Upgrading an MVP install (keep your data)
+
+Before MT.1 the admin logged in with `ADMIN_EMAIL` / `ADMIN_PASSWORD`; now
+GoTrue does, with new secrets in `.env`. To upgrade without losing the
+Postgres volume: keep the Postgres values (the volume was created with that
+user and password, and keeps them), get the new secrets from `init-env`, and
+make the old admin the Platform Admin.
+
+```powershell
+docker compose down                     # no -v: the volume and its data stay
+Rename-Item .env .env.mvp
+.\scripts\init-env.ps1                  # a new .env; note the printed password
+$old  = @{}
+Get-Content .env.mvp | Where-Object { $_ -match '^([A-Z_]+)=(.*)$' } | ForEach-Object { $old[$Matches[1]] = $Matches[2] }
+$keep = 'POSTGRES_USER', 'POSTGRES_PASSWORD', 'POSTGRES_DB', 'DATABASE_URL', 'INTERNAL_TOKEN'
+$lines = Get-Content .env | ForEach-Object {
+    if ($_ -match '^([A-Z_]+)=' -and $keep -contains $Matches[1]) { "$($Matches[1])=$($old[$Matches[1]])" }
+    elseif ($_ -match '^PLATFORM_ADMIN_EMAIL=') { "PLATFORM_ADMIN_EMAIL=$($old['ADMIN_EMAIL'])" }
+    else { $_ }
+}
+[IO.File]::WriteAllText("$PWD\.env", ($lines -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+docker compose up -d --build --wait
+Remove-Item .env.mvp                    # it holds the old secrets
+```
+
+On start, the migration turns `admins` into `users`: same id, email and
+timestamps, now Platform Admin; the old password hash is dropped (GoTrue
+hashes differently). The control plane then creates the GoTrue account
+(password = the new `PLATFORM_ADMIN_PASSWORD`; set it to anything of 12+
+characters before `up` if you prefer) and links the migrated row to it, so
+logging in as below works at once. Services, routes, consumers and keys are
+untouched. `tests/test_mvp_upgrade.py` checks all of this on a populated MVP
+database.
+
 ## Control plane (FastAPI)
 
 The code is mounted into the container and uvicorn runs with `--reload`, so
