@@ -76,6 +76,11 @@ function admin(method, path, body, token) {
 // The Platform Admin logs in with GoTrue (password only: the service, route
 // and consumer endpoints don't need MFA) and uses its access token.
 function login() {
+  // Compose passes these through without requiring them, so check them here.
+  const missing = ['PLATFORM_ADMIN_EMAIL', 'PLATFORM_ADMIN_PASSWORD'].filter((name) => !__ENV[name]);
+  if (missing.length > 0) {
+    throw new Error(`Set ${missing.join(', ')} in .env: the load test logs in as the Platform Admin with a password.`);
+  }
   const res = http.post(
     `${GOTRUE}/token?grant_type=password`,
     JSON.stringify({ email: __ENV.PLATFORM_ADMIN_EMAIL, password: __ENV.PLATFORM_ADMIN_PASSWORD }),

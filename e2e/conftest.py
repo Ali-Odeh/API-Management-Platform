@@ -31,6 +31,10 @@ MOCK_BACKEND_URL = os.environ.get("MOCK_BACKEND_URL", "http://mock-backend:9000"
 # Same host, a port nothing listens on: connection refused at once (a 502).
 DEAD_BACKEND_URL = "http://mock-backend:9"
 
+# What the runner needs from .env. Compose passes them through without
+# requiring them (see docker-compose.yml), so they are checked here.
+REQUIRED_ENV = ("PLATFORM_ADMIN_EMAIL", "PLATFORM_ADMIN_PASSWORD", "GOTRUE_SERVICE_ROLE_KEY")
+
 STACK_START_TIMEOUT = 90.0  # seconds; containers may still be starting
 CONFIG_WAIT = 3.0  # seconds; config changes usually reach the gateway in ~70 ms
 
@@ -146,7 +150,18 @@ def _wait_until_up(url: str) -> None:
     pytest.exit(f"{url} is not up after {STACK_START_TIMEOUT:.0f} s; is the stack running?")
 
 
-# ---- # GoTrue: logging in like the dashboard will
+def pytest_configure(config: pytest.Config) -> None:
+    """Stop at once, with a clear message, when a test credential is missing."""
+    missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
+    if missing:
+        pytest.exit(
+            f"Set {', '.join(missing)} in .env: the e2e tests log in as the Platform Admin "
+            "with a password (an invited admin without PLATFORM_ADMIN_PASSWORD can't run them).",
+            returncode=2,
+        )
+
+
+# ---- GoTrue: logging in like the dashboard will
 
 # The Platform Admin's MFA factor that the e2e tests enroll, use and remove.
 # A person may hold several factors, so one you enrolled yourself is untouched.

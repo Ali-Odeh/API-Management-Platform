@@ -91,7 +91,8 @@ services:
   mailpit:
     image: axllent/mailpit:v1.33.0
     ports:
-      - "8025:8025"
+      # This machine only: the inbox holds invitation and password-reset links.
+      - "127.0.0.1:8025:8025"
 
   redis:
     image: redis:7-alpine
@@ -174,10 +175,14 @@ services:
     profiles: ["test"]
     # The Platform Admin's login, and GoTrue's admin key to set up (and clean
     # up) its own test user and MFA factor. Nothing else from .env.
+    # ":-" (not ":?"): Compose reads the whole file for every command, so a
+    # required value here would stop `docker compose up` too, e.g. when the
+    # Platform Admin is invited by email and PLATFORM_ADMIN_PASSWORD is empty.
+    # The runner checks them itself when it starts (e2e/conftest.py).
     environment:
-      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?set PLATFORM_ADMIN_EMAIL in .env}
-      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?set PLATFORM_ADMIN_PASSWORD in .env}
-      GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:?set GOTRUE_SERVICE_ROLE_KEY in .env}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+      GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:-}
     volumes:
       - ./e2e:/e2e
     depends_on:
@@ -203,8 +208,9 @@ services:
     working_dir: /loadtest
     command: ["run", "gateway.js"]
     environment:
-      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?set PLATFORM_ADMIN_EMAIL in .env}
-      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:?set PLATFORM_ADMIN_PASSWORD in .env}
+      # Checked by the script's setup (see the e2e service for why not ":?").
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
       RATE: ${RATE:-300}
       DURATION: ${DURATION:-30}
     volumes:
