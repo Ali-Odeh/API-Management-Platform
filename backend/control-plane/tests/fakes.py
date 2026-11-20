@@ -4,6 +4,7 @@ gotrue = FakeGoTrue()
 token = make_token(user.auth_user_id, user.email, aal="aal2")
 """
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -59,12 +60,19 @@ class FakeGoTrue:
         self.banned: set[uuid.UUID] = set()
         self.ban_calls: list[tuple[uuid.UUID, bool]] = []
         self.failing = False  # True: every call fails like an unreachable GoTrue
+        # True: set_banned acts, then fails, like a timeout after GoTrue applied it.
+        self.fail_after_ban = False
+        self.ban_delay = 0.0  # seconds set_banned takes, so parallel calls overlap
         self.closed = False
 
     def add_account(self, email: str) -> uuid.UUID:
         """An account that already exists in GoTrue (made outside the app)."""
         self.accounts[email] = uuid.uuid4()
         return self.accounts[email]
+
+    async def find_user_by_email(self, email: str) -> uuid.UUID | None:
+        self._maybe_fail()
+        return self.accounts.get(email)
 
     async def create_user(self, email: str, password: str) -> uuid.UUID | None:
         self._maybe_fail()
@@ -82,11 +90,14 @@ class FakeGoTrue:
 
     async def set_banned(self, auth_user_id: uuid.UUID, *, banned: bool) -> None:
         self._maybe_fail()
+        await asyncio.sleep(self.ban_delay)
         self.ban_calls.append((auth_user_id, banned))
         if banned:
             self.banned.add(auth_user_id)
         else:
             self.banned.discard(auth_user_id)
+        if self.fail_after_ban:
+            raise UpstreamError("Auth service unavailable")
 
     async def aclose(self) -> None:
         self.closed = True

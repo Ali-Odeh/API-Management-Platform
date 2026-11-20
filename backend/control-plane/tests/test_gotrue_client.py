@@ -126,3 +126,51 @@ async def test_factory_builds_the_client_from_settings() -> None:
     client = create_gotrue_admin(get_settings())
     assert isinstance(client, GoTrueAdminClient)
     await client.aclose()
+
+
+def _users_page(*emails: str) -> httpx.Response:
+    return httpx.Response(
+        200, json={"users": [{"id": str(uuid.uuid4()), "email": e} for e in emails]}
+    )
+
+
+async def test_find_user_by_email_takes_only_the_exact_match() -> None:
+    # GoTrue's filter is a substring match: "ann@x.io" also finds "joann@x.io".
+    hit = uuid.uuid4()
+    page = _users_page("joann@x.io")
+    page_json = page.json()
+    page_json["users"].append({"id": str(hit), "email": "ann@x.io"})
+    gotrue = Recorder(httpx.Response(200, json=page_json))
+
+    assert await _client(gotrue).find_user_by_email("ann@x.io") == hit
+
+    assert gotrue.last.method == "GET"
+    assert gotrue.last.url.path == "/admin/users"
+    assert dict(gotrue.last.url.params) == {"filter": "ann@x.io", "page": "1", "per_page": "50"}
+
+
+async def test_find_user_by_email_without_an_exact_match_is_none() -> None:
+    gotrue = Recorder(_users_page("joann@x.io", "ann@x.io.evil"))
+    assert await _client(gotrue).find_user_by_email("ann@x.io") is None
+
+
+async def test_find_user_by_email_reads_every_page() -> None:
+    hit = uuid.uuid4()
+    pages = [
+        _users_page(*(f"{i}ann@x.io" for i in range(50))),
+        httpx.Response(200, json={"users": [{"id": str(hit), "email": "ann@x.io"}]}),
+    ]
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return pages[len(requests) - 1]
+
+    client = GoTrueAdminClient("http://auth:9999", "key", transport=httpx.MockTransport(handler))
+    assert await client.find_user_by_email("ann@x.io") == hit
+    assert [r.url.params["page"] for r in requests] == ["1", "2"]
+
+
+async def test_find_user_by_email_failure_raises() -> None:
+    with pytest.raises(UpstreamError):
+        await _client(Recorder(httpx.Response(401))).find_user_by_email("ann@x.io")

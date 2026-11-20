@@ -2689,7 +2689,7 @@
                 }
               }
             },
-            "description": "Auth service unavailable; nothing was changed"
+            "description": "Auth service unavailable. An enable was not made; a disable was kept (the API is closed) and the ban is finished by repeating the request"
           }
         },
         "security": [

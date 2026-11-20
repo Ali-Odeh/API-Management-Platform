@@ -6,11 +6,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.errors import ConflictError, NotFoundError
+from app.core.errors import ConflictError, ForbiddenError, NotFoundError, UpstreamError
 from app.core.identity import TokenClaims
 from app.gotrue.client import GoTrueAdmin
 from app.users.models import User
 from app.users.schemas import UserUpdate
+
+# The token's GoTrue account isn't the one this email belongs to here.
+ACCOUNT_CONFLICT = "account_conflict"
+DISABLED_NOT_BANNED = (
+    "Disabled here, but the auth service didn't confirm the ban. Repeat the request to finish it."
+)
 
 
 def normalize_email(email: str) -> str:
@@ -18,8 +24,9 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
-async def get_user(db: AsyncSession, user_id: uuid.UUID) -> User:
-    user = await db.get(User, user_id)
+async def get_user(db: AsyncSession, user_id: uuid.UUID, *, lock: bool = False) -> User:
+    """`lock`: SELECT ... FOR UPDATE, so parallel changes to this person wait their turn."""
+    user = await db.get(User, user_id, with_for_update=lock, populate_existing=lock)
     if user is None:
         raise NotFoundError("User not found")
     return user
@@ -38,57 +45,76 @@ async def _by_email(db: AsyncSession, email: str) -> User | None:
 async def get_or_create_from_token(db: AsyncSession, claims: TokenClaims) -> User:
     """The person behind a verified GoTrue token; their row is created just in time.
 
-    Found by GoTrue's id first. Otherwise a row with the same email is linked
-    to this account: the migrated admin or the first Platform Admin (made
-    before they ever logged in), or a person whose GoTrue account was made
-    again. Linking keeps the row's status and rights, so a disabled person
-    stays disabled. Anyone else gets a new row with no rights.
+    A row belongs to exactly one GoTrue account, found by its id (`sub`),
+    never by email: a token's email only proves what GoTrue holds now, so
+    another account with the same address must not inherit someone's rights.
+    Rows made before their first login (the migrated admin, the first
+    Platform Admin) are linked at startup through GoTrue's admin API instead.
+    A new account whose email a row already holds gets 403 account_conflict.
     """
     user = await _by_auth_user_id(db, claims.auth_user_id)
     if user is not None:
         return user
+    same_email = await _by_email(db, claims.email)
+    if same_email is not None:
+        if same_email.auth_user_id == claims.auth_user_id:  # a parallel first request made it
+            return same_email
+        raise ForbiddenError(ACCOUNT_CONFLICT)
 
-    user = await _by_email(db, claims.email)
-    if user is None:
-        user = User(email=normalize_email(claims.email))
-        db.add(user)
-    user.auth_user_id = claims.auth_user_id
+    user = User(email=normalize_email(claims.email), auth_user_id=claims.auth_user_id)
+    db.add(user)
     try:
         await db.commit()
     except IntegrityError:
-        # Two first requests at once: the other one created or linked the row.
+        # Two first requests at once: the other one may have created the row.
         await db.rollback()
         existing = await _by_auth_user_id(db, claims.auth_user_id)
-        if existing is None:
-            raise
+        if existing is None:  # another account took the email in the meantime
+            raise ForbiddenError(ACCOUNT_CONFLICT) from None
         return existing
     await db.refresh(user)
     return user
 
 
-async def ensure_platform_admin(
-    db: AsyncSession, gotrue: GoTrueAdmin, *, email: str, password: str
-) -> User:
-    """Make sure the first Platform Admin exists, in GoTrue and here.
+async def _resolve_gotrue_account(gotrue: GoTrueAdmin, email: str, password: str) -> uuid.UUID:
+    """The id of the GoTrue account for `email`, created (or invited) only if missing.
 
-    Runs at every startup and changes nothing the second time: an existing
-    GoTrue account keeps its password (as the MVP's seeded admin did). With
-    a password the account is created ready to use; without one GoTrue
-    emails an invitation to choose it.
+    Looking first means a restart never resends a pending invitation.
     """
-    email = normalize_email(email)
+    auth_user_id = await gotrue.find_user_by_email(email)
+    if auth_user_id is not None:
+        return auth_user_id
     if password:
         auth_user_id = await gotrue.create_user(email, password)
     else:
         auth_user_id = await gotrue.invite_user(email)
+    if auth_user_id is None:  # made by someone else just now
+        auth_user_id = await gotrue.find_user_by_email(email)
+    if auth_user_id is None:
+        raise UpstreamError("Auth service unavailable")
+    return auth_user_id
+
+
+async def ensure_platform_admin(
+    db: AsyncSession, gotrue: GoTrueAdmin, *, email: str, password: str
+) -> User:
+    """Make sure the first Platform Admin exists, in GoTrue and here, and is linked.
+
+    Runs at every startup. The GoTrue account is looked up through the
+    trusted admin API; only when there is none is it created (with the
+    password) or invited (without one). An existing account keeps its
+    password, as the MVP's seeded admin did. The row (the migrated MVP admin,
+    or a new one) is bound to that account's id, so its first login works.
+    """
+    email = normalize_email(email)
+    auth_user_id = await _resolve_gotrue_account(gotrue, email, password)
 
     user = await _by_email(db, email)
     if user is None:
         user = User(email=email)
         db.add(user)
     user.is_platform_admin = True
-    if auth_user_id is not None:  # a new GoTrue account: link it now
-        user.auth_user_id = auth_user_id
+    user.auth_user_id = auth_user_id
     await db.commit()
     await db.refresh(user)
     return user
@@ -99,22 +125,43 @@ async def update_user(
 ) -> User:
     """Disable or enable a person (Platform Admin).
 
-    Disabled: every request answers 403 user_disabled from the next one on
-    (we check `is_active` each time), and GoTrue bans the account, so it can
-    neither log in nor refresh. The row is changed first and committed only
-    after GoTrue agreed; if GoTrue fails, nothing changes (502).
+    Disabled: every request answers 403 user_disabled from the next one on,
+    and GoTrue bans the account, so it can neither log in nor refresh.
+
+    The row stays locked until the end, so parallel changes to one person
+    run one after the other and GoTrue ends in the same state as the row.
+    When GoTrue fails (or times out, maybe after acting), the row keeps the
+    safe side: a disable is kept (the API is closed at once; retrying
+    finishes the ban), an enable is not made (retrying finishes it).
     """
-    user = await get_user(db, user_id)
+    user = await get_user(db, user_id, lock=True)
     if data.is_active is None:  # nothing sent: nothing to change
+        await db.commit()  # nothing written; just ends the transaction and its lock
         return user
     if user.id == actor.id and not data.is_active:
         raise ConflictError("You can't disable yourself")
 
+    if not data.is_active:
+        user.is_active = False
+    auth_user_id = await _linked_account(db, gotrue, user)
+    try:
+        if auth_user_id is not None:
+            # Sent even when nothing changed, so a retry brings GoTrue in step.
+            await gotrue.set_banned(auth_user_id, banned=not data.is_active)
+    except UpstreamError:
+        if data.is_active:
+            raise  # not enabled; the row rolls back
+        await db.commit()  # keep the disable: the API is closed already
+        raise UpstreamError(DISABLED_NOT_BANNED) from None
     user.is_active = data.is_active
-    await db.flush()  # write (and lock) the row before asking GoTrue
-    if user.auth_user_id is not None:  # never logged in: no GoTrue account linked yet
-        # Sent even when the value didn't change, so GoTrue always ends up in step.
-        await gotrue.set_banned(user.auth_user_id, banned=not data.is_active)
     await db.commit()
     await db.refresh(user)
     return user
+
+
+async def _linked_account(db: AsyncSession, gotrue: GoTrueAdmin, user: User) -> uuid.UUID | None:
+    """The person's GoTrue account; one not linked yet is found by its exact email
+    through the trusted admin API (and linked), so a ban reaches it too."""
+    if user.auth_user_id is None:
+        user.auth_user_id = await gotrue.find_user_by_email(user.email)
+    return user.auth_user_id

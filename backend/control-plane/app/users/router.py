@@ -25,7 +25,8 @@ async def me(user: CurrentUser) -> UserOut:
         {
             404: "User not found",
             409: "You can't disable yourself",
-            502: "Auth service unavailable; nothing was changed",
+            502: "Auth service unavailable. An enable was not made; a disable was kept "
+            "(the API is closed) and the ban is finished by repeating the request",
         }
     ),
 )
