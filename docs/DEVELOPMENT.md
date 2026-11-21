@@ -256,9 +256,10 @@ Watch the gateway's long polling (two windows; `INTERNAL_TOKEN` is in `.env`):
 ```powershell
 # Window 1: ask like the gateway does. It waits, because nothing has changed.
 $it = @{ "X-Internal-Token" = "<INTERNAL_TOKEN>" }
-$etag = (Invoke-WebRequest -UseBasicParsing http://localhost:8000/internal/config -Headers $it).Headers['ETag']
-Invoke-WebRequest -UseBasicParsing "http://localhost:8000/internal/config?wait=30" -Headers ($it + @{ "If-None-Match" = $etag })
-# Window 2: change anything in Swagger (e.g. block a consumer). Window 1 answers at once.
+$seq = (Invoke-RestMethod http://localhost:8000/internal/config -Headers $it).seq   # everything (since=0)
+Invoke-RestMethod "http://localhost:8000/internal/config?since=$seq&wait=30" -Headers $it | ConvertTo-Json -Depth 6
+# Window 2: change anything in Swagger (e.g. block a consumer). Window 1 answers at
+# once, with only the workspace that changed (MT.6).
 ```
 
 For editor autocomplete only (optional), a local venv:

@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 21, 2026 · **Current step:** MT.5 done (workspace lifecycle, quotas, purge job); next: MT.6
+**Last updated:** Nov 21, 2026 · **Current step:** MT.6 done (incremental config protocol); next: MT.7
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅✅⬜⬜⬜⬜⬜⬜⬜ 5/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅✅✅⬜⬜⬜⬜⬜⬜ 6/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1152 passing (about 4.5 min), including permission, isolation and audit guards over every endpoint and every role, every endpoint in a suspended and in a deleted workspace, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 1195 passing (about 5.5 min), including the config triggers column by column, including permission, isolation and audit guards over every endpoint and every role, every endpoint in a suspended and in a deleted workspace, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -36,16 +36,16 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 362 passing (102 tests plus 260 table cases and fuzz seeds), about 3 s; the Redis tests need Docker's Redis; mock backend 7 |
-| Coverage | **98.1%** total (minimum 90%, enforced): 6 packages at 100%, config 99.0%, server 97.4%, ratelimit 95.2%, main 87.0% |
+| Tests | 399 passing (tests, table cases and fuzz seeds), about 3 s; the Redis tests need Docker's Redis; mock backend 7 |
+| Coverage | **98.3%** total (minimum 90%, enforced): 6 packages at 100%, config 99.3%, server 97.4%, ratelimit 95.2%, main 87.0% |
 | Fuzz tests | 5 (paths, matching, prefix stripping, request IDs); about 1.6 million random inputs in the first runs; 10 s each in CI |
 | Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; whole chain without network **≈ 8.5 µs**; one rate-limit check **≈ 0.48 ms** (Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
-| Race detector | clean, including 1,000 requests while the config changes every ms (`go test -race` in a Linux container; also in CI) |
-| Config propagation | admin change → gateway updated in **68 ms** (measured in Docker) |
+| Race detector | clean, including 1,000 requests while the config changes every ms, and requests reading while 1,000 answers are merged (`go test -race` in a Linux container; also in CI) |
+| Config propagation | a committed change served by the gateway **≈ 4 ms** after `psql` returns (10 runs, first 45 ms; MT.6, one changed workspace per answer); 68 ms admin change → gateway at step 2.5 |
 | Proxy errors (live) | slow backend → **504 after 5.05 s** (route timeout 5 s); backend down → **502** |
 | Image | 16.9 MB (distroless, non-root) |
 | Run all checks | `.\backend\gateway\scripts\check.ps1` (`-Fix` to autofix) |
@@ -133,7 +133,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.3 | Audit log | ✅ |
 | MT.4 | Members and owners | ✅ |
 | MT.5 | Workspace lifecycle and quotas | ✅ |
-| MT.6 | Incremental config protocol | ⬜ |
+| MT.6 | Incremental config protocol | ✅ |
 | MT.7 | Gateway tenancy | ⬜ |
 | MT.8 | Workspace limits in the gateway | ⬜ |
 | MT.9 | SSRF protection | ⬜ |
@@ -234,6 +234,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Until MT.7 the gateway still routes every request to `default`, so all e2e stories keep working
 
 **Done when:** a change in workspace A produces an answer containing only A (test); gateway start, database reset and deleted workspaces are covered by tests; the existing race test (requests during constant config changes) passes with `-race`; config propagation is still measured in milliseconds.
+
+**Status:** ✅ Done (Nov 22). Commits `ae34129` (control plane: `config_seq`, `workspace_config`, the transition-table triggers, the incremental `/internal/config` with its per-workspace cache), `1560e53` (gateway: per-workspace snapshot, merge, `since`, the protocol-error fallback), then the docs. The triggers are tested column by column (every config column bumps, every other column doesn't, and a guard makes a new column be decided). A change in one workspace answers only that one; gateway start (`since=0`), a database reset (`since` from the future), deleted, purged, suspended and restored workspaces have tests on both sides. The race test passes with `-race`, plus a new one merging 1,000 answers under readers. All 32 e2e stories pass on the rebuilt stack, and its log shows partial answers merged.
 
 ### MT.7 Gateway tenancy [1, 10, 17]
 
@@ -478,3 +480,12 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.5 | e2e makes a new workspace per lifecycle story (`e2e-lc-<random>`) and leaves it deleted | Slugs are never reused, so a story that deletes must use a new one; the purge job removes it after 30 days |
 | Nov 21 | MT.5 | Workspace writes lock the row (`FOR NO KEY UPDATE`) and check status and membership again, after a first unlocked check that answers non-members `404` without the lock. Writes in one workspace therefore run one at a time, including a member add's GoTrue call. Leaving a suspended workspace returns `403 workspace_suspended`. `PATCH /limits` returns `404` for deleted or purged workspaces (after review) | A member write and a lifecycle transition or role change run in order. Strangers can't stall a workspace or learn from timing that it exists. Admin writes are rare, so one at a time per workspace costs nothing noticeable. Both endpoints honor the workspace state rules |
 | Nov 21 | MT.5 | Adding a new person whose GoTrue id our `users` already holds (a parallel add, or an account whose email changed in GoTrue) is `409`, not `500` (after review) | Postgres may report the GoTrue-id index before the email index; the parallel-add test hit it once the timing changed |
+| Nov 22 | MT.6 | The config columns are listed per table; only their changes bump. `workspaces` bumps for `slug`, `status`, `rate_limit_per_min`, `max_concurrent` (not the quotas or the name) | The answer carries only those; a test makes every other column be marked "not config" on purpose |
+| Nov 22 | MT.6 | `bump_workspaces` is `SECURITY DEFINER` (with a fixed `search_path`), `EXECUTE` for `apim_app` and `apim_purge` only | Writers need no rights on `config_seq` / `workspace_config`; the purge login lost its `config_version` grant |
+| Nov 22 | MT.6 | `workspaces` has insert and update triggers, no delete trigger | Workspace rows are never deleted (the config row RESTRICTs it) |
+| Nov 22 | MT.6 | The purge keeps `workspace_config` (PLAN.md listed it among the purged tables) | Its newer `seq` puts the purged workspace in `deleted` for a gateway that was away for 30 days; without the row it would keep serving it |
+| Nov 22 | MT.6 | `config_seq` starts at the old `config_version` | A gateway running during the upgrade isn't treated as coming from the future |
+| Nov 22 | MT.6 | Until MT.10 each service has one target (its `upstream_url`, id = the service id, weight 100); the gateway resolves a route's upstream and timeout from its service at parse time | The answer has PLAN.md's final shape now, so MT.10 only adds targets; the proxy is unchanged |
+| Nov 22 | MT.6 | The answer carries every workspace; the gateway serves only `default` until MT.7 (no `default` → `404 route_not_found`) | Replaces the MT.2 rule "only `default` in the answer": the isolation now lives in the gateway, where MT.7 extends it to every Host |
+| Nov 22 | MT.6 | The per-`(workspace, version)` cache keeps one entry per workspace (its latest version) and drops deleted ones; one answer is built at a time | Bounded by the number of workspaces; a change waking many gateways builds each workspace once |
+| Nov 22 | MT.6 | A protocol error (a partial answer before any full one, or behind the current `seq`) keeps the snapshot and asks `since=0` after the usual backoff | Never guess; the backoff stops a misbehaving control plane from causing a busy loop |

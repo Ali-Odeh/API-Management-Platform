@@ -346,7 +346,7 @@ erDiagram
 | `workspace_config` | PK and FK `workspace_id`; index on `seq` (the `since` query) |
 | `config_seq` | single row: CHECK `id = 1` |
 | `audit_events` | no FK on `workspace_id` (platform rows survive purges); `actor_type` CHECK in (`user`, `platform_admin`, `system`); indexes on (`workspace_id`, `created_at` DESC) and (`created_at`); the app's database user has INSERT and SELECT only |
-| every tenant table | index on `workspace_id`; every query filters by it; the FK to `workspaces` stays ON DELETE RESTRICT (as today), so the purge job deletes children first: `api_keys`, `routes`, `service_targets`, `services`, `consumers`, `workspace_members`, the workspace's `audit_events`, `workspace_config` |
+| every tenant table | index on `workspace_id`; every query filters by it; the FK to `workspaces` stays ON DELETE RESTRICT (as today), so the purge job deletes children first: `api_keys`, `routes`, `service_targets`, `services`, `consumers`, `workspace_members`, the workspace's `audit_events`. It keeps `workspace_config` (MT.6): its newer `seq` is how a gateway that was away learns the workspace is gone |
 | every table | `updated_at` is set by a `BEFORE UPDATE` trigger (`set_updated_at`), not by the ORM, so updates from triggers, bulk statements and SQL keep it correct; it moves only when the row really changed (MT.1) |
 
 The agent writes the Alembic migrations to match this exactly; column lengths and index names are its choice.
@@ -385,6 +385,8 @@ The agent writes the Alembic migrations to match this exactly; column lengths an
 
 Statement-level triggers run after every `INSERT`, `UPDATE` and `DELETE` statement on `services`, `service_targets`, `routes`, `consumers`, `api_keys` and `workspaces`. They use the statement's **transition tables** (`NEW TABLE`, `OLD TABLE`) to collect the distinct `workspace_id`s that changed. Then, once per statement, `bump_config()` adds 1 to `config_seq`, and for each of those workspaces adds 1 to `workspace_config.version` and sets `workspace_config.seq` to the new sequence, and sends `NOTIFY config_changed` with the new sequence. Because it runs inside the same transaction, a failed change bumps nothing and notifies nobody, and database cascades are covered too. `users`, `workspace_members` and `audit_events` don't bump: the gateway doesn't use them.
 
+The config columns per table (MT.6), the only ones whose change bumps: `services` (`upstream_url`, `timeout_ms`, `is_active`), `routes` (`service_id`, `path_prefix`, `methods`, `strip_prefix`, `auth_required`, `is_active`), `consumers` (`status`, `rate_limit_per_min`), `api_keys` (`consumer_id`, `key_hash`, `revoked_at`), `workspaces` (`slug`, `status`, `rate_limit_per_min`, `max_concurrent`). A test lists every other column as "not config", so a new column must be decided. `bump_workspaces(uuid[])` does the bump; it is `SECURITY DEFINER`, so the logins whose writes fire the triggers need no rights on `config_seq` or `workspace_config`. `workspaces` has insert and update triggers only: its rows are never deleted.
+
 Postgres rules this design must follow (checked against the Postgres 16 docs):
 
 - A trigger with transition tables can't list several events with `OR`, so each table gets **three triggers** (insert, update, delete), all calling the same function.
@@ -403,7 +405,7 @@ The application's database user has only `INSERT` and `SELECT` on `audit_events`
 | the owner (`POSTGRES_USER`) | `MIGRATION_DATABASE_URL` | everything: migrations and setup only |
 | `apim_app` | `DATABASE_URL` | read and write every table, but only `INSERT` and `SELECT` on `audit_events`; never `alembic_version` |
 | `apim_retention` | `AUDIT_RETENTION_DATABASE_URL` | `SELECT` and `DELETE` on `audit_events`, nothing else |
-| `apim_purge` | `PURGE_DATABASE_URL` | the workspace purge job (MT.5): `SELECT` and `DELETE` on every table with workspace data, audit events included; `INSERT` on `audit_events` (its own `workspace.purged`); `UPDATE` of `workspaces.status` only; `config_version` for the trigger its deletes run |
+| `apim_purge` | `PURGE_DATABASE_URL` | the workspace purge job (MT.5): `SELECT` and `DELETE` on every table with workspace data, audit events included; `INSERT` on `audit_events` (its own `workspace.purged`); `UPDATE` of `workspaces.status` only. The config triggers its deletes run need nothing more: `bump_workspaces` is `SECURITY DEFINER` (MT.6) |
 
 The one-shot `control-plane-db-init` service creates or updates the three logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
 
@@ -600,7 +602,9 @@ ETag: "1046"
 - `hosts` holds the workspace's host labels (its slug today; custom domains later through `workspace_hosts`).
 - `limits` and `max_body_bytes` are **effective** values: the workspace's or route's own setting, or the platform default. The gateway never needs the defaults itself.
 - Missing or wrong `X-Internal-Token` → `401`. A user's JWT does not work here.
-- Until the gateway tells workspaces apart by Host (MT.6, MT.7), the answer carries only the `default` workspace: path prefixes are unique only per workspace since MT.2, and another workspace's routes and keys would otherwise work on the gateway's bare host.
+- The answer carries every workspace (MT.6). Until the gateway tells workspaces apart by Host (MT.7), it serves every request from `default` only, so another workspace's routes and keys never work on its bare host.
+- Until service targets exist (MT.10), each service has exactly one target: its `upstream_url`, with the service's id as the target id and weight 100. Health-check, load-balancing, CORS and body-limit fields arrive with the steps that add them (MT.10, MT.11); the gateway ignores fields it doesn't know.
+- `304` carries `ETag: "<since>"`; a `200` carries `ETag: "<seq>"`. `?workspaces=` takes slugs; unknown ones are ignored.
 - Only active routes on active services with at least one active target, and non-revoked keys. Keys of blocked consumers stay in with `consumer_status: "blocked"`, so the gateway can answer `403`. Lists are sorted (routes by `path_prefix`, keys by `id`).
 - The sequence and the data are read in one `REPEATABLE READ` transaction, so they always match. Each `(workspace_id, version)` is built once and cached for every gateway that asks.
 - Each control-plane process keeps one dedicated Postgres connection for `LISTEN`, reconnecting on its own. After waking or timing out, the sequence is re-read from the database, so a lost notification can delay an update but never hide it.
@@ -707,7 +711,7 @@ Details (step 3.2):
 - Backoff after a failure: 1 s, 2 s, 4 s ... up to 30 s, each with random jitter (half to all of the value), reset after a success. A `304` is not a failure: the next request goes out at once, but never more than one per 250 ms.
 - The HTTP client timeout is `CONFIG_WAIT` + 10 s, so a held request is never cut short. Shutdown cancels a held request at once.
 - A body that isn't valid JSON or has no `seq` is rejected whole. A single bad route, target or key is skipped with a warning and the rest applied, so one bad row can't block other changes such as key revocations. Unknown JSON fields are ignored.
-- A lower sequence than the current one only comes as a `full` answer (for example after a database reset) and is accepted: the control plane is the source of truth. A non-full answer with a lower sequence is a protocol error: the gateway asks again with `since=0`.
+- A lower sequence than the current one only comes as a `full` answer (for example after a database reset) and is accepted: the control plane is the source of truth. A non-full answer with a lower sequence, or before any full one, is a protocol error: the gateway keeps its snapshot and, after the usual backoff, asks again with `since=0` (MT.6).
 
 **Token bucket**
 
@@ -1020,7 +1024,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.3 Audit log: same-transaction records for every write, guard test, audit endpoints, retention [11]
 - [x] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]
 - [x] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]
-- [ ] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
+- [x] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
 - [ ] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]
 - [ ] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
 - [ ] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
