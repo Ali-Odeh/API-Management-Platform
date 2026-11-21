@@ -157,7 +157,9 @@ services:
     # Run in dev mode (restart when you save a .py file).
     # --timeout-graceful-shutdown: long-poll requests can stay open up to 60 s;
     # on restart, close them after 3 s instead of waiting (the gateway just asks again).
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3
+    # --no-access-log: the app writes its own JSON request line, with
+    # request_id and workspace_id (app/core/request_log.py, MT.7).
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3 --no-access-log
     volumes:
       - ./backend/control-plane:/code   # your code, live inside the container
     ports:

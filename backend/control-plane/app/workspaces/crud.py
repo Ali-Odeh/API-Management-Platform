@@ -11,6 +11,7 @@ from app.core.db import flush_or_raise
 from app.core.errors import ConflictError, NotFoundError
 from app.core.pagination import PageParams, paginate
 from app.core.permissions import Role
+from app.core.request_log import bind_workspace
 from app.gotrue.client import GoTrueAdmin
 from app.members import crud as members_crud
 from app.members.models import WorkspaceMember
@@ -203,6 +204,7 @@ async def change_limits(
     )
     if workspace is None or workspace.status.is_gone:
         raise NotFoundError(WORKSPACE_NOT_FOUND)
+    bind_workspace(workspace.id)
     before = snapshot(workspace, LIMIT_COLUMNS)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(workspace, field, value)

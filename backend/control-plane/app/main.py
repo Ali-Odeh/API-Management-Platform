@@ -15,6 +15,7 @@ from app.core.errors import register_error_handlers
 from app.core.openapi import error_responses
 from app.core.permissions import Role
 from app.core.request_id import RequestIdMiddleware
+from app.core.request_log import RequestLogMiddleware, configure_logging
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
 from app.gateway_config.router import router as gateway_config_router
@@ -67,6 +68,7 @@ async def _bootstrap(gotrue: GoTrueAdmin, settings: Settings) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    configure_logging()
     settings = get_settings()
     # Looked up through the module, so tests can swap in a fake GoTrue.
     gotrue = gotrue_client.create_gotrue_admin(settings)
@@ -91,6 +93,8 @@ app = FastAPI(
 )
 
 register_error_handlers(app)
+# The last one added runs first: the request id exists before the request log reads it.
+app.add_middleware(RequestLogMiddleware)
 app.add_middleware(RequestIdMiddleware)
 
 # Every signed-in endpoint can answer these; document them once for all in Swagger.

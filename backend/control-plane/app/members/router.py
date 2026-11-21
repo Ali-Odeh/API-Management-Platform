@@ -18,6 +18,7 @@ from app.core.errors import ForbiddenError, NotFoundError
 from app.core.openapi import error_responses
 from app.core.pagination import Page, Pagination
 from app.core.permissions import Permission, Role
+from app.core.request_log import bind_workspace
 from app.members import crud
 from app.members.models import WorkspaceMember
 from app.members.schemas import MemberAdded, MemberCreate, MemberOut, MemberUpdate
@@ -106,6 +107,7 @@ async def leave_workspace(slug: str, request: Request, user: CurrentUser, db: Db
     )
     if found is None or found.role is None:
         raise NotFoundError(WORKSPACE_NOT_FOUND)
+    bind_workspace(found.workspace_id)
     if found.status == WorkspaceStatus.SUSPENDED:
         raise ForbiddenError("workspace_suspended")
     await crud.leave(
