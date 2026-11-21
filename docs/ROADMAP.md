@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 671 passing (about 95 s), including permission and isolation guards over every endpoint and every role, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 681 passing (about 110 s), including permission and isolation guards over every endpoint and every role, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -177,7 +177,7 @@ The order follows dependencies: identity before roles, roles before audit and me
 
 **Done when:** a Viewer can read but gets 403 on every write; a member of workspace A gets 404 on every endpoint of workspace B and 422 when referencing B's objects; the two guard tests cover every endpoint and fail if a new one is added without a permission.
 
-**Status:** ✅ Done (Nov 21). Commits `d499329` (memberships, per-workspace prefixes, slug rules, `default`-only gateway config), `86edfc4` (workspace-scoped API with `require_permission`, workspace endpoints, guard and isolation tests, e2e), then the docs update. The guards were checked to fail on purpose: a DELETE declared with a read permission, and an endpoint under `/workspaces/{slug}` without one. Viewers and API Admins exist only in unit tests until MT.4 adds the members API.
+**Status:** ✅ Done (Nov 21). Commits `d499329` (memberships, per-workspace prefixes, slug rules, `default`-only gateway config), `86edfc4` (workspace-scoped API with `require_permission`, workspace endpoints, guard and isolation tests, e2e), the docs update `ba636ac`; review fixes `acf0a7c` (the new owner's row locked during creation), `f20fcb8` (permission guard against the plan's matrix, with valid requests), `fb253f0` (422 for a route filter naming another workspace's service), then the docs update. The guards were checked to fail on purpose: a DELETE declared with a read permission, and an endpoint under `/workspaces/{slug}` without one. Viewers and API Admins exist only in unit tests until MT.4 adds the members API.
 
 ### MT.3 Audit log [11]
 
@@ -439,3 +439,6 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.2 | `owner_email` is checked for shape only (not `EmailStr`) | It must only name an existing user, and the lookup is the real check; `email-validator` refuses addresses GoTrue accepts (e.g. `*.test`) |
 | Nov 21 | MT.2 | Guard tests read each endpoint's permission from its dependencies (`PermissionCheck` is a class with `.permission`); writes must declare a non-read permission; isolation fails if a new id parameter or `..._id` body field appears untested | New endpoints can't skip the checks silently |
 | Nov 21 | MT.2 | e2e reuses its workspace `e2e-tenant` (Owner: the test person) | Workspaces can be deleted only from MT.5; everything created inside it is deleted |
+| Nov 21 | MT.2 | Workspace creation share-locks the owner's row (`FOR SHARE`) from the "is active?" check to the commit (after review) | A parallel disable (which locks it `FOR UPDATE`) could otherwise commit in between and leave a new workspace with only a disabled Owner; now it finishes first (creation answers 422) or waits. Disabling an Owner afterwards stays allowed: the last-owner rules (MT.4) cover demoting, removing and leaving |
+| Nov 21 | MT.2 | The permission guard's expectations are a matrix copied by hand from PLAN.md, the production map must equal it, and allowed cases send valid requests that must succeed (after review) | Expectations taken from the map under test would expect a wrong grant instead of catching it |
+| Nov 21 | MT.2 | A list filter naming an object not in this workspace (`?service_id=`) answers 422, for another workspace's object and for an unknown one alike; the isolation guard also discovers `..._id` query parameters (after review) | The same answer as for a body reference; it was an empty 200 before, which leaked nothing but broke the "422 when referencing B's objects" rule |

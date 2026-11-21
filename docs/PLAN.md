@@ -478,7 +478,7 @@ There is no login endpoint: the dashboard logs in with GoTrue directly. The MVP'
 
 **Conventions**
 
-- Lists take `?page=` and `?page_size=` (max 100) and return `{ items, total }`, newest first. Some lists also filter: routes by `?service_id=`, consumers by `?status=`, audit events by `?actor=`, `?action=`, `?target_type=`, `?from=`, `?to=`
+- Lists take `?page=` and `?page_size=` (max 100) and return `{ items, total }`, newest first. Some lists also filter: routes by `?service_id=`, consumers by `?status=`, audit events by `?actor=`, `?action=`, `?target_type=`, `?from=`, `?to=`. A filter naming an object that isn't in this workspace (another workspace's, or none) → `422`, as in a body
 - Errors return `{ "detail": "..." }` with the right status code: 401 not signed in, 403 not allowed, 404 unknown id or workspace (or another workspace's), 409 duplicate, still in use, `last_owner` or `quota_exceeded`, 422 invalid input or a reference to something not in this workspace
 - `PATCH` changes only the fields sent; sending `null` is rejected
 - A route `path_prefix` of `/health` or below it (`/health/db`) is reserved by the gateway and rejected with 422. `/healthy` and `/api/health` are fine. v2 adds `/metrics`
