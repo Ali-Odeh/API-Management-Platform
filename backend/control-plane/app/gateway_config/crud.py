@@ -5,8 +5,9 @@
 
 import uuid
 from collections import defaultdict
-from collections.abc import Iterable, MutableMapping
-from typing import Any
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple
 
 from sqlalchemy import Row, select
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
@@ -28,10 +29,27 @@ from app.services.models import Service
 from app.workspaces.limits import default_limit
 from app.workspaces.models import Workspace, WorkspaceStatus
 
-# Built workspaces, by id: one entry per workspace, for its latest version.
-WorkspaceCache = MutableMapping[uuid.UUID, WorkspaceConfigOut]
 
-_SEQ_QUERY = select(ConfigSeq.seq).where(ConfigSeq.id == SINGLETON_ID)
+class ConfigCursor(NamedTuple):
+    generation: uuid.UUID
+    seq: int
+
+
+@dataclass
+class WorkspaceCache:
+    """One latest version per workspace, all from the same database history."""
+
+    cursor: ConfigCursor | None = None
+    workspaces: dict[uuid.UUID, WorkspaceConfigOut] = field(default_factory=dict)
+
+    def advance(self, cursor: ConfigCursor) -> None:
+        previous = self.cursor
+        if previous and (cursor.generation != previous.generation or cursor.seq < previous.seq):
+            self.workspaces.clear()
+        self.cursor = cursor
+
+
+_CURSOR_QUERY = select(ConfigSeq.generation, ConfigSeq.seq).where(ConfigSeq.id == SINGLETON_ID)
 _IN_CONFIG = (WorkspaceStatus.ACTIVE, WorkspaceStatus.SUSPENDED)
 # Until service targets exist (MT.10), a service's upstream_url is its one target.
 _ONLY_TARGET_WEIGHT = 100
@@ -52,10 +70,10 @@ async def get_config_seq(db: AsyncSession) -> ConfigSeq:
     return (await db.scalars(query)).one()
 
 
-async def read_seq(engine: AsyncEngine) -> int:
-    """Just the number: a cheap query, run on every gateway request."""
+async def read_cursor(engine: AsyncEngine) -> ConfigCursor:
+    """A cheap query, run on every gateway request."""
     async with engine.connect() as conn:
-        return (await conn.execute(_SEQ_QUERY)).scalar_one()
+        return ConfigCursor(*(await conn.execute(_CURSOR_QUERY)).one())
 
 
 async def read_answer(
@@ -64,7 +82,8 @@ async def read_answer(
     since: int,
     slugs: frozenset[str] | None,
     cache: WorkspaceCache,
-) -> ConfigAnswer:
+    generation: uuid.UUID | None = None,
+) -> tuple[ConfigCursor, ConfigAnswer]:
     """What changed after `since`, from ONE consistent view of the database.
 
     A full answer (every workspace) when `since` is 0 (a gateway starting),
@@ -84,8 +103,13 @@ async def read_answer(
     async with engine.connect() as conn:
         conn = await conn.execution_options(isolation_level="REPEATABLE READ")
         async with conn.begin():
-            seq = (await conn.execute(_SEQ_QUERY)).scalar_one()
-            full = since <= 0 or since > seq
+            cursor = ConfigCursor(*(await conn.execute(_CURSOR_QUERY)).one())
+            cache.advance(cursor)
+            full = (
+                since <= 0
+                or since > cursor.seq
+                or (generation is not None and generation != cursor.generation)
+            )
             query = select(
                 Workspace.id, Workspace.slug, Workspace.status, WorkspaceConfig.version
             ).join(WorkspaceConfig, WorkspaceConfig.workspace_id == Workspace.id)
@@ -101,17 +125,17 @@ async def read_answer(
             missing = [
                 row.id
                 for row in served
-                if row.id not in cache or cache[row.id].version != row.version
+                if row.id not in cache.workspaces or cache.workspaces[row.id].version != row.version
             ]
             if missing:
-                cache.update(await _build(conn, missing))
+                cache.workspaces.update(await _build(conn, missing))
             deleted = sorted(row.id for row in rows if row.status not in _IN_CONFIG)
             for workspace_id in deleted:
-                cache.pop(workspace_id, None)
-            return ConfigAnswer(
-                seq=seq,
+                cache.workspaces.pop(workspace_id, None)
+            return cursor, ConfigAnswer(
+                seq=cursor.seq,
                 full=full,
-                workspaces=[cache[row.id] for row in served],
+                workspaces=[cache.workspaces[row.id] for row in served],
                 deleted=deleted,
             )
 

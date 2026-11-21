@@ -58,6 +58,7 @@ class ConfigSeq(Base):
         SmallInteger, primary_key=True, autoincrement=False, default=SINGLETON_ID
     )
     seq: Mapped[int] = mapped_column(BigInteger, server_default="1")
+    generation: Mapped[uuid.UUID] = mapped_column(server_default=func.gen_random_uuid())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

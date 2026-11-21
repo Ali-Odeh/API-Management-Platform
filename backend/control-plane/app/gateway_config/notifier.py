@@ -7,8 +7,8 @@ LISTEN only works while that exact connection stays open.
 How a waiting request uses it, without ever missing a change:
 
     wake = notifier.subscribe()        # 1. take the wake-up signal FIRST
-    seq = await read_seq()             # 2. then read the sequence
-    if seq == since:
+    cursor = await read_cursor()       # 2. then read the generation and sequence
+    if cursor matches the gateway:
         await notifier.wait(wake, seconds=30)  # 3. until a NOTIFY or 30 s
 
 If a NOTIFY lands between steps 1 and 2, the signal from step 1 is already

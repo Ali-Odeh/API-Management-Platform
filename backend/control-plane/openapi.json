@@ -5854,6 +5854,25 @@
               "description": "Only these workspaces (slugs, comma-separated): a dedicated gateway",
               "title": "Workspaces"
             }
+          },
+          {
+            "description": "Database generation from the last config",
+            "in": "header",
+            "name": "X-Config-Generation",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Database generation from the last config",
+              "title": "X-Config-Generation"
+            }
           }
         ],
         "responses": {
@@ -5865,7 +5884,15 @@
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Config-Generation": {
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
           },
           "304": {
             "description": "Not modified: nothing changed after `since`"

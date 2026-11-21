@@ -11,24 +11,30 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
 from app.core.db import driver_dsn, engine
 from app.core.deps import InternalOnly
 from app.gateway_config import crud as gateway_crud
-from app.gateway_config.crud import read_answer, read_seq
+from app.gateway_config.crud import WorkspaceCache, read_answer, read_cursor
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
 from app.gateway_config.schemas import ConfigAnswer, WorkspaceConfigOut
 from app.main import app
 from app.workspaces.models import Workspace, WorkspaceStatus
+from tests.conftest import OWNER_URL
 from tests.factories import make_api_key, make_consumer, make_route, make_service, make_workspace
 from tests.test_api_guards import set_status
 
 
 async def _answer(since: int = 0, slugs: frozenset[str] | None = None) -> ConfigAnswer:
-    return await read_answer(engine, since=since, slugs=slugs, cache={})
+    _, answer = await read_answer(engine, since=since, slugs=slugs, cache=WorkspaceCache())
+    return answer
+
+
+async def _seq() -> int:
+    return (await read_cursor(engine)).seq
 
 
 def _by_slug(answer: ConfigAnswer) -> dict[str, WorkspaceConfigOut]:
@@ -168,7 +174,7 @@ async def test_each_workspace_holds_only_its_own(
 async def test_a_change_in_one_workspace_answers_only_that_one(
     db: AsyncSession, workspace: Workspace, other_workspace: Workspace
 ) -> None:
-    seq = await read_seq(engine)
+    seq = await _seq()
     await make_service(db, other_workspace.id)
 
     answer = await _answer(since=seq)
@@ -181,7 +187,7 @@ async def test_a_change_in_one_workspace_answers_only_that_one(
 async def test_several_changes_arrive_once_as_the_latest_state(
     db: AsyncSession, workspace: Workspace
 ) -> None:
-    seq = await read_seq(engine)
+    seq = await _seq()
     for name in ("a", "b", "c"):
         await make_service(db, workspace.id, name=name)
 
@@ -197,7 +203,7 @@ async def test_a_deleted_workspace_is_listed_by_id(
     db: AsyncSession, workspace: Workspace, status: WorkspaceStatus
 ) -> None:
     acme = await make_workspace(db, slug="acme")
-    seq = await read_seq(engine)
+    seq = await _seq()
     await set_status(acme.id, status)
 
     answer = await _answer(since=seq)
@@ -213,7 +219,7 @@ async def test_a_suspended_workspace_stays_with_its_status(
 ) -> None:
     # The gateway answers 403 workspace_suspended for it (MT.7).
     acme = await make_workspace(db, slug="acme")
-    seq = await read_seq(engine)
+    seq = await _seq()
     await set_status(acme.id, WorkspaceStatus.SUSPENDED)
 
     [changed] = (await _answer(since=seq)).workspaces
@@ -227,7 +233,7 @@ async def test_a_restored_workspace_comes_back_complete(
     acme = await make_workspace(db, slug="acme")
     await make_service(db, acme.id)
     await set_status(acme.id, WorkspaceStatus.DELETED)
-    seq = await read_seq(engine)
+    seq = await _seq()
     await set_status(acme.id, WorkspaceStatus.ACTIVE)
 
     [restored] = (await _answer(since=seq)).workspaces
@@ -247,7 +253,7 @@ async def test_the_workspaces_filter(db: AsyncSession, workspace: Workspace) -> 
     # A dedicated gateway for some workspaces only.
     for slug in ("acme", "globex"):
         await make_workspace(db, slug=slug)
-    seq = await read_seq(engine)
+    seq = await _seq()
     for slug in ("acme", "globex"):
         await set_status((await _workspace_id(db, slug)), WorkspaceStatus.SUSPENDED)
 
@@ -279,12 +285,12 @@ async def test_an_unchanged_workspace_is_not_built_again(
         return await real_build(conn, ids)
 
     monkeypatch.setattr(gateway_crud, "_build", counting_build)
-    cache: dict[uuid.UUID, WorkspaceConfigOut] = {}
+    cache = WorkspaceCache()
 
     await read_answer(engine, since=0, slugs=None, cache=cache)
     await read_answer(engine, since=0, slugs=None, cache=cache)  # another gateway starting
     await make_service(db, other_workspace.id)
-    answer = await read_answer(engine, since=0, slugs=None, cache=cache)
+    _, answer = await read_answer(engine, since=0, slugs=None, cache=cache)
 
     assert built == [sorted([workspace.id, other_workspace.id]), [other_workspace.id]]
     assert len(_by_slug(answer)["other"].services) == 1  # the new version, not a stale one
@@ -292,14 +298,50 @@ async def test_an_unchanged_workspace_is_not_built_again(
 
 async def test_deleted_workspaces_leave_the_cache(db: AsyncSession, workspace: Workspace) -> None:
     acme = await make_workspace(db, slug="acme")
-    cache: dict[uuid.UUID, WorkspaceConfigOut] = {}
+    cache = WorkspaceCache()
     await read_answer(engine, since=0, slugs=None, cache=cache)
-    seq = await read_seq(engine)
+    seq = await _seq()
     await set_status(acme.id, WorkspaceStatus.DELETED)
 
     await read_answer(engine, since=seq, slugs=None, cache=cache)
 
-    assert acme.id not in cache
+    assert acme.id not in cache.workspaces
+
+
+async def test_a_new_generation_rebuilds_the_cache_and_resends_the_same_sequence(
+    gateway: AsyncClient, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_build = gateway_crud._build
+    builds = 0
+
+    async def count_builds(conn: Any, ids: list[uuid.UUID]) -> Any:
+        nonlocal builds
+        builds += 1
+        return await real_build(conn, ids)
+
+    monkeypatch.setattr(gateway_crud, "_build", count_builds)
+    before = await gateway.get("/internal/config")
+    seq = before.json()["seq"]
+    generation = before.headers["X-Config-Generation"]
+    owner = create_async_engine(OWNER_URL)
+    try:
+        async with owner.begin() as conn:
+            await conn.execute(text("UPDATE config_seq SET generation = gen_random_uuid()"))
+    finally:
+        await owner.dispose()
+
+    after = await gateway.get(
+        "/internal/config", params={"since": seq}, headers={"X-Config-Generation": generation}
+    )
+    assert after.status_code == 200, after.text
+    assert (after.json()["seq"], after.json()["full"], builds) == (seq, True, 2)
+    assert after.headers["X-Config-Generation"] != generation
+    unchanged = await gateway.get(
+        "/internal/config",
+        params={"since": seq},
+        headers={"X-Config-Generation": after.headers["X-Config-Generation"]},
+    )
+    assert unchanged.status_code == 304
 
 
 # =====================================================================

@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.db import Base, SessionLocal, engine
 from app.core.permissions import Role
@@ -21,6 +21,7 @@ from app.gateway_config.crud import get_config_seq
 from app.gateway_config.models import CONFIG_CHANGED_CHANNEL, CONFIG_COLUMNS, WorkspaceConfig
 from app.services.models import Service
 from app.workspaces.models import Workspace
+from tests.conftest import OWNER_URL
 from tests.factories import (
     expect_violation,
     make_api_key,
@@ -89,14 +90,33 @@ async def test_the_sequence_starts_at_one() -> None:
 @pytest.mark.parametrize(
     ("row_id", "constraint"), [(1, "pk_config_seq"), (2, "ck_config_seq_single_row")]
 )
-async def test_a_second_sequence_row_is_impossible(
-    db: AsyncSession, row_id: int, constraint: str
-) -> None:
-    async def insert() -> None:
-        await db.execute(text("INSERT INTO config_seq (id) VALUES (:id)"), {"id": row_id})
-        await db.commit()
+async def test_a_second_sequence_row_is_impossible(row_id: int, constraint: str) -> None:
+    owner = create_async_engine(OWNER_URL)
+    try:
+        async with AsyncSession(owner) as session:
+            insert = session.execute(
+                text("INSERT INTO config_seq (id) VALUES (:id)"), {"id": row_id}
+            )
+            await expect_violation(session, constraint, insert)
+    finally:
+        await owner.dispose()
 
-    await expect_violation(db, constraint, insert())
+
+@pytest.mark.parametrize("table", ["config_seq", "workspace_config"])
+async def test_the_api_can_read_but_cannot_write_config_cursors(
+    db: AsyncSession, table: str
+) -> None:
+    permissions = await db.execute(
+        text("SELECT has_table_privilege(current_user, :table, :permission)"),
+        {"table": table, "permission": "SELECT"},
+    )
+    assert permissions.scalar_one() is True
+    for permission in ("INSERT", "UPDATE", "DELETE"):
+        allowed = await db.scalar(
+            text("SELECT has_table_privilege(current_user, :table, :permission)"),
+            {"table": table, "permission": permission},
+        )
+        assert allowed is False
 
 
 async def test_updated_at_moves_with_the_sequence(db: AsyncSession, workspace: Workspace) -> None:
