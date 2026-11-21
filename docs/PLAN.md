@@ -690,6 +690,8 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 
 - **Requests per minute:** the rate-limit script checks the workspace bucket (`rlws:{workspace_id}`, capacity = the workspace's effective `rate_limit_per_min` from the snapshot) on every request, also on public routes, which had no limit before. On protected routes the same call also checks the consumer bucket; a token is spent only if both allow.
 - **In flight:** a counting semaphore per workspace per gateway instance (the effective `max_concurrent` from the snapshot, default 200). Full → `503 {"error":"workspace_overloaded"}` with `Retry-After: 1`. Released when the response is done or the client hangs up. Per instance on purpose: it protects each instance from a slow backend.
+- How (MT.8): the `inflight` package keeps one atomic counter per workspace id, taken with compare-and-swap (never above the limit, and a refused request takes nothing). The limit comes with each request from the snapshot, so a changed limit applies to the next request; the counters themselves survive config changes, so requests already running stay counted. The step sits right before the proxy: requests refused earlier (404, 401, 429) never hold a slot. A panic further in still gives the slot back. Taking and returning a slot costs about 25 ns, without allocations.
+- The snapshot always carries both limits (at least 1). A workspace without valid limits is dropped like any unreadable one, so it is never served without them.
 
 **CORS (MT)**
 
@@ -711,7 +713,7 @@ Details (step 3.2):
 - The server starts without waiting for config. Until the first snapshot arrives the store is empty; step 3.3 answers such requests with `503 {"error":"config_not_loaded"}`.
 - Backoff after a failure: 1 s, 2 s, 4 s ... up to 30 s, each with random jitter (half to all of the value), reset after a success. A `304` is not a failure: the next request goes out at once, but never more than one per 250 ms.
 - The HTTP client timeout is `CONFIG_WAIT` + 10 s, so a held request is never cut short. Shutdown cancels a held request at once.
-- A body that isn't valid JSON, has no `seq`, is incomplete, has a workspace without an id, or is larger than 1 GiB is rejected whole: the snapshot stays and the next request asks with `since=0`. A workspace that can't be read (no slug, unknown status) is **dropped**: it stops being served, so its old keys can't stay valid, and the rest of the answer applies; after a partial answer the next request asks for everything, in case it was a one-off. A single bad route, target or key is skipped with a warning and the rest of its workspace applied, so one bad row can't block other changes such as key revocations. Unknown JSON fields are ignored.
+- A body that isn't valid JSON, has no `seq`, is incomplete, has a workspace without an id, or is larger than 1 GiB is rejected whole: the snapshot stays and the next request asks with `since=0`. A workspace that can't be read (no slug, unknown status, limits missing or below 1) is **dropped**: it stops being served, so its old keys can't stay valid, and the rest of the answer applies; after a partial answer the next request asks for everything, in case it was a one-off. A single bad route, target or key is skipped with a warning and the rest of its workspace applied, so one bad row can't block other changes such as key revocations. Unknown JSON fields are ignored.
 - A lower sequence than the current one only comes as a `full` answer (for example after a database reset) and is accepted: the control plane is the source of truth. A non-full answer with a lower sequence, or before any full one, is a protocol error: the gateway keeps its snapshot and, after the usual backoff, asks again with `since=0` (MT.6).
 
 **Token bucket**
@@ -736,14 +738,16 @@ redis.call('PEXPIRE', KEYS[1], 120000)
 return { allowed, math.floor(tokens), retry_after_ms }
 ```
 
-The full, commented script is `backend/gateway/internal/ratelimit/tokenbucket.lua` (step 4.1). Two changes from the first draft: the script reads **Redis's clock** (`TIME`) instead of a time passed in by the gateway, so gateways whose clocks differ can't confuse a bucket; and it returns **`retry_after_ms`**, the exact time until the next token, for `Retry-After`. The Go side (`ratelimit.Limiter.Allow`) uses go-redis (`EVALSHA`, falling back to `EVAL` when Redis has forgotten the script) with a 50 ms timeout: a slower Redis counts as down.
+The full, commented script is `backend/gateway/internal/ratelimit/buckets.lua` (step 4.1 as `tokenbucket.lua`; renamed when it took the workspace's bucket in MT.8). Two changes from the first draft: the script reads **Redis's clock** (`TIME`) instead of a time passed in by the gateway, so gateways whose clocks differ can't confuse a bucket; and it returns **`retry_after_ms`**, the exact time until the next token, for `Retry-After`. The Go side (`ratelimit.Limiter.Allow`) uses go-redis (`EVALSHA`, falling back to `EVAL` when Redis has forgotten the script) with a 50 ms timeout: a slower Redis counts as down.
 
 **Two buckets in one script (MT).** The script takes one or two keys: `KEYS[1] = rlws:{workspace_id}` always, `KEYS[2] = rl:{consumer_id}` on protected routes, with each capacity in `ARGV`. It refills both, spends one token from each **only if both have one**, and returns `{ allowed, remaining_of_consumer_or_workspace, retry_after_ms, limited_by }` where `limited_by` is `"workspace"` or `"consumer"`. One round trip, as before. Public routes run it with the workspace key only.
+
+Details (MT.8): when the request is allowed, `remaining` is the consumer's bucket (the workspace's on a public route) and `limited_by` is empty. When it is refused, the answer describes the bucket that holds it back longest: `retry_after_ms` is the longest wait, since a retry needs a token from both, and on a tie the consumer's own limit is named. A refused request still records the refill in both buckets but spends nothing. `X-RateLimit-Limit` and `-Remaining` show the bucket the answer describes, so a 429 caused by the workspace's bucket shows the workspace's limit.
 
 **Rate-limit middleware (step 4.2)**
 
 - Runs after auth: it needs the consumer and its `rate_limit_per_min` (from the snapshot), and requests refused with 401/403 cost no budget. Public routes (`auth_required = false`) have no consumer; since MT they are limited by the workspace bucket. A per-IP limit for them stays a v2 idea.
-- Allowed: `X-RateLimit-Limit` and `X-RateLimit-Remaining` on the response. Empty bucket: `429 {"error":"rate_limit_exceeded"}` with the same headers and `Retry-After` in whole seconds (rounded up, at least 1).
+- Allowed: `X-RateLimit-Limit` and `X-RateLimit-Remaining` on the response (the consumer's bucket; the workspace's on public routes). Empty bucket: `429 {"error":"rate_limit_exceeded"}` with the same headers and `Retry-After` in whole seconds (rounded up, at least 1).
 - Fail open: if Redis doesn't answer within 50 ms, the request goes through without rate-limit headers. The warning is throttled to one line per 10 s, with a count of the held-back ones, so an outage can't flood the log. After Redis comes back, limiting resumes within about 3 s (go-redis retries dialing in the background instead of on every request).
 - The request log's `ratelimit` field is `""` (not limited), `"ok"`, `"limited"` (429 by the consumer bucket), `"limited_workspace"` (429 by the workspace bucket, MT) or `"unavailable"` (Redis down, let through). The client gets the same `429 rate_limit_exceeded` either way.
 - The Redis client connects lazily (Redis down at startup is fine), has 50 ms read/write/pool timeouts and no retries.
@@ -864,11 +868,12 @@ api-platform/
 │   │   └── internal/
 │   │       ├── config/           # poller and snapshot store (per-workspace merge)
 │   │       ├── tenant/           # host → workspace (MT)
-│   │       ├── middleware/       # recover, requestid, logger, tenant, cors, bodylimit, auth, ratelimit, concurrency
+│   │       ├── middleware/       # recover, requestid, logger, cors, bodylimit, auth, ratelimit, inflight
 │   │       ├── proxy/            # route matching and reverse proxy
 │   │       ├── upstream/         # targets, weighted round robin, active and passive health checks (MT)
 │   │       ├── egress/           # SSRF policy and the guarded dialer (MT)
 │   │       ├── ratelimit/        # Redis client and Lua script (consumer + workspace buckets)
+│   │       ├── inflight/         # in-flight requests per workspace (MT)
 │   │       ├── reqctx/           # per-request facts the log needs (request ID, workspace, route, target, times)
 │   │       ├── server/           # http.Server, timeouts, /health, graceful shutdown
 │   │       ├── respond/          # the gateway's own JSON answers, {"error": "..."}
@@ -1027,7 +1032,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]
 - [x] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
 - [x] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]
-- [ ] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
+- [x] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
 - [ ] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
 - [ ] MT.10 Load balancing: targets, weighted round robin, active and passive health checks [14]
 - [ ] MT.11 CORS and body size limit [15, 16]
@@ -1056,9 +1061,9 @@ Each service has its own tests, and one end-to-end script proves the whole stack
 | Gateway fuzz tests | `go test -fuzz` | Path checks, matching, prefix stripping and request IDs against independent reference rules; since MT also host parsing and the SSRF IP policy; 10 s each in CI |
 | Balancer and health-check tests (MT) | `go test` with fake targets (`httptest`) | Weighted distribution over many picks, unhealthy targets skipped, recovery, passive ejection and return, all-down 503 |
 | Gateway benchmarks | `go test -bench` (by hand) | Matching vs. number of routes, key lookup vs. number of keys, the whole chain without network |
-| Rate limiter tests | `go test` against a real Redis (Docker locally, database 15; a Redis service in CI); skipped without `REDIS_TEST_URL` | Burst, refill, `retry_after`, separate buckets, lowered limit, expiry, script reload, 100 concurrent requests for 50 tokens |
+| Rate limiter tests | `go test` against a real Redis (Docker locally, database 15; a Redis service in CI); skipped without `REDIS_TEST_URL` | Burst, refill, `retry_after`, separate buckets, lowered limit, expiry, script reload, 100 concurrent requests for 50 tokens; since MT the workspace's bucket: public routes, refusal by either bucket without spending the other, the longer wait named, and 100 concurrent requests from 5 consumers spending both buckets together or not at all |
 | End to end | pytest + httpx in `e2e/`, run in its own container (`docker compose run --rm e2e`) and in CI on a fresh stack | The MVP story: admin API creates service, routes, consumers and keys, then calls through the gateway: 200 (backend sees `X-Consumer-ID`, not the key), 401, 403 after a block, 401 after a revoke, a new route live within 1 s, 404, 405, 429, 502, 504, `strip_prefix`, public routes. Own objects, always cleaned up. **MT adds:** GoTrue login (and MFA for the Platform Admin), two workspaces with the same path reaching different backends, a key used on the wrong workspace's host (401), roles (a Viewer can't write), last-owner rules, suspend (403) and restore, audit entries for each change, the workspace rate limit, SSRF (`upstream_not_allowed`), traffic spread over two targets and moved off a stopped one, CORS preflight, 413. Invitation emails are read from Mailpit's API |
-| Load | k6 in Docker (`docker compose run --rm loadtest`); a 5 s smoke run in CI | Three runs at the same fixed rate: direct to the backend, through the gateway on a public route, and on a protected route (key + Redis). Measured at 300 requests/s: the gateway adds 0.77 ms median and 0.95 ms p95 in total; its own code about 0.08 ms, the Redis rate limit about 0.3 ms, the rest is the extra network hop. 0 errors |
+| Load | k6 in Docker (`docker compose run --rm loadtest`); a 5 s smoke run in CI | Three runs at the same fixed rate: direct to the backend, through the gateway on a public route, and on a protected route (key + Redis). Measured at 300 requests/s: the gateway adds 0.77 ms median and 0.95 ms p95 in total; its own code about 0.08 ms, the Redis rate limit about 0.3 ms, the rest is the extra network hop. 0 errors. Since MT.8 both gateway runs make the Redis call (the workspace's bucket): 0.78 ms median, 0.83 ms p95. The `default` workspace's rate limit is raised for the run (with the Platform Admin's MFA) and put back afterwards |
 
 **Observability**
 

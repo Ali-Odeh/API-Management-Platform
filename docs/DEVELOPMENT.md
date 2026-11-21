@@ -350,7 +350,10 @@ Run them for any change a request touches from end to end.
 ## Load test
 
 k6 in Docker: direct vs. through the gateway, at a fixed rate (about 1 min
-40 s). Details and results in [loadtest/README.md](../loadtest/README.md).
+40 s). It logs in as the Platform Admin with password and its own TOTP factor
+(removed afterwards) to raise the `default` workspace's rate limit for the run,
+and puts it back at the end. Details and results in
+[loadtest/README.md](../loadtest/README.md).
 
 ```powershell
 docker compose run --rm loadtest
