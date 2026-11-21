@@ -196,3 +196,14 @@ func TestMiddlewareWorksWithoutALogger(t *testing.T) {
 		t.Error("the workspace didn't reach the next handler")
 	}
 }
+
+// Host parsing runs on every request: no allocations for a lowercase Host.
+func BenchmarkLabel(b *testing.B) {
+	for _, host := range []string{"acme.gw.example.com:8443", "localhost:8081"} {
+		b.Run(host, func(b *testing.B) {
+			for b.Loop() {
+				Label(host, "gw.example.com")
+			}
+		})
+	}
+}
