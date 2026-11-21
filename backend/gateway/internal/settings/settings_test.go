@@ -24,13 +24,14 @@ var defaults = Settings{
 	InternalToken:   "s3cret",
 	RedisURL:        "redis://redis:6379/0",
 	ConfigWait:      30 * time.Second,
+	BaseDomain:      "localhost",
 }
 
 // setEnv starts from a clean slate, whatever the machine has set, then
 // applies the required values and the case's own values on top.
 func setEnv(t *testing.T, env map[string]string) {
 	t.Helper()
-	for _, k := range []string{"LISTEN_ADDR", "SHUTDOWN_TIMEOUT", "CONTROL_PLANE_URL", "INTERNAL_TOKEN", "CONFIG_WAIT", "REDIS_URL"} {
+	for _, k := range []string{"LISTEN_ADDR", "SHUTDOWN_TIMEOUT", "CONTROL_PLANE_URL", "INTERNAL_TOKEN", "CONFIG_WAIT", "REDIS_URL", "GATEWAY_BASE_DOMAIN"} {
 		t.Setenv(k, "")
 	}
 	for k, v := range required {
@@ -55,16 +56,17 @@ func TestLoad(t *testing.T) {
 		},
 		{
 			name: "empty optional values count as unset",
-			env:  map[string]string{"LISTEN_ADDR": "", "SHUTDOWN_TIMEOUT": "", "CONFIG_WAIT": ""},
+			env:  map[string]string{"LISTEN_ADDR": "", "SHUTDOWN_TIMEOUT": "", "CONFIG_WAIT": "", "GATEWAY_BASE_DOMAIN": ""},
 			want: defaults,
 		},
 		{
 			name: "custom values",
 			env: map[string]string{
-				"LISTEN_ADDR":       "127.0.0.1:9090",
-				"SHUTDOWN_TIMEOUT":  "1500ms",
-				"CONTROL_PLANE_URL": "https://cp.example.com/",
-				"CONFIG_WAIT":       "60s",
+				"LISTEN_ADDR":         "127.0.0.1:9090",
+				"SHUTDOWN_TIMEOUT":    "1500ms",
+				"CONTROL_PLANE_URL":   "https://cp.example.com/",
+				"CONFIG_WAIT":         "60s",
+				"GATEWAY_BASE_DOMAIN": "GW.Example.com.",
 			},
 			want: Settings{
 				ListenAddr:      "127.0.0.1:9090",
@@ -73,6 +75,7 @@ func TestLoad(t *testing.T) {
 				InternalToken:   "s3cret",
 				RedisURL:        "redis://redis:6379/0",
 				ConfigWait:      60 * time.Second,
+				BaseDomain:      "gw.example.com", // lowercase, no trailing dot
 			},
 		},
 		{name: "listen address without a colon", env: map[string]string{"LISTEN_ADDR": "8080"}, wantErr: []string{"LISTEN_ADDR"}},
@@ -90,6 +93,12 @@ func TestLoad(t *testing.T) {
 		{name: "config wait not a duration", env: map[string]string{"CONFIG_WAIT": "soon"}, wantErr: []string{"CONFIG_WAIT"}},
 		{name: "config wait of zero", env: map[string]string{"CONFIG_WAIT": "0s"}, wantErr: []string{"whole seconds"}},
 		{name: "config wait above the endpoint's limit", env: map[string]string{"CONFIG_WAIT": "61s"}, wantErr: []string{"whole seconds"}},
+		{name: "base domain with a port", env: map[string]string{"GATEWAY_BASE_DOMAIN": "localhost:8081"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
+		{name: "base domain with a scheme", env: map[string]string{"GATEWAY_BASE_DOMAIN": "https://gw.example.com"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
+		{name: "base domain with an empty label", env: map[string]string{"GATEWAY_BASE_DOMAIN": "gw..example.com"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
+		{name: "base domain label starting with a dash", env: map[string]string{"GATEWAY_BASE_DOMAIN": "-gw.example.com"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
+		{name: "base domain too long", env: map[string]string{"GATEWAY_BASE_DOMAIN": strings.Repeat("a.", 127) + "com"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
+		{name: "base domain label too long", env: map[string]string{"GATEWAY_BASE_DOMAIN": strings.Repeat("a", 64) + ".com"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
 		{name: "config wait with a fraction", env: map[string]string{"CONFIG_WAIT": "1500ms"}, wantErr: []string{"whole seconds"}},
 		{
 			name:    "every problem is reported at once",

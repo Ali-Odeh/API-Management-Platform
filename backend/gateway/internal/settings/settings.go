@@ -23,6 +23,8 @@ const (
 	// Below Docker's 10 s stop grace period, so we finish before a SIGKILL.
 	DefaultShutdownTimeout = 5 * time.Second
 	DefaultConfigWait      = 30 * time.Second
+	// Locally `acme.localhost` resolves to this machine without any DNS.
+	DefaultBaseDomain = "localhost"
 )
 
 // /internal/config accepts ?wait= from 0 to 60 whole seconds. 0 would turn
@@ -41,6 +43,7 @@ type Settings struct {
 	InternalToken   Secret        // INTERNAL_TOKEN, shared with the control plane
 	ConfigWait      time.Duration // CONFIG_WAIT, how long the control plane may hold a config request
 	RedisURL        Secret        // REDIS_URL, e.g. "redis://redis:6379/0"; a Secret because it may hold a password
+	BaseDomain      string        // GATEWAY_BASE_DOMAIN, e.g. "gw.example.com": workspaces are its subdomains
 }
 
 // Secret is a string that must never end up in a log or an error message.
@@ -62,6 +65,7 @@ func Load() (Settings, error) {
 		ListenAddr:      DefaultListenAddr,
 		ShutdownTimeout: DefaultShutdownTimeout,
 		ConfigWait:      DefaultConfigWait,
+		BaseDomain:      DefaultBaseDomain,
 	}
 	var errs []error
 
@@ -110,6 +114,13 @@ func Load() (Settings, error) {
 		errs = append(errs, err)
 	}
 
+	if v := os.Getenv("GATEWAY_BASE_DOMAIN"); v != "" {
+		s.BaseDomain = strings.TrimSuffix(strings.ToLower(v), ".")
+		if !isDomain(s.BaseDomain) {
+			errs = append(errs, fmt.Errorf("GATEWAY_BASE_DOMAIN %q: want a domain name such as \"gw.example.com\" (no scheme, port or path)", v))
+		}
+	}
+
 	if len(errs) > 0 {
 		return Settings{}, errors.Join(errs...)
 	}
@@ -141,4 +152,23 @@ func checkRedisURL(v string) error {
 		return errors.New(`REDIS_URL: want a URL such as "redis://redis:6379/0"`)
 	}
 	return nil
+}
+
+// isDomain reports whether d is a domain name: dot-separated DNS labels of
+// a-z, 0-9 and '-', each 1 to 63 long and not starting or ending with '-'.
+func isDomain(d string) bool {
+	if len(d) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(d, ".") {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range []byte(label) {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+				return false
+			}
+		}
+	}
+	return true
 }

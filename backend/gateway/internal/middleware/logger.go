@@ -13,7 +13,7 @@ import (
 // Logger writes one JSON line per request once the answer is done
 // (PLAN.md section 7):
 //
-//	{"msg":"request","request_id":"...","method":"GET","path":"/v1/orders/7",
+//	{"msg":"request","request_id":"...","workspace_id":"ws1","method":"GET","path":"/v1/orders/7",
 //	 "route_id":"r1","consumer_id":"c1","key_id":"k1","status":200,"latency_ms":12.4,
 //	 "upstream_ms":9.1,"gateway_ms":3.3,"client_ip":"172.18.0.1","bytes":245}
 //
@@ -48,6 +48,7 @@ func Logger(log *slog.Logger) Middleware {
 func logRequest(log *slog.Logger, r *http.Request, info *reqctx.Info, sw *statusWriter, latency time.Duration, aborted bool) {
 	attrs := []slog.Attr{
 		slog.String("request_id", info.RequestID),
+		slog.String("workspace_id", info.WorkspaceID()),
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
 		slog.String("route_id", info.RouteID),

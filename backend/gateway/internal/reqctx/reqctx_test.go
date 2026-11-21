@@ -3,6 +3,8 @@ package reqctx
 import (
 	"context"
 	"testing"
+
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 )
 
 func TestWithAndFrom(t *testing.T) {
@@ -32,4 +34,15 @@ func TestFromWithoutInfoIsSafe(t *testing.T) {
 		t.Fatal("From() returned nil")
 	}
 	info.RouteID = "ignored" // must not panic
+}
+
+func TestWorkspaceID(t *testing.T) {
+	info := &Info{}
+	if got := info.WorkspaceID(); got != "" {
+		t.Errorf("WorkspaceID() = %q before tenant ran, want empty", got)
+	}
+	info.Workspace = &config.Workspace{ID: "w1"}
+	if got := info.WorkspaceID(); got != "w1" {
+		t.Errorf("WorkspaceID() = %q, want w1", got)
+	}
 }

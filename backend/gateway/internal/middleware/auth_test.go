@@ -11,6 +11,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/tenant"
 )
 
 const (
@@ -50,7 +51,7 @@ func newAuthGateway(t *testing.T) (http.Handler, *seen) {
 		w.WriteHeader(http.StatusOK)
 	})
 	auth := Auth(slog.New(slog.DiscardHandler))
-	return proxy.NewRouter(staticSource{snap}, auth(backend)), got
+	return tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(auth(backend))), got
 }
 
 func TestAuth(t *testing.T) {
@@ -152,7 +153,7 @@ func TestAuthUsesTheRoutersSnapshot(t *testing.T) {
 		Version: 2, Routes: old.Default().Routes,
 		Keys: map[string]config.Key{hashAPIKey(activeKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
 	})}
-	gw := proxy.NewRouter(source, Auth(slog.New(slog.DiscardHandler))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
+	gw := tenant.Middleware(source, "localhost")(proxy.NewRouter(Auth(slog.New(slog.DiscardHandler))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))))
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.Header.Set(APIKeyHeader, activeKey)
 	rec := httptest.NewRecorder()

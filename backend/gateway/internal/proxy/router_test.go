@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/tenant"
 )
 
 // fakeSource is a SnapshotSource that always returns the same snapshot.
@@ -28,9 +29,9 @@ func TestRouterAnswersItself(t *testing.T) {
 	}{
 		{name: "no config yet", snap: nil, method: "GET", path: "/v1", wantStatus: 503, wantError: "config_not_loaded", wantHeader: [2]string{"Retry-After", "1"}},
 		{name: "unknown path", snap: loaded, method: "GET", path: "/v2", wantStatus: 404, wantError: "route_not_found"},
-		// Other workspaces' routes are never served before MT.7: without
-		// `default`, nothing matches.
-		{name: "no default workspace", snap: config.NewSnapshot(7, &config.Workspace{ID: "w1", Hosts: []string{"acme"}, Routes: testRoutes}), method: "GET", path: "/v1", wantStatus: 404, wantError: "route_not_found"},
+		// A request without a workspace subdomain never reaches another
+		// workspace's routes: without `default`, the Host's workspace is unknown.
+		{name: "no default workspace", snap: config.NewSnapshot(7, &config.Workspace{ID: "w1", Hosts: []string{"acme"}, Routes: testRoutes}), method: "GET", path: "/v1", wantStatus: 404, wantError: "workspace_not_found"},
 		{name: "wrong method", snap: loaded, method: "PUT", path: "/v1/orders/7", wantStatus: 405, wantError: "method_not_allowed", wantHeader: [2]string{"Allow", "DELETE, GET, POST"}},
 
 		// Encoded traversal arrives decoded; it must never be matched.
@@ -38,7 +39,8 @@ func TestRouterAnswersItself(t *testing.T) {
 		{name: "encoded slash and dot-dot", snap: loaded, method: "GET", path: "/v1/orders/..%2fadmin", wantStatus: 400, wantError: "invalid_path"},
 		{name: "encoded dot segment", snap: loaded, method: "GET", path: "/v1/orders/%2e/7", wantStatus: 400, wantError: "invalid_path"},
 		{name: "encoded double slash (found by fuzzing)", snap: loaded, method: "GET", path: "/%2F", wantStatus: 400, wantError: "invalid_path"},
-		{name: "unclean path checked before config", snap: nil, method: "GET", path: "/v1/%2e%2e/x", wantStatus: 400, wantError: "invalid_path"},
+		// Tenant runs first: without a config there is no workspace to check a path in.
+		{name: "unclean path without config", snap: nil, method: "GET", path: "/v1/%2e%2e/x", wantStatus: 503, wantError: "config_not_loaded"},
 	}
 
 	for _, tt := range tests {
@@ -48,7 +50,7 @@ func TestRouterAnswersItself(t *testing.T) {
 			})
 			rec := httptest.NewRecorder()
 
-			NewRouter(fakeSource{tt.snap}, next).ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
+			routed(tt.snap, next).ServeHTTP(rec, httptest.NewRequest(tt.method, tt.path, nil))
 
 			if rec.Code != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
@@ -75,7 +77,7 @@ func TestRouterPassesTheMatchOn(t *testing.T) {
 	})
 	rec := httptest.NewRecorder()
 
-	NewRouter(fakeSource{snap}, next).ServeHTTP(rec, httptest.NewRequest("POST", "/v1/orders/7", nil))
+	routed(snap, next).ServeHTTP(rec, httptest.NewRequest("POST", "/v1/orders/7", nil))
 
 	if rec.Code != http.StatusTeapot {
 		t.Fatalf("status = %d, want next's 418", rec.Code)
@@ -127,4 +129,25 @@ func snapshotOf(ws *config.Workspace) *config.Snapshot {
 	ws.ID, ws.Slug, ws.Status = "ws-default", config.DefaultHost, config.WorkspaceActive
 	ws.Hosts = []string{config.DefaultHost}
 	return config.NewSnapshot(ws.Version, ws)
+}
+
+// routed is the router behind tenant, as main wires it: a request (with no
+// workspace subdomain) is served from the snapshot's `default` workspace.
+func routed(snap *config.Snapshot, next http.Handler) http.Handler {
+	return tenant.Middleware(fakeSource{snap}, "localhost")(NewRouter(next))
+}
+
+// Without tenant before it the router has no workspace to match in: a
+// wiring bug, answered with 500 rather than guessing a workspace.
+func TestRouterWithoutTenantIs500(t *testing.T) {
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("next was called without a workspace")
+	})
+	rec := httptest.NewRecorder()
+
+	NewRouter(next).ServeHTTP(rec, httptest.NewRequest("GET", "/v1", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/tenant"
 )
 
 // fakeLimiter answers with a fixed result or error and records what it was
@@ -52,7 +53,7 @@ func newLimitedGateway(t *testing.T, limiter Allower, log *slog.Logger) (http.Ha
 		w.WriteHeader(http.StatusOK)
 	})
 	chain := Auth(log)(RateLimit(limiter, log)(backend))
-	return proxy.NewRouter(staticSource{snap}, chain), called
+	return tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(chain)), called
 }
 
 func send(h http.Handler, path, key string) (*httptest.ResponseRecorder, *reqctx.Info) {

@@ -22,6 +22,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/tenant"
 )
 
 type staticSource struct{ snap *config.Snapshot }
@@ -57,7 +58,7 @@ func TestAPIHandlerEndToEnd(t *testing.T) {
 		Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
 	})
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	tests := []struct {
 		name         string
@@ -118,7 +119,7 @@ func TestAPIHandlerTimesTheBackend(t *testing.T) {
 		ID: "r1", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: false, Upstream: upstream, Timeout: 5 * time.Second,
 	}}})
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	api.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
@@ -164,7 +165,7 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 	a, b := version(1, "consumer-a", 5*time.Second), version(2, "consumer-b", 4*time.Second)
 	source := &swappingSource{}
 	source.current.Store(a)
-	api := apiHandler(source, allowAll{}, slog.New(slog.DiscardHandler))
+	api := apiHandler(source, "localhost", allowAll{}, slog.New(slog.DiscardHandler))
 
 	stopSwapping := make(chan struct{})
 	swapped := make(chan struct{})
@@ -226,7 +227,7 @@ func BenchmarkAPIHandlerChain(b *testing.B) {
 	// forwarder, so only the gateway's own cost is measured.
 	instant := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	chain := middleware.Chain(
-		proxy.NewRouter(staticSource{snap}, middleware.Auth(log)(instant)),
+		tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(middleware.Auth(log)(instant))),
 		middleware.RequestID, middleware.Logger(log), middleware.Recover(log),
 	)
 
@@ -251,4 +252,77 @@ func snapshotOf(ws *config.Workspace) *config.Snapshot {
 	ws.ID, ws.Slug, ws.Status = "ws-default", config.DefaultHost, config.WorkspaceActive
 	ws.Hosts = []string{config.DefaultHost}
 	return config.NewSnapshot(ws.Version, ws)
+}
+
+// Two workspaces publish the same path with different backends and keys:
+// each Host reaches only its own, a key works only on its own workspace's
+// host, and the backend learns the workspace from the gateway alone.
+func TestAPIHandlerKeepsWorkspacesApart(t *testing.T) {
+	type atBackend struct{ name, workspaceID string }
+	got := make(chan atBackend, 1)
+	backend := func(name string) *url.URL {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got <- atBackend{name, r.Header.Get("X-Workspace-ID")}
+		}))
+		t.Cleanup(srv.Close)
+		u, _ := url.Parse(srv.URL)
+		return u
+	}
+	const acmeKey, globexKey = "ak_live_acme0000000000000000000000000000", "ak_live_globex00000000000000000000000000"
+	tenantWith := func(id, slug, key string, upstream *url.URL) *config.Workspace {
+		return &config.Workspace{
+			ID: id, Slug: slug, Status: config.WorkspaceActive, Hosts: []string{slug},
+			Routes: []config.Route{{ID: "r-" + slug, PathPrefix: "/v1/orders", Methods: []string{"GET"},
+				AuthRequired: true, Upstream: upstream, Timeout: 5 * time.Second}},
+			Keys: map[string]config.Key{sha256Hex(key): {ID: "k-" + slug, ConsumerID: "c-" + slug, ConsumerStatus: config.ConsumerActive}},
+		}
+	}
+	snap := config.NewSnapshot(1,
+		tenantWith("w-acme", "acme", acmeKey, backend("acme")),
+		tenantWith("w-globex", "globex", globexKey, backend("globex")),
+	)
+	var logs bytes.Buffer
+	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+
+	call := func(host, key string) (int, string, map[string]any) {
+		logs.Reset()
+		req := httptest.NewRequest("GET", "/v1/orders/7", nil)
+		req.Host = host
+		req.Header.Set("X-API-Key", key)
+		req.Header.Set("X-Workspace-ID", "w-forged")
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		var line map[string]any
+		if err := json.Unmarshal(logs.Bytes(), &line); err != nil {
+			t.Fatalf("want one JSON log line, got %q", logs.String())
+		}
+		var body map[string]string
+		_ = json.Unmarshal(rec.Body.Bytes(), &body)
+		return rec.Code, body["error"], line
+	}
+
+	for _, tc := range []struct{ host, key, backend, workspace string }{
+		{"acme.localhost:8081", acmeKey, "acme", "w-acme"},
+		{"globex.localhost:8081", globexKey, "globex", "w-globex"},
+	} {
+		status, _, line := call(tc.host, tc.key)
+		if status != 200 {
+			t.Fatalf("%s: status %d, want 200", tc.host, status)
+		}
+		if b := <-got; b.name != tc.backend || b.workspaceID != tc.workspace {
+			t.Errorf("%s reached %+v, want backend %s told workspace %s", tc.host, b, tc.backend, tc.workspace)
+		}
+		if line["workspace_id"] != tc.workspace {
+			t.Errorf("%s: log workspace_id = %v, want %s", tc.host, line["workspace_id"], tc.workspace)
+		}
+	}
+
+	// A valid key of another workspace is unknown here, exactly like a wrong key.
+	if status, code, _ := call("globex.localhost", acmeKey); status != 401 || code != "invalid_api_key" {
+		t.Errorf("acme's key on globex's host: %d %s, want 401 invalid_api_key", status, code)
+	}
+	// Neither tenant's routes are served on the bare host: it is `default`'s, which isn't here.
+	if status, code, line := call("localhost", acmeKey); status != 404 || code != "workspace_not_found" || line["workspace_id"] != "" {
+		t.Errorf("bare host: %d %s (log workspace %v), want 404 workspace_not_found", status, code, line["workspace_id"])
+	}
 }

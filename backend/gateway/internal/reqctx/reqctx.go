@@ -10,6 +10,8 @@ package reqctx
 import (
 	"context"
 	"time"
+
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 )
 
 // Info is the "notes card" of one request. All writes and the final read
@@ -17,11 +19,12 @@ import (
 // synchronously), so it needs no lock.
 type Info struct {
 	RequestID  string
-	RouteID    string        // set by the router when a route matched
-	ConsumerID string        // set by auth when the key was found
-	KeyID      string        // which of the consumer's keys was used (never the key itself)
-	RateLimit  string        // "" (not limited), "ok", "limited" or "unavailable" (Redis down, let through)
-	Upstream   time.Duration // time until the backend's response headers; 0 if not called
+	Workspace  *config.Workspace // set by tenant: the Host's workspace; nil if none was found
+	RouteID    string            // set by the router when a route matched
+	ConsumerID string            // set by auth when the key was found
+	KeyID      string            // which of the consumer's keys was used (never the key itself)
+	RateLimit  string            // "" (not limited), "ok", "limited" or "unavailable" (Redis down, let through)
+	Upstream   time.Duration     // time until the backend's response headers; 0 if not called
 }
 
 type key struct{}
@@ -44,4 +47,12 @@ func From(ctx context.Context) *Info {
 func Has(ctx context.Context) bool {
 	_, ok := ctx.Value(key{}).(*Info)
 	return ok
+}
+
+// WorkspaceID is the request's workspace for the log, or "" if none was found.
+func (i *Info) WorkspaceID() string {
+	if i.Workspace == nil {
+		return ""
+	}
+	return i.Workspace.ID
 }

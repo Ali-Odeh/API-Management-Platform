@@ -219,6 +219,9 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN in .env}
       CONFIG_WAIT: ${CONFIG_WAIT:-30s}
       REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
+      # Workspaces are its subdomains: acme.localhost reaches workspace `acme`
+      # (MT.7); any other name (localhost, gateway) serves `default`.
+      GATEWAY_BASE_DOMAIN: ${GATEWAY_BASE_DOMAIN:-localhost}
     ports:
       # host 8081 -> container 8080. 127.0.0.1:8080 on the host is taken by
       # another Windows app. Containers still use gateway:8080.
