@@ -150,7 +150,7 @@ func TestPollerMergesPartialAnswers(t *testing.T) {
 	acme := store.Current().Workspaces["ws1"]
 
 	cp.respond(http.StatusOK, `{"seq": 44, "full": false, "workspaces": [
-	  {"id": "ws2", "slug": "globex", "status": "active", "version": 1, "hosts": ["globex"]}], "deleted": []}`)
+	  {"id": "ws2", "slug": "globex", "status": "active", "limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, "version": 1, "hosts": ["globex"]}], "deleted": []}`)
 	cp.next(t)
 
 	snap := store.Current()
@@ -275,7 +275,7 @@ func TestPollerDropsAnUnreadableWorkspaceAndResyncs(t *testing.T) {
 	cp.next(t)
 	cp.respond(http.StatusOK, `{"seq":44,"full":false,"deleted":[],"workspaces":[
 	  {"id":"ws1","slug":"acme"},
-	  {"id":"ws2","slug":"globex","status":"active","hosts":["globex"]}]}`)
+	  {"id":"ws2","slug":"globex","status":"active","limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, "hosts":["globex"]}]}`)
 
 	if r := cp.next(t); since(r) != "0" {
 		t.Errorf("since = %s, want 0 (a full answer to recover the dropped workspace)", since(r))
@@ -297,7 +297,7 @@ func TestPollerDropsAnUnreadableWorkspaceFromAFullAnswer(t *testing.T) {
 	cp.next(t)
 	cp.respond(http.StatusOK, `{"seq":5,"full":true,"deleted":[],"workspaces":[
 	  {"id":"ws1","slug":"acme","status":"archived"},
-	  {"id":"ws2","slug":"globex","status":"active","hosts":["globex"]}]}`)
+	  {"id":"ws2","slug":"globex","status":"active","limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, "hosts":["globex"]}]}`)
 
 	if r := cp.next(t); since(r) != "5" {
 		t.Errorf("since = %s, want 5", since(r))
@@ -340,7 +340,7 @@ func TestApplyStreamsAnAnswerLargerThan64MiB(t *testing.T) {
 		}
 		id := strconv.Itoa(i)
 		parts = append(parts,
-			strings.NewReader(`{"id":"`+id+`","slug":"`+id+`","status":"active","future_field":"`),
+			strings.NewReader(`{"id":"`+id+`","slug":"`+id+`","status":"active","limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, "future_field":"`),
 			strings.NewReader(padding), strings.NewReader(`"}`))
 	}
 	parts = append(parts, strings.NewReader("]}"))
@@ -436,7 +436,7 @@ func TestApplyLogsSkippedEntries(t *testing.T) {
 	p := NewPoller(cfg, store, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	body := `{"seq": 5, "full": true, "workspaces": [{"id": "w", "slug": "default", "status": "active",
-		"services": [], "routes": [{"id": "bad", "service_id": "nope", "path_prefix": "/x", "methods": ["GET"]}]}], "deleted": []}`
+"limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, 		"services": [], "routes": [{"id": "bad", "service_id": "nope", "path_prefix": "/x", "methods": ["GET"]}]}], "deleted": []}`
 	if err := p.apply(strings.NewReader(body), ""); err != nil {
 		t.Fatalf("apply() error: %v", err)
 	}

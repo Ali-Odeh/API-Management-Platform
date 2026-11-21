@@ -24,20 +24,23 @@ import (
 type fakeLimiter struct {
 	res   ratelimit.Result
 	err   error
-	calls []string // "consumer/limit"
+	calls []string // "workspace/limit consumer/limit"
 }
 
-func (f *fakeLimiter) Allow(_ context.Context, consumerID string, limit int) (ratelimit.Result, error) {
-	f.calls = append(f.calls, consumerID+"/"+strconv.Itoa(limit))
+func (f *fakeLimiter) Allow(_ context.Context, req ratelimit.Request) (ratelimit.Result, error) {
+	f.calls = append(f.calls, req.WorkspaceID+"/"+strconv.Itoa(req.WorkspaceLimit)+" "+
+		req.ConsumerID+"/"+strconv.Itoa(req.ConsumerLimit))
 	return f.res, f.err
 }
 
-// newLimitedGateway is router → Auth → RateLimit → a backend that answers
-// 200, with a private route (consumer limit 42) and a public one.
+// newLimitedGateway is tenant → router → Auth → RateLimit → a backend that
+// answers 200, in a workspace limited to 6000 requests per minute, with a
+// private route (consumer limit 42) and a public one.
 func newLimitedGateway(t *testing.T, limiter Allower, log *slog.Logger) (http.Handler, *bool) {
 	t.Helper()
 	snap := snapshotOf(&config.Workspace{
 		Version: 1,
+		Limits:  config.Limits{RateLimitPerMin: 6000, MaxConcurrent: 200},
 		Routes: []config.Route{
 			{ID: "private", PathPrefix: "/private", Methods: []string{"GET"}, AuthRequired: true},
 			{ID: "public", PathPrefix: "/public", Methods: []string{"GET"}, AuthRequired: false},
@@ -82,9 +85,10 @@ func TestRateLimitAllowed(t *testing.T) {
 	if rec.Header().Get("Retry-After") != "" {
 		t.Error("Retry-After set on an allowed request")
 	}
-	// The consumer's own limit, from the snapshot, by consumer (not key).
-	if len(limiter.calls) != 1 || limiter.calls[0] != "c1/42" {
-		t.Errorf("limiter asked %v, want [c1/42]", limiter.calls)
+	// The workspace's and the consumer's own limits, from the snapshot, by
+	// consumer (not key), in one call.
+	if want := "ws-default/6000 c1/42"; len(limiter.calls) != 1 || limiter.calls[0] != want {
+		t.Errorf("limiter asked %v, want [%s]", limiter.calls, want)
 	}
 	if info.RateLimit != RateLimitOK {
 		t.Errorf("log field ratelimit = %q, want ok", info.RateLimit)
@@ -92,7 +96,7 @@ func TestRateLimitAllowed(t *testing.T) {
 }
 
 func TestRateLimitExceededIs429(t *testing.T) {
-	limiter := &fakeLimiter{res: ratelimit.Result{Allowed: false, Limit: 42, Remaining: 0, RetryAfter: 1200 * time.Millisecond}}
+	limiter := &fakeLimiter{res: ratelimit.Result{LimitedBy: ratelimit.BucketConsumer, Limit: 42, RetryAfter: 1200 * time.Millisecond}}
 	gw, called := newLimitedGateway(t, limiter, slog.New(slog.DiscardHandler))
 
 	rec, info := send(gw, "/private/x", activeKey)
@@ -135,26 +139,92 @@ func TestRateLimitFailsOpen(t *testing.T) {
 	}
 }
 
-func TestRateLimitSkipsPublicRoutesAndRefusedKeys(t *testing.T) {
+// The workspace's bucket refused: the client sees the same 429, described
+// by the workspace's numbers; the log says which bucket it was.
+func TestRateLimitByTheWorkspaceIs429(t *testing.T) {
+	limiter := &fakeLimiter{res: ratelimit.Result{LimitedBy: ratelimit.BucketWorkspace, Limit: 6000, RetryAfter: 10 * time.Millisecond}}
+	gw, called := newLimitedGateway(t, limiter, slog.New(slog.DiscardHandler))
+
+	rec, info := send(gw, "/private/x", activeKey)
+
+	if rec.Code != http.StatusTooManyRequests || *called {
+		t.Fatalf("status %d, backend called %v; want 429 without calling the backend", rec.Code, *called)
+	}
+	if rec.Body.String() != `{"error":"rate_limit_exceeded"}`+"\n" || rec.Header().Get("Retry-After") != "1" {
+		t.Errorf("body %q, Retry-After %q", rec.Body.String(), rec.Header().Get("Retry-After"))
+	}
+	if rec.Header().Get(LimitHeader) != "6000" || rec.Header().Get(RemainingHeader) != "0" {
+		t.Errorf("headers = %v", rec.Header())
+	}
+	if info.RateLimit != RateLimitLimitedWorkspace {
+		t.Errorf("log field ratelimit = %q, want limited_workspace", info.RateLimit)
+	}
+}
+
+// Public routes have no consumer: the workspace's bucket alone limits them
+// (before MT.8 they were not limited at all).
+func TestRateLimitLimitsPublicRoutesByTheWorkspace(t *testing.T) {
+	for _, tc := range []struct {
+		res        ratelimit.Result
+		wantStatus int
+		wantLog    string
+	}{
+		{ratelimit.Result{Allowed: true, Limit: 6000, Remaining: 5999}, 200, RateLimitOK},
+		{ratelimit.Result{LimitedBy: ratelimit.BucketWorkspace, Limit: 6000, RetryAfter: time.Second}, 429, RateLimitLimitedWorkspace},
+	} {
+		limiter := &fakeLimiter{res: tc.res}
+		gw, _ := newLimitedGateway(t, limiter, slog.New(slog.DiscardHandler))
+
+		rec, info := send(gw, "/public/x", "")
+
+		if rec.Code != tc.wantStatus || info.RateLimit != tc.wantLog || rec.Header().Get(LimitHeader) != "6000" {
+			t.Errorf("status %d, ratelimit %q, headers %v; want %d, %q", rec.Code, info.RateLimit, rec.Header(), tc.wantStatus, tc.wantLog)
+		}
+		if want := "ws-default/6000 /0"; len(limiter.calls) != 1 || limiter.calls[0] != want {
+			t.Errorf("limiter asked %v, want [%s] (the workspace only)", limiter.calls, want)
+		}
+	}
+}
+
+func TestRateLimitSkipsRefusedKeys(t *testing.T) {
 	limiter := &fakeLimiter{res: ratelimit.Result{Allowed: true, Limit: 42, Remaining: 41}}
 	gw, _ := newLimitedGateway(t, limiter, slog.New(slog.DiscardHandler))
 
 	cases := []struct {
-		path, key  string
+		key        string
 		wantStatus int
 	}{
-		{"/public/x", "", 200},          // nobody to count
-		{"/private/x", "", 401},         // no key: refused before the limiter
-		{"/private/x", blockedKey, 403}, // blocked: refused before the limiter
+		{"", 401},         // no key: refused before the limiter
+		{blockedKey, 403}, // blocked: refused before the limiter
 	}
 	for _, c := range cases {
-		rec, info := send(gw, c.path, c.key)
+		rec, info := send(gw, "/private/x", c.key)
 		if rec.Code != c.wantStatus || rec.Header().Get(LimitHeader) != "" || info.RateLimit != "" {
-			t.Errorf("%s key %q: status %d, headers %v, ratelimit %q", c.path, c.key, rec.Code, rec.Header(), info.RateLimit)
+			t.Errorf("key %q: status %d, headers %v, ratelimit %q", c.key, rec.Code, rec.Header(), info.RateLimit)
 		}
 	}
 	if len(limiter.calls) != 0 {
-		t.Errorf("limiter was asked %v; refused and public requests must cost no budget", limiter.calls)
+		t.Errorf("limiter was asked %v; refused requests must cost no budget", limiter.calls)
+	}
+}
+
+// Wired without tenant before it, the rate limit has no workspace to count:
+// a wiring bug, answered 500 rather than letting the request through.
+func TestRateLimitWithoutAWorkspaceIs500(t *testing.T) {
+	limiter := &fakeLimiter{}
+	var logs jsonLogger
+	h := RateLimit(limiter, logs.logger())(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("request let through without a workspace")
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+
+	if rec.Code != http.StatusInternalServerError || len(limiter.calls) != 0 {
+		t.Errorf("status %d, limiter asked %v; want 500 without asking", rec.Code, limiter.calls)
+	}
+	if !strings.Contains(logs.buf.String(), "without a workspace") {
+		t.Errorf("no error logged: %s", logs.buf.String())
 	}
 }
 

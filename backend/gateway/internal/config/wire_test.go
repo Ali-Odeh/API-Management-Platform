@@ -11,7 +11,7 @@ const validBody = `{
   "seq": 43,
   "full": false,
   "workspaces": [{
-    "id": "ws1", "slug": "acme", "status": "active", "version": 18, "hosts": ["acme"],
+    "id": "ws1", "slug": "acme", "status": "active", "limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, "version": 18, "hosts": ["acme"],
     "limits": {"rate_limit_per_min": 6000, "max_concurrent": 200},
     "services": [
       {"id": "s1", "timeout_ms": 5000, "targets": [{"id": "s1", "url": "http://mock-backend:9000", "weight": 100}]},
@@ -88,7 +88,7 @@ func TestParseAnswer(t *testing.T) {
 
 func TestParseAnswerEmptyWorkspace(t *testing.T) {
 	body := `{"seq": 1, "full": true, "workspaces": [{"id": "w", "slug": "default", "status": "suspended",
-	  "hosts": ["default"], "services": [], "routes": [], "keys": []}], "deleted": []}`
+"limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, 	  "hosts": ["default"], "services": [], "routes": [], "keys": []}], "deleted": []}`
 	a, _, err := parseAnswer(strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("parseAnswer() error: %v", err)
@@ -161,7 +161,7 @@ func TestParseAnswerSkipsOnlyBadEntries(t *testing.T) {
 				keys += "," + tt.badKey
 			}
 			body := `{"seq": 9, "full": false, "workspaces": [{"id": "w", "slug": "acme", "status": "active",
-			  "services": [` + services + `], "routes": [` + routes + `], "keys": [` + keys + `]}], "deleted": []}`
+"limits": {"rate_limit_per_min": 60, "max_concurrent": 10}, 			  "services": [` + services + `], "routes": [` + routes + `], "keys": [` + keys + `]}], "deleted": []}`
 
 			a, skipped, err := parseAnswer(strings.NewReader(body))
 			if err != nil {
@@ -188,11 +188,20 @@ func TestParseAnswerDropsOnlyBadWorkspaces(t *testing.T) {
 		{name: "no slug", workspace: `{"id": "x", "status": "active"}`, wantSkipped: "no slug"},
 		{name: "unknown status", workspace: `{"id": "x", "slug": "x", "status": "archived"}`, wantSkipped: "unknown status"},
 		{name: "no status", workspace: `{"id": "x", "slug": "x"}`, wantSkipped: "unknown status"},
+		// The limits protect the other workspaces from this one (MT.8).
+		{name: "no limits", workspace: `{"id": "x", "slug": "x", "status": "active"}`, wantSkipped: "invalid limits"},
+		{name: "rate limit 0", workspace: `{"id": "x", "slug": "x", "status": "active",
+			"limits": {"rate_limit_per_min": 0, "max_concurrent": 10}}`, wantSkipped: "invalid limits"},
+		{name: "in-flight limit 0", workspace: `{"id": "x", "slug": "x", "status": "active",
+			"limits": {"rate_limit_per_min": 60, "max_concurrent": 0}}`, wantSkipped: "invalid limits"},
+		{name: "negative limit", workspace: `{"id": "x", "slug": "x", "status": "suspended",
+			"limits": {"rate_limit_per_min": -5, "max_concurrent": 10}}`, wantSkipped: "invalid limits"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			body := `{"seq": 2, "full": false, "workspaces": [` + tt.workspace +
-				`, {"id": "ok", "slug": "ok", "status": "active"}], "deleted": ["gone"]}`
+				`, {"id": "ok", "slug": "ok", "status": "active", "limits": {"rate_limit_per_min": 60, "max_concurrent": 10}}],
+				"deleted": ["gone"]}`
 			a, skipped, err := parseAnswer(strings.NewReader(body))
 			if err != nil {
 				t.Fatalf("parseAnswer() error: %v", err)

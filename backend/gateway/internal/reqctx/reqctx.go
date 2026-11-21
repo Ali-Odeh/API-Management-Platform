@@ -23,7 +23,7 @@ type Info struct {
 	RouteID    string            // set by the router when a route matched
 	ConsumerID string            // set by auth when the key was found
 	KeyID      string            // which of the consumer's keys was used (never the key itself)
-	RateLimit  string            // "" (not limited), "ok", "limited" or "unavailable" (Redis down, let through)
+	RateLimit  string            // "" (not checked), "ok", "limited", "limited_workspace" or "unavailable" (Redis down, let through)
 	Upstream   time.Duration     // time until the backend's response headers; 0 if not called
 }
 

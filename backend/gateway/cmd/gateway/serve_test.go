@@ -34,6 +34,10 @@ func freeAddr(t *testing.T) string {
 // never collides with another package's tests.
 const servedConsumer = "serve-test-consumer"
 
+// servedWorkspace is the workspace of fakeControlPlane's snapshot, named for
+// the same reason: its bucket (MT.8) is its own.
+const servedWorkspace = "serve-test-workspace"
+
 // fakeControlPlane answers the first /internal/config with a snapshot (one
 // protected route to backendURL, one key whose consumer may make limit
 // requests per minute), then holds every later request open like a real
@@ -41,13 +45,13 @@ const servedConsumer = "serve-test-consumer"
 func fakeControlPlane(t *testing.T, backendURL string, limit int) *httptest.Server {
 	t.Helper()
 	body := fmt.Sprintf(`{"seq": 1, "full": true, "deleted": [], "workspaces": [{
-		"id": "w0", "slug": "default", "status": "active", "version": 1, "hosts": ["default"],
+		"id": %q, "slug": "default", "status": "active", "version": 1, "hosts": ["default"],
 		"limits": {"rate_limit_per_min": 6000, "max_concurrent": 200},
 		"services": [{"id": "s1", "timeout_ms": 5000, "targets": [{"id": "s1", "url": %q, "weight": 100}]}],
 		"routes": [{"id": "r1", "service_id": "s1", "path_prefix": "/v1/orders", "methods": ["GET"],
 		            "strip_prefix": false, "auth_required": true}],
 		"keys": [{"id": "k1", "key_hash": %q, "consumer_id": %q, "consumer_status": "active", "rate_limit_per_min": %d}]}]}`,
-		backendURL, sha256Hex(testKey), servedConsumer, limit)
+		servedWorkspace, backendURL, sha256Hex(testKey), servedConsumer, limit)
 	served := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Internal-Token") != "s3cret" {
@@ -200,6 +204,7 @@ func TestServeRateLimitsWithRealRedis(t *testing.T) {
 	// A fresh bucket for this consumer only: other packages' tests may use
 	// the same Redis database at the same time.
 	clearBucket(t, rdb, "rl:"+servedConsumer)
+	clearBucket(t, rdb, "rlws:"+servedWorkspace)
 
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")
@@ -241,7 +246,7 @@ func TestServeRateLimitsWithRealRedis(t *testing.T) {
 	// 200 without X-RateLimit-* headers. Such a round proves nothing, so it
 	// is tried again with a fresh bucket.
 	for attempt := 1; attempt <= 3; attempt++ {
-		if err := rdb.Del(t.Context(), "rl:"+servedConsumer).Err(); err != nil {
+		if err := rdb.Del(t.Context(), "rl:"+servedConsumer, "rlws:"+servedWorkspace).Err(); err != nil {
 			t.Fatalf("reset bucket: %v", err)
 		}
 		var statuses []int

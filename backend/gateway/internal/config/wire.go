@@ -181,6 +181,13 @@ func (w wireWorkspace) toWorkspace() (ws *Workspace, skipped []error, err error)
 		// Unknown means "not served": it is dropped, and answers 404 (MT.7).
 		return nil, nil, fmt.Errorf("unknown status %q", w.Status)
 	}
+	// The control plane always sends the effective limits (at least 1, by
+	// its CHECKs). Without them the gateway couldn't protect the others from
+	// this workspace (MT.8): not served, like any workspace it can't read.
+	if w.Limits.RateLimitPerMin < 1 || w.Limits.MaxConcurrent < 1 {
+		return nil, nil, fmt.Errorf("invalid limits (rate_limit_per_min %d, max_concurrent %d)",
+			w.Limits.RateLimitPerMin, w.Limits.MaxConcurrent)
+	}
 	ws = &Workspace{
 		ID:      w.ID,
 		Slug:    w.Slug,

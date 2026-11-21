@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/inflight"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
@@ -212,8 +213,9 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 }
 
 // The gateway's own work per request, without any network: request ID,
-// logger (real JSON, written to nowhere), recover, router, auth, then a
-// backend that answers at once. Run by hand:
+// logger (real JSON, written to nowhere), recover, router, auth, the
+// in-flight slot, then a backend that answers at once (the rate limit is a
+// Redis round trip: BenchmarkAllow in internal/ratelimit). Run by hand:
 //
 //	go test -run=^$ -bench=. -benchmem ./cmd/gateway
 func BenchmarkAPIHandlerChain(b *testing.B) {
@@ -227,7 +229,7 @@ func BenchmarkAPIHandlerChain(b *testing.B) {
 	// forwarder, so only the gateway's own cost is measured.
 	instant := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	chain := middleware.Chain(
-		tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(middleware.Auth(log)(instant))),
+		tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(middleware.Auth(log)(middleware.InFlight(&inflight.Limiter{}, log)(instant)))),
 		middleware.RequestID, middleware.Logger(log), middleware.Recover(log),
 	)
 
@@ -242,14 +244,20 @@ func BenchmarkAPIHandlerChain(b *testing.B) {
 // layers.
 type allowAll struct{}
 
-func (allowAll) Allow(_ context.Context, _ string, limit int) (ratelimit.Result, error) {
-	return ratelimit.Result{Allowed: true, Limit: limit, Remaining: limit - 1}, nil
+func (allowAll) Allow(_ context.Context, req ratelimit.Request) (ratelimit.Result, error) {
+	return ratelimit.Result{Allowed: true, Limit: req.WorkspaceLimit, Remaining: req.WorkspaceLimit - 1}, nil
 }
 
-// snapshotOf is a config with ws as its `default` workspace (until MT.7
-// every request is served from it).
+// roomyLimits are workspace limits no test comes near unless it means to.
+var roomyLimits = config.Limits{RateLimitPerMin: 6000, MaxConcurrent: 200}
+
+// snapshotOf is a config with ws as its `default` workspace (served on
+// every name outside the base domain), with roomy limits unless it has its own.
 func snapshotOf(ws *config.Workspace) *config.Snapshot {
 	ws.ID, ws.Slug, ws.Status = "ws-default", config.DefaultHost, config.WorkspaceActive
+	if ws.Limits == (config.Limits{}) {
+		ws.Limits = roomyLimits
+	}
 	ws.Hosts = []string{config.DefaultHost}
 	return config.NewSnapshot(ws.Version, ws)
 }
@@ -272,6 +280,7 @@ func TestAPIHandlerKeepsWorkspacesApart(t *testing.T) {
 	tenantWith := func(id, slug, key string, upstream *url.URL) *config.Workspace {
 		return &config.Workspace{
 			ID: id, Slug: slug, Status: config.WorkspaceActive, Hosts: []string{slug},
+			Limits: roomyLimits,
 			Routes: []config.Route{{ID: "r-" + slug, PathPrefix: "/v1/orders", Methods: []string{"GET"},
 				AuthRequired: true, Upstream: upstream, Timeout: 5 * time.Second}},
 			Keys: map[string]config.Key{sha256Hex(key): {ID: "k-" + slug, ConsumerID: "c-" + slug, ConsumerStatus: config.ConsumerActive}},
@@ -324,5 +333,81 @@ func TestAPIHandlerKeepsWorkspacesApart(t *testing.T) {
 	// Neither tenant's routes are served on the bare host: it is `default`'s, which isn't here.
 	if status, code, line := call("localhost", acmeKey); status != 404 || code != "workspace_not_found" || line["workspace_id"] != "" {
 		t.Errorf("bare host: %d %s (log workspace %v), want 404 workspace_not_found", status, code, line["workspace_id"])
+	}
+}
+
+// A slow backend in one workspace holds at most that workspace's in-flight
+// share (max_concurrent): its next request gets 503 workspace_overloaded at
+// once, while another workspace keeps answering. Once the slow answers are
+// done, its slots are free again.
+func TestAPIHandlerSlowWorkspaceCantStarveTheOthers(t *testing.T) {
+	const slowShare = 3
+	arrived := make(chan struct{}, slowShare)
+	release := make(chan struct{})
+	slow := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		arrived <- struct{}{}
+		<-release
+	}))
+	defer slow.Close()
+	fast := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer fast.Close()
+
+	workspace := func(slug, backendURL string, limits config.Limits) *config.Workspace {
+		upstream, _ := url.Parse(backendURL)
+		return &config.Workspace{
+			ID: "w-" + slug, Slug: slug, Status: config.WorkspaceActive, Hosts: []string{slug}, Limits: limits,
+			Routes: []config.Route{{ID: "r-" + slug, PathPrefix: "/v1", Methods: []string{"GET"},
+				Upstream: upstream, Timeout: 5 * time.Second}},
+		}
+	}
+	snap := config.NewSnapshot(1,
+		workspace("slow", slow.URL, config.Limits{RateLimitPerMin: 6000, MaxConcurrent: slowShare}),
+		workspace("fast", fast.URL, roomyLimits),
+	)
+	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.DiscardHandler))
+	call := func(host string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/v1/x", nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Fill the slow workspace's share with requests that hang at its backend.
+	var wg sync.WaitGroup
+	statuses := make(chan int, slowShare)
+	for range slowShare {
+		wg.Go(func() { statuses <- call("slow.localhost").Code })
+	}
+	for range slowShare {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the slow requests never reached their backend")
+		}
+	}
+
+	rec := call("slow.localhost")
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "1" ||
+		!strings.Contains(rec.Body.String(), "workspace_overloaded") {
+		t.Errorf("one over the share: %d %q (Retry-After %q), want 503 workspace_overloaded",
+			rec.Code, rec.Body.String(), rec.Header().Get("Retry-After"))
+	}
+	for i := range 20 {
+		if rec := call("fast.localhost"); rec.Code != 200 {
+			t.Fatalf("the other workspace, request %d: %d, want 200", i+1, rec.Code)
+		}
+	}
+
+	close(release)
+	wg.Wait()
+	close(statuses)
+	for code := range statuses {
+		if code != 200 {
+			t.Errorf("a slow request ended with %d, want 200", code)
+		}
+	}
+	if rec := call("slow.localhost"); rec.Code != 200 {
+		t.Errorf("after the slow answers: %d, want 200 (slots given back)", rec.Code)
 	}
 }

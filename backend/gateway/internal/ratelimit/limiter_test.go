@@ -8,6 +8,7 @@ package ratelimit
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -20,7 +21,7 @@ import (
 // testRedis connects to REDIS_TEST_URL. It skips the test when the variable
 // is unset, and fails when it is set but Redis can't be reached (so CI never
 // skips silently). It never empties the database: tests of other packages
-// may use it at the same time, so every test uses its own consumer IDs.
+// may use it at the same time, so every test uses its own bucket names.
 func testRedis(t testing.TB) *redis.Client {
 	t.Helper()
 	url := os.Getenv("REDIS_TEST_URL")
@@ -51,56 +52,75 @@ func newTestLimiter(t testing.TB) (*Limiter, *redis.Client) {
 	return l, rdb
 }
 
-// consumer gives each test its own bucket names, so tests never share a
+// unique gives each test its own bucket names, so tests never share a
 // bucket, whatever else runs against the same Redis.
-func consumer(t testing.TB, name string) string {
+func unique(t testing.TB, name string) string {
 	return fmt.Sprintf("test/%s/%s/%d", t.Name(), name, time.Now().UnixNano())
 }
 
-func allow(t *testing.T, l *Limiter, consumer string, limit int) Result {
+// roomy is a limit no test comes near.
+const roomy = 1_000_000
+
+// consumerReq is a protected route's request in a workspace of its own with
+// a roomy limit, so only the consumer's bucket can refuse it.
+func consumerReq(t testing.TB, consumer string, limit int) Request {
+	return Request{WorkspaceID: unique(t, "ws"), WorkspaceLimit: roomy, ConsumerID: consumer, ConsumerLimit: limit}
+}
+
+func allow(t *testing.T, l *Limiter, req Request) Result {
 	t.Helper()
-	res, err := l.Allow(t.Context(), consumer, limit)
+	res, err := l.Allow(t.Context(), req)
 	if err != nil {
-		t.Fatalf("Allow(%s, %d): %v", consumer, limit, err)
+		t.Fatalf("Allow(%+v): %v", req, err)
 	}
 	return res
 }
 
+// tokens reads a bucket's stored token count (a float: it refills continuously).
+func tokens(t *testing.T, rdb *redis.Client, key string) float64 {
+	t.Helper()
+	n, err := rdb.HGet(t.Context(), key, "tokens").Float64()
+	if err != nil {
+		t.Fatalf("HGET %s tokens: %v", key, err)
+	}
+	return n
+}
+
 func TestBurstUpToTheLimitThenDenied(t *testing.T) {
-	c1 := consumer(t, "c1")
+	req := consumerReq(t, unique(t, "c1"), 5)
 	l, _ := newTestLimiter(t)
 
 	for want := 4; want >= 0; want-- { // a full bucket of 5
-		res := allow(t, l, c1, 5)
-		if !res.Allowed || res.Remaining != want || res.Limit != 5 || res.RetryAfter != 0 {
+		res := allow(t, l, req)
+		if !res.Allowed || res.Remaining != want || res.Limit != 5 || res.RetryAfter != 0 || res.LimitedBy != "" {
 			t.Fatalf("request %d: %+v, want allowed with %d left", 5-want, res, want)
 		}
 	}
 
-	res := allow(t, l, c1, 5)
+	res := allow(t, l, req)
 	// 5 per minute = one token every 12 s.
-	if res.Allowed || res.Remaining != 0 || res.RetryAfter <= 11*time.Second || res.RetryAfter > 12*time.Second {
-		t.Errorf("6th request: %+v, want denied, retry in about 12s", res)
+	if res.Allowed || res.LimitedBy != BucketConsumer || res.Remaining != 0 || res.Limit != 5 ||
+		res.RetryAfter <= 11*time.Second || res.RetryAfter > 12*time.Second {
+		t.Errorf("6th request: %+v, want refused by the consumer, retry in about 12s", res)
 	}
 }
 
 func TestOneRequestPerMinute(t *testing.T) {
-	c1 := consumer(t, "c1")
+	req := consumerReq(t, unique(t, "c1"), 1)
 	l, _ := newTestLimiter(t)
 
-	if res := allow(t, l, c1, 1); !res.Allowed || res.Remaining != 0 {
+	if res := allow(t, l, req); !res.Allowed || res.Remaining != 0 {
 		t.Fatalf("first: %+v", res)
 	}
-	res := allow(t, l, c1, 1)
+	res := allow(t, l, req)
 	if res.Allowed || res.RetryAfter < 59*time.Second || res.RetryAfter > time.Minute {
 		t.Errorf("second: %+v, want denied, retry in about 60s", res)
 	}
 }
 
 func TestBucketRefills(t *testing.T) {
-	c1 := consumer(t, "c1")
+	req := consumerReq(t, unique(t, "c1"), 600) // 10 per second: one token every 100 ms
 	l, _ := newTestLimiter(t)
-	const limit = 600 // 10 per second: one token every 100 ms
 
 	// Empty the bucket (it refills a little while we drain it). The denial
 	// that ends the loop is the one to check: another call made after it
@@ -108,10 +128,10 @@ func TestBucketRefills(t *testing.T) {
 	// the next token may arrive during that call's Redis round trip.
 	var res Result
 	for i := 0; ; i++ {
-		if res = allow(t, l, c1, limit); !res.Allowed {
+		if res = allow(t, l, req); !res.Allowed {
 			break
 		}
-		if i > 2*limit {
+		if i > 2*req.ConsumerLimit {
 			t.Fatal("the bucket never ran empty")
 		}
 	}
@@ -121,99 +141,335 @@ func TestBucketRefills(t *testing.T) {
 
 	time.Sleep(res.RetryAfter + 30*time.Millisecond)
 
-	if res := allow(t, l, c1, limit); !res.Allowed {
+	if res := allow(t, l, req); !res.Allowed {
 		t.Errorf("after waiting RetryAfter: %+v, want allowed", res)
 	}
 }
 
 func TestConsumersHaveSeparateBuckets(t *testing.T) {
-	greedy, polite := consumer(t, "greedy"), consumer(t, "polite")
+	greedy := Request{WorkspaceID: unique(t, "ws"), WorkspaceLimit: roomy, ConsumerID: unique(t, "greedy"), ConsumerLimit: 1}
+	polite := greedy
+	polite.ConsumerID = unique(t, "polite")
 	l, _ := newTestLimiter(t)
 
-	allow(t, l, greedy, 1) // empties greedy's bucket
-	if res := allow(t, l, greedy, 1); res.Allowed {
+	allow(t, l, greedy) // empties greedy's bucket
+	if res := allow(t, l, greedy); res.Allowed {
 		t.Fatal("greedy should be limited")
 	}
-	if res := allow(t, l, polite, 1); !res.Allowed {
+	if res := allow(t, l, polite); !res.Allowed {
 		t.Error("another consumer was limited by greedy's bucket")
 	}
 }
 
 func TestLoweredLimitAppliesAtOnce(t *testing.T) {
-	c1 := consumer(t, "c1")
+	req := consumerReq(t, unique(t, "c1"), 60)
 	l, _ := newTestLimiter(t)
 
-	allow(t, l, c1, 60) // 59 left at the old limit
-	if res := allow(t, l, c1, 10); !res.Allowed || res.Remaining != 9 || res.Limit != 10 {
+	allow(t, l, req) // 59 left at the old limit
+	req.ConsumerLimit = 10
+	if res := allow(t, l, req); !res.Allowed || res.Remaining != 9 || res.Limit != 10 {
 		t.Errorf("after lowering to 10: %+v, want 9 left", res)
 	}
 }
 
-func TestIdleBucketsExpire(t *testing.T) {
-	c1 := consumer(t, "c1")
+// ---- The workspace's bucket (MT.8) ----
+
+// A public route has no consumer: only the workspace's bucket counts, and
+// the answer describes it.
+func TestPublicRouteUsesTheWorkspaceBucketOnly(t *testing.T) {
+	req := Request{WorkspaceID: unique(t, "ws"), WorkspaceLimit: 3}
+	l, _ := newTestLimiter(t)
+
+	for want := 2; want >= 0; want-- {
+		if res := allow(t, l, req); !res.Allowed || res.Remaining != want || res.Limit != 3 {
+			t.Fatalf("request %d: %+v, want allowed with %d left", 3-want, res, want)
+		}
+	}
+	res := allow(t, l, req)
+	if res.Allowed || res.LimitedBy != BucketWorkspace || res.Limit != 3 || res.Remaining != 0 ||
+		res.RetryAfter <= 19*time.Second || res.RetryAfter > 20*time.Second {
+		t.Errorf("4th request: %+v, want refused by the workspace, retry in about 20s", res)
+	}
+}
+
+// Every consumer of a workspace draws from the workspace's one bucket.
+func TestConsumersShareTheirWorkspacesBucket(t *testing.T) {
+	ws := unique(t, "ws")
+	l, _ := newTestLimiter(t)
+
+	for i := range 3 {
+		req := Request{WorkspaceID: ws, WorkspaceLimit: 3, ConsumerID: unique(t, fmt.Sprint("c", i)), ConsumerLimit: 100}
+		if res := allow(t, l, req); !res.Allowed || res.Limit != 100 || res.Remaining != 99 {
+			t.Fatalf("consumer %d: %+v, want allowed, describing its own bucket", i, res)
+		}
+	}
+	fresh := Request{WorkspaceID: ws, WorkspaceLimit: 3, ConsumerID: unique(t, "c3"), ConsumerLimit: 100}
+	res := allow(t, l, fresh)
+	if res.Allowed || res.LimitedBy != BucketWorkspace || res.Limit != 3 || res.Remaining != 0 {
+		t.Errorf("a 4th consumer with a full bucket: %+v, want refused by the workspace", res)
+	}
+}
+
+func TestWorkspacesHaveSeparateBuckets(t *testing.T) {
+	noisy := Request{WorkspaceID: unique(t, "noisy"), WorkspaceLimit: 1}
+	quiet := Request{WorkspaceID: unique(t, "quiet"), WorkspaceLimit: 1}
+	l, _ := newTestLimiter(t)
+
+	allow(t, l, noisy)
+	if res := allow(t, l, noisy); res.Allowed {
+		t.Fatal("noisy should be limited")
+	}
+	if res := allow(t, l, quiet); !res.Allowed {
+		t.Error("another workspace was limited by noisy's bucket")
+	}
+}
+
+// Refused by the workspace: the consumer's bucket keeps its tokens.
+func TestRefusedByTheWorkspaceCostsTheConsumerNothing(t *testing.T) {
+	req := Request{WorkspaceID: unique(t, "ws"), WorkspaceLimit: 1, ConsumerID: unique(t, "c1"), ConsumerLimit: 3}
 	l, rdb := newTestLimiter(t)
 
-	allow(t, l, c1, 60)
+	allow(t, l, req) // workspace 0 left, consumer 2
+	for range 5 {
+		if res := allow(t, l, req); res.Allowed || res.LimitedBy != BucketWorkspace || res.Limit != 1 {
+			t.Fatalf("%+v, want refused by the workspace", res)
+		}
+	}
+	// 3 per minute refills 0.05 tokens a second: still 2 whole tokens.
+	if got := tokens(t, rdb, consumerKeyPrefix+req.ConsumerID); math.Floor(got) != 2 {
+		t.Errorf("the consumer has %.3f tokens, want 2: refused requests must not spend them", got)
+	}
+}
 
-	ttl, err := rdb.PTTL(t.Context(), "rl:"+c1).Result()
-	if err != nil || ttl <= 110*time.Second || ttl > 120*time.Second {
-		t.Errorf("TTL of the bucket = %s (err %v), want about 120s", ttl, err)
+// Refused by the consumer: the workspace's bucket keeps its tokens.
+func TestRefusedByTheConsumerCostsTheWorkspaceNothing(t *testing.T) {
+	req := Request{WorkspaceID: unique(t, "ws"), WorkspaceLimit: 3, ConsumerID: unique(t, "c1"), ConsumerLimit: 1}
+	l, rdb := newTestLimiter(t)
+
+	allow(t, l, req) // workspace 2 left, consumer 0
+	for range 5 {
+		if res := allow(t, l, req); res.Allowed || res.LimitedBy != BucketConsumer || res.Limit != 1 {
+			t.Fatalf("%+v, want refused by the consumer", res)
+		}
+	}
+	if got := tokens(t, rdb, workspaceKeyPrefix+req.WorkspaceID); math.Floor(got) != 2 {
+		t.Errorf("the workspace has %.3f tokens, want 2: refused requests must not spend them", got)
+	}
+}
+
+// Both buckets empty: the one with the longer wait is named, and its wait is
+// the retry time, since the request needs a token from both.
+func TestBothEmptyNamesTheLongerWait(t *testing.T) {
+	l, _ := newTestLimiter(t)
+
+	// The consumer is emptied through other workspaces (buckets are
+	// independent): at 2 per minute its next token is ~30 s away. The
+	// workspace's, at 1 per minute, is ~60 s away.
+	consumer := unique(t, "c1")
+	allow(t, l, consumerReq(t, consumer, 2))
+	allow(t, l, consumerReq(t, consumer, 2))
+	ws := Request{WorkspaceID: unique(t, "ws"), WorkspaceLimit: 1}
+	allow(t, l, ws)
+
+	both := Request{WorkspaceID: ws.WorkspaceID, WorkspaceLimit: 1, ConsumerID: consumer, ConsumerLimit: 2}
+	res := allow(t, l, both)
+	if res.Allowed || res.LimitedBy != BucketWorkspace || res.Limit != 1 || res.RetryAfter < 59*time.Second {
+		t.Errorf("%+v, want refused by the workspace, retry in about 60s", res)
+	}
+
+	// The other way round: the consumer's wait is the longer one.
+	consumer2 := unique(t, "c2")
+	allow(t, l, consumerReq(t, consumer2, 1))
+	ws2 := Request{WorkspaceID: unique(t, "ws2"), WorkspaceLimit: 2}
+	allow(t, l, ws2)
+	allow(t, l, ws2)
+
+	both = Request{WorkspaceID: ws2.WorkspaceID, WorkspaceLimit: 2, ConsumerID: consumer2, ConsumerLimit: 1}
+	res = allow(t, l, both)
+	if res.Allowed || res.LimitedBy != BucketConsumer || res.Limit != 1 || res.RetryAfter < 59*time.Second {
+		t.Errorf("%+v, want refused by the consumer, retry in about 60s", res)
+	}
+}
+
+func TestIdleBucketsExpire(t *testing.T) {
+	req := Request{WorkspaceID: unique(t, "ws"), WorkspaceLimit: 60, ConsumerID: unique(t, "c1"), ConsumerLimit: 60}
+	l, rdb := newTestLimiter(t)
+
+	allow(t, l, req)
+
+	for _, key := range []string{workspaceKeyPrefix + req.WorkspaceID, consumerKeyPrefix + req.ConsumerID} {
+		ttl, err := rdb.PTTL(t.Context(), key).Result()
+		if err != nil || ttl <= 110*time.Second || ttl > 120*time.Second {
+			t.Errorf("TTL of %s = %s (err %v), want about 120s", key, ttl, err)
+		}
 	}
 }
 
 // After a Redis restart the script cache is empty; go-redis must load it again.
 func TestWorksAfterRedisForgetsTheScript(t *testing.T) {
-	c1 := consumer(t, "c1")
+	req := consumerReq(t, unique(t, "c1"), 60)
 	l, rdb := newTestLimiter(t)
-	allow(t, l, c1, 60)
+	allow(t, l, req)
 
 	if err := rdb.ScriptFlush(t.Context()).Err(); err != nil {
 		t.Fatalf("SCRIPT FLUSH: %v", err)
 	}
 
-	if res := allow(t, l, c1, 60); !res.Allowed || res.Remaining != 58 {
+	if res := allow(t, l, req); !res.Allowed || res.Remaining != 58 {
 		t.Errorf("after SCRIPT FLUSH: %+v, want allowed with 58 left", res)
 	}
 }
 
 // The point of the Lua script: many requests at the same moment can never
-// take more tokens than the bucket has. Run with -race in CI.
+// take more tokens than a bucket has. Run with -race in CI.
 func TestConcurrentRequestsNeverOverspend(t *testing.T) {
-	c1 := consumer(t, "c1")
+	req := consumerReq(t, unique(t, "c1"), 50)
 	l, _ := newTestLimiter(t)
-	const limit, requests = 50, 100
 
-	var allowed atomic.Int64
+	allowed, elapsed := fire(t, l, 100, func(int) Request { return req })
+
+	// 50 per minute refills one token every 1.2 s; a slow run earns one per 1.2 s.
+	want := int64(50) + int64(elapsed/(1200*time.Millisecond))
+	if got := allowed[req.ConsumerID]; got < 50 || got > want {
+		t.Errorf("%d of 100 concurrent requests allowed, want exactly 50", got)
+	}
+}
+
+// 100 requests at once from 5 consumers (limit 15 each, 75 together) in one
+// workspace (limit 50): the workspace caps them at 50, and every consumer's
+// bucket lost exactly the tokens of its allowed requests, none for the ones
+// the workspace refused. Both buckets move together or not at all.
+func TestConcurrentRequestsSpendBothBucketsAtomically(t *testing.T) {
+	ws := unique(t, "ws")
+	consumers := make([]string, 5)
+	for i := range consumers {
+		consumers[i] = unique(t, fmt.Sprint("c", i))
+	}
+	l, rdb := newTestLimiter(t)
+	const wsLimit, consumerLimit = 50, 15
+
+	allowed, elapsed := fire(t, l, 100, func(i int) Request {
+		return Request{WorkspaceID: ws, WorkspaceLimit: wsLimit, ConsumerID: consumers[i%len(consumers)], ConsumerLimit: consumerLimit}
+	})
+
+	var total int64
+	for _, n := range allowed {
+		total += n
+	}
+	// The workspace refills one token every 1.2 s.
+	if most := wsLimit + int64(elapsed/(1200*time.Millisecond)); total < wsLimit || total > most {
+		t.Errorf("%d of 100 allowed, want %d (the workspace's limit)", total, wsLimit)
+	}
+	refill := elapsed.Minutes() * consumerLimit
+	for _, c := range consumers {
+		spent := float64(consumerLimit) - tokens(t, rdb, consumerKeyPrefix+c)
+		// spent = allowed - refill since the start, so allowed-refill <= spent <= allowed.
+		if n := float64(allowed[c]); spent > n+1e-9 || spent < n-refill-1e-9 {
+			t.Errorf("consumer %s: %d allowed but %.3f tokens spent", c, allowed[c], spent)
+		}
+	}
+}
+
+// fire sends n requests at the same moment and counts the allowed ones by
+// consumer ("" for requests without one).
+func fire(t *testing.T, l *Limiter, n int, req func(i int) Request) (map[string]int64, time.Duration) {
+	t.Helper()
+	counts := make(map[string]*atomic.Int64)
+	reqs := make([]Request, n)
+	for i := range reqs {
+		reqs[i] = req(i)
+		if counts[reqs[i].ConsumerID] == nil {
+			counts[reqs[i].ConsumerID] = new(atomic.Int64)
+		}
+	}
+
 	var wg sync.WaitGroup
 	start := make(chan struct{})
-	for range requests {
+	for _, r := range reqs {
 		wg.Go(func() {
 			<-start // all goroutines fire together
-			res, err := l.Allow(context.Background(), c1, limit)
+			res, err := l.Allow(context.Background(), r)
 			if err != nil {
 				t.Errorf("Allow: %v", err)
 				return
 			}
 			if res.Allowed {
-				allowed.Add(1)
+				counts[r.ConsumerID].Add(1)
 			}
 		})
 	}
 	began := time.Now()
 	close(start)
 	wg.Wait()
+	elapsed := time.Since(began)
 
-	// 50 per minute refills one token every 1.2 s; a slow run earns one per 1.2 s.
-	want := int64(limit) + int64(time.Since(began)/(1200*time.Millisecond))
-	if got := allowed.Load(); got < limit || got > want {
-		t.Errorf("%d of %d concurrent requests allowed, want exactly %d", got, requests, limit)
+	allowed := make(map[string]int64, len(counts))
+	for id, c := range counts {
+		allowed[id] = c.Load()
+	}
+	return allowed, elapsed
+}
+
+// ---- Malformed requests and answers ----
+
+func TestMalformedRequestsAreErrors(t *testing.T) {
+	l := New(redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})) // never called
+	tests := map[string]Request{
+		"no workspace":            {WorkspaceLimit: 60},
+		"workspace limit 0":       {WorkspaceID: "w", WorkspaceLimit: 0},
+		"consumer limit 0":        {WorkspaceID: "w", WorkspaceLimit: 60, ConsumerID: "c", ConsumerLimit: 0},
+		"negative consumer limit": {WorkspaceID: "w", WorkspaceLimit: 60, ConsumerID: "c", ConsumerLimit: -1},
+	}
+	for name, req := range tests {
+		if _, err := l.Allow(t.Context(), req); err == nil {
+			t.Errorf("%s: Allow = nil error", name)
+		}
 	}
 }
 
-func TestLimitBelowOneIsAnError(t *testing.T) {
-	l := New(redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"})) // never called
-	if _, err := l.Allow(t.Context(), "c1", 0); err == nil {
-		t.Error("Allow with limit 0 = nil error")
+func TestResultReadsTheScriptsAnswer(t *testing.T) {
+	public := Request{WorkspaceID: "w", WorkspaceLimit: 7}
+	protected := Request{WorkspaceID: "w", WorkspaceLimit: 7, ConsumerID: "c", ConsumerLimit: 3}
+	tests := []struct {
+		name  string
+		req   Request
+		reply []any
+		want  Result
+		bad   bool
+	}{
+		{"public allowed", public, []any{int64(1), int64(6), int64(0), ""}, Result{Allowed: true, Limit: 7, Remaining: 6}, false},
+		{"protected allowed", protected, []any{int64(1), int64(2), int64(0), ""}, Result{Allowed: true, Limit: 3, Remaining: 2}, false},
+		{"refused by the workspace", protected, []any{int64(0), int64(0), int64(800), "workspace"},
+			Result{LimitedBy: BucketWorkspace, Limit: 7, RetryAfter: 800 * time.Millisecond}, false},
+		{"refused by the consumer", protected, []any{int64(0), int64(0), int64(900), "consumer"},
+			Result{LimitedBy: BucketConsumer, Limit: 3, RetryAfter: 900 * time.Millisecond}, false},
+		{"too few values", public, []any{int64(1), int64(6), int64(0)}, Result{}, true},
+		{"wrong types", public, []any{"1", int64(6), int64(0), ""}, Result{}, true},
+		{"refused naming no bucket", public, []any{int64(0), int64(0), int64(5), ""}, Result{}, true},
+		{"refused naming an unknown bucket", public, []any{int64(0), int64(0), int64(5), "planet"}, Result{}, true},
+	}
+	for _, tc := range tests {
+		got, err := tc.req.result(tc.reply)
+		if (err != nil) != tc.bad || got != tc.want {
+			t.Errorf("%s: result = %+v, %v; want %+v, error %v", tc.name, got, err, tc.want, tc.bad)
+		}
+	}
+}
+
+// The script guards itself against a caller passing the wrong keys.
+func TestScriptRefusesWrongKeyCounts(t *testing.T) {
+	_, rdb := newTestLimiter(t)
+	for _, keys := range [][]string{{}, {"a", "b", "c"}} {
+		args := make([]any, len(keys))
+		for i := range args {
+			args[i] = 1
+		}
+		if err := buckets.Run(t.Context(), rdb, keys, args...).Err(); err == nil {
+			t.Errorf("%d keys: no error", len(keys))
+		}
+	}
+	if err := buckets.Run(t.Context(), rdb, []string{unique(t, "ws")}).Err(); err == nil {
+		t.Error("a key without a capacity: no error")
 	}
 }
 
@@ -223,7 +479,7 @@ func TestRedisDownIsAnErrorWithinTheTimeout(t *testing.T) {
 	l := New(rdb)
 
 	start := time.Now()
-	_, err := l.Allow(t.Context(), "c1", 60)
+	_, err := l.Allow(t.Context(), Request{WorkspaceID: "w", WorkspaceLimit: 60, ConsumerID: "c1", ConsumerLimit: 60})
 
 	if err == nil {
 		t.Fatal("Allow without Redis = nil error")
@@ -233,15 +489,21 @@ func TestRedisDownIsAnErrorWithinTheTimeout(t *testing.T) {
 	}
 }
 
-// Time per Allow call (one round trip to Redis). Run by hand with the stack up:
+// Time per Allow call (one round trip to Redis, both buckets). Run by hand
+// with the stack up:
 //
 //	$env:REDIS_TEST_URL="redis://localhost:6379/15"; go test -run=^$ -bench=Allow ./internal/ratelimit
 func BenchmarkAllow(b *testing.B) {
 	l, _ := newTestLimiter(b)
 	i := 0
 	for b.Loop() {
-		// Many consumers, so the benchmark measures the round trip, not denials.
-		if _, err := l.Allow(context.Background(), fmt.Sprintf("c%d", i%1000), 1_000_000); err != nil {
+		// Many consumers and workspaces, so the benchmark measures the round
+		// trip, not denials.
+		req := Request{
+			WorkspaceID: fmt.Sprintf("bench-w%d", i%100), WorkspaceLimit: roomy,
+			ConsumerID: fmt.Sprintf("bench-c%d", i%1000), ConsumerLimit: roomy,
+		}
+		if _, err := l.Allow(context.Background(), req); err != nil {
 			b.Fatal(err)
 		}
 		i++

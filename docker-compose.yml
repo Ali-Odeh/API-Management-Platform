@@ -280,6 +280,9 @@ services:
       # Checked by the script's setup (see the e2e service for why not ":?").
       PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
       PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+      # To enroll and remove its own MFA factor: raising the `default`
+      # workspace's rate limit for the test needs MFA (MT.8).
+      GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:-}
       RATE: ${RATE:-300}
       DURATION: ${DURATION:-30}
     volumes:

@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 21, 2026 · **Current step:** MT.7 done (gateway tenancy); next: MT.8
+**Last updated:** Nov 22, 2026 · **Current step:** MT.8 done (workspace limits in the gateway); next: MT.9
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅⬜⬜⬜⬜⬜ 7/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅⬜⬜⬜⬜ 8/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -36,15 +36,15 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 442 passing (tests, table cases and fuzz seeds), including two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
-| Coverage | **97.4%** total (minimum 90%, enforced): tenant, proxy and 5 more packages at 100%, config 95.8%, server 97.4%, ratelimit 95.2%, main 87.0% |
+| Tests | 468 passing (tests, table cases and fuzz seeds), including the workspace and consumer buckets spent together or not at all by 100 parallel requests, a slow workspace held to its in-flight share while another keeps answering, two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
+| Coverage | **97.7%** total (minimum 90%, enforced): inflight, tenant, proxy, middleware and 3 more packages at 100%, config 95.8%, server 97.4%, ratelimit 97.9%, main 87.0% |
 | Fuzz tests | 7 (paths, matching, prefix stripping, request IDs, config answers and Host parsing: about 800,000 Hosts in the first 15 s run), 10 s each in CI |
-| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 10 µs** with the tenant step (9.9–13.2 µs over 3 runs on a busy machine; 8.5 µs at step 3.7); one rate-limit check **≈ 0.48 ms** (Windows → Docker's Redis, so a round trip dominates) |
+| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 11 µs** with the tenant and in-flight steps (10.7–11.9 µs over 3 runs; 9.9–13.2 µs at MT.7, 8.5 µs at step 3.7); an in-flight slot **23 ns** (no allocations; 79 ns with 8 goroutines on one workspace); one rate-limit check with both buckets **≈ 0.4 ms** (0.38–0.49 ms; one bucket 0.39–0.40 ms on the same machine; Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
-| Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back |
+| Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back. Workspace limit 3/min (MT.8): a public route 3 × 200 then 429, and a consumer with its own budget 429 too (`limited_workspace` in the log); in-flight limit 1: `503 workspace_overloaded` with `Retry-After: 1` while a 2 s request runs, another workspace answering |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
-| Race detector | clean, including 1,000 requests while the config changes every ms, and requests reading while 1,000 answers are merged (`go test -race` in a Linux container; also in CI) |
+| Race detector | clean, including the in-flight counters under 64 goroutines, 100 parallel two-bucket checks, 1,000 requests while the config changes every ms, and requests reading while 1,000 answers are merged (`go test -race` in a Linux container; also in CI) |
 | Config propagation | a committed change served by the gateway **≈ 4 ms** after `psql` returns (10 runs, first 45 ms; MT.6, one changed workspace per answer); 68 ms admin change → gateway at step 2.5 |
 | Proxy errors (live) | slow backend → **504 after 5.05 s** (route timeout 5 s); backend down → **502** |
 | Image | 16.9 MB (distroless, non-root) |
@@ -56,8 +56,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **36 stories pass in about 14 s**, including two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
-| Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
+| End-to-end tests | **38 stories pass in about 16 s**, including a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.78 ms median / 0.83 ms p95** (since MT.8 public and protected routes both make the Redis call; the gateway's own work with Redis ≈ 0.38 ms in its log; 0.77 / 0.95 ms at step 4.4); `default`'s rate limit is raised for the run and put back; `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
 
@@ -135,7 +135,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.5 | Workspace lifecycle and quotas | ✅ |
 | MT.6 | Incremental config protocol | ✅ |
 | MT.7 | Gateway tenancy | ✅ |
-| MT.8 | Workspace limits in the gateway | ⬜ |
+| MT.8 | Workspace limits in the gateway | ✅ |
 | MT.9 | SSRF protection | ⬜ |
 | MT.10 | Load balancing and health checks | ⬜ |
 | MT.11 | CORS and body size limit | ⬜ |
@@ -260,6 +260,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Fail-open behavior unchanged when Redis is down
 
 **Done when:** Redis tests show both buckets, refusal by either, and atomicity under 100 parallel requests; a slow backend in workspace A can't use more than its in-flight share while workspace B keeps answering (test); e2e covers the workspace rate limit.
+
+**Status:** ✅ Done (Nov 22). Commits `8578cf1` (the two buckets in one Lua script, `buckets.lua`; public routes limited by the workspace; `limited_workspace` in the log; workspaces without valid limits dropped), `624dc02` (the `inflight` package and step: `503 workspace_overloaded` with `Retry-After: 1`), `7d762bb` (e2e), `dd82c93` (the load test raises `default`'s limit with MFA), then the docs. Redis tests cover both buckets, refusal by either without spending the other, the longer wait named, and 100 parallel requests from 5 consumers in one workspace: exactly the workspace's 50 allowed, and every consumer's bucket lost exactly its allowed requests. The whole-chain test fills a slow workspace's 3 slots: its 4th request is 503 at once while another workspace answers 20 requests; it was checked to fail without the step (the 4th request hung until a 504). e2e covers the workspace rate limit on a public and a protected route and the in-flight limit with a 2 s request; the live log shows `limited_workspace`. Fail-open is unchanged (the same `unavailable` path; the in-flight limit needs no Redis).
 
 ### MT.9 SSRF protection [3]
 
@@ -497,3 +499,10 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.7 | `GATEWAY_BASE_DOMAIN` is optional, default `localhost`, and checked as a domain name at start | `*.localhost` needs no DNS, so the default works locally; a typo stops the gateway instead of making every workspace unreachable |
 | Nov 22 | MT.7 | The `tenant` step reads the snapshot once (and answers `503 config_not_loaded`); the router matches in the workspace from `reqctx` and no longer reads the snapshot | One config version per request, as before; the workspace travels in `reqctx` (AGENTS.md) instead of packages importing each other |
 | Nov 22 | MT.7 | The control plane writes JSON lines: one `request` line per call (uvicorn's access log off) and `request_id` / `workspace_id` on every app line, through per-request notes in a context variable; `httpx` at WARNING | "workspace_id on every control-plane log line" needed structured logs; httpx at INFO would log GoTrue lookups by email |
+| Nov 22 | MT.8 | A refused answer describes the bucket that holds the request back longest: `Retry-After` is the longest wait, `X-RateLimit-Limit` / `-Remaining` are that bucket's, and on a tie the consumer's own limit is named. Allowed answers describe the consumer's bucket (the workspace's on a public route) | PLAN.md said "remaining of consumer or workspace" without saying which. A retry needs a token from both, so an earlier one would only be refused again; the consumer's own limit is the one its developer can act on |
+| Nov 22 | MT.8 | The script is now `ratelimit/buckets.lua` (was `tokenbucket.lua`); with one key it behaves exactly as before | It holds two buckets; the name says so |
+| Nov 22 | MT.8 | A workspace whose limits are missing or below 1 is dropped from the config, like one with an unknown status | Without them the gateway couldn't protect the others from it (a limit of 0 would also refuse all its traffic, or fail open on every request). The control plane always sends both (CHECKs) |
+| Nov 22 | MT.8 | In-flight counting lives in its own `inflight` package (PLAN.md section 9 named a `concurrency` middleware): one atomic counter per workspace id, taken with compare-and-swap, never removed; the limit comes with each request from the snapshot | Counters must outlive the config (a workspace's config is replaced on every change, its running requests are not), and a changed limit applies at once. Compare-and-swap never lets a refused attempt make a free slot look taken. An entry is a few bytes per workspace served, and workspace ids are never reused |
+| Nov 22 | MT.8 | The in-flight step is the last before the proxy; requests refused earlier (404, 401, 403, 429) never take a slot. No new log field: the 503 line carries the route and workspace | Only requests on their way to a backend tie up the instance |
+| Nov 22 | MT.8 | The rate-limit and in-flight steps answer 500 when no workspace is on the request (only possible if `main` wires them without `tenant`) | Like the router and auth: a wiring mistake must not let traffic through unlimited |
+| Nov 22 | MT.8 | The k6 load test logs in with password and TOTP (its own factor `loadtest`, removed afterwards; the runner gets `GOTRUE_SERVICE_ROLE_KEY` like e2e), raises `default`'s rate limit to 1,000,000/min for the run and puts back the override that was there (also when setup fails) | `default`'s 6,000/min would refuse most of 300 requests/s; `PATCH /limits` is a Platform Admin endpoint and needs MFA; raising `WORKSPACE_RATE_LIMIT_PER_MIN` would change the default for every workspace |
