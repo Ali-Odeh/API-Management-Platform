@@ -11,10 +11,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit import crud as audit
 from app.audit.changes import Changes, created, snapshot, updated
 from app.audit.context import AuditContext
-from app.core.errors import ConflictError, ForbiddenError, NotFoundError, UpstreamError
+from app.core.db import flush_or_raise
+from app.core.errors import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnprocessableError,
+    UpstreamError,
+)
 from app.core.identity import TokenClaims
 from app.gotrue.client import GoTrueAdmin
-from app.users.models import User
+from app.users.models import UQ_USER_EMAIL, User
 from app.users.schemas import UserUpdate
 
 logger = logging.getLogger(__name__)
@@ -51,6 +58,48 @@ async def _by_auth_user_id(db: AsyncSession, auth_user_id: uuid.UUID) -> User | 
 async def _by_email(db: AsyncSession, email: str) -> User | None:
     result = await db.scalars(select(User).where(User.email == normalize_email(email)))
     return result.one_or_none()
+
+
+async def get_or_invite(db: AsyncSession, gotrue: GoTrueAdmin, email: str) -> tuple[User, bool]:
+    """The active person with this email, made a user (and invited) if new.
+
+    Returns (user, invited). A known person is share-locked until the
+    transaction ends, so a parallel disable can't slip in before the caller
+    commits (it waits, or it was first and this answers 422). A new person
+    gets a GoTrue account found or invited through the trusted admin API, and
+    a row bound to it now: they are whatever the caller makes them (member,
+    owner) from their first login. No event of its own: the caller's event
+    (member.add, workspace.created) describes it.
+    """
+    user = await get_by_email_locked(db, email)
+    if user is not None:
+        if not user.is_active:
+            raise UnprocessableError("This user is disabled")
+        return user, False
+
+    email = normalize_email(email)
+    auth_user_id = await gotrue.find_user_by_email(email)
+    invited = False
+    if auth_user_id is None:
+        auth_user_id = await gotrue.invite_user(email)
+        invited = auth_user_id is not None
+    if auth_user_id is None:  # the account was made elsewhere just now: no email from us
+        auth_user_id = await gotrue.find_user_by_email(email)
+    if auth_user_id is None:
+        raise UpstreamError("Auth service unavailable")
+    user = User(
+        id=uuid.uuid4(),
+        email=email,
+        auth_user_id=auth_user_id,
+        is_platform_admin=False,
+        is_active=True,
+    )
+    db.add(user)
+    # Two parallel adds of the same new person: the second waits, then sees it taken.
+    await flush_or_raise(
+        db, {UQ_USER_EMAIL: ConflictError("This person is being added right now; try again")}
+    )
+    return user, invited
 
 
 async def get_by_email_locked(db: AsyncSession, email: str) -> User | None:

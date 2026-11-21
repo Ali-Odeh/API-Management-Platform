@@ -26,3 +26,15 @@ class PartialUpdate(BaseModel):
             if getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self
+
+
+# A person's email, as GoTrue holds it: lowercase, checked for shape only.
+# Not EmailStr: email-validator refuses addresses GoTrue accepts (e.g. *.test),
+# and the real check is whether the address is (or becomes) a user.
+PersonEmail = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, to_lower=True, max_length=255, pattern=r"^[^@\s]+@[^@\s]+$"
+    ),
+    Field(examples=["dev@example.com"]),
+]

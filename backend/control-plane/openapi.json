@@ -1265,7 +1265,10 @@
             "type": "string"
           },
           "owner_email": {
-            "description": "The first Owner; they must have signed in once (invitations: MT.4)",
+            "description": "The first Owner; a new person gets an invitation email",
+            "examples": [
+              "dev@example.com"
+            ],
             "maxLength": 255,
             "pattern": "^[^@\\s]+@[^@\\s]+$",
             "title": "Owner Email",
@@ -1939,7 +1942,7 @@
                 }
               }
             },
-            "description": "Invalid input, or the owner isn't a (active) user"
+            "description": "Invalid input, or the owner is a disabled user"
           }
         },
         "security": [

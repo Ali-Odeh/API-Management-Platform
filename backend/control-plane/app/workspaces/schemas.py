@@ -7,6 +7,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 from app.core.permissions import Role
+from app.core.schemas import PersonEmail
 from app.workspaces.models import SLUG_MAX_LENGTH, SLUG_MIN_LENGTH, SLUG_PATTERN
 
 # Names the platform keeps for itself: subdomains like api.<gateway> or
@@ -40,14 +41,9 @@ WorkspaceSlug = Annotated[
 class WorkspaceCreate(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
     slug: WorkspaceSlug
-    # Not EmailStr: it must only name an existing user (the lookup is the real
-    # check), and email-validator refuses addresses GoTrue accepts (e.g. *.test).
     owner_email: Annotated[
-        str,
-        StringConstraints(
-            strip_whitespace=True, to_lower=True, max_length=255, pattern=r"^[^@\s]+@[^@\s]+$"
-        ),
-        Field(description="The first Owner; they must have signed in once (invitations: MT.4)"),
+        PersonEmail,
+        Field(description="The first Owner; a new person gets an invitation email"),
     ]
 
 

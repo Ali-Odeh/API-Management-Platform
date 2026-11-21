@@ -7,6 +7,7 @@ from fastapi import APIRouter, status
 from app.core.deps import (
     CurrentUser,
     DbSession,
+    GoTrue,
     PlatformAdmin,
     PlatformAudit,
     WorkspaceAccess,
@@ -39,14 +40,20 @@ async def list_workspaces(
     tags=["platform"],
     status_code=status.HTTP_201_CREATED,
     responses=error_responses(
-        {409: "Slug already taken", 422: "Invalid input, or the owner isn't a (active) user"}
+        {409: "Slug already taken", 422: "Invalid input, or the owner is a disabled user"}
     ),
 )
 async def create_workspace(
-    body: WorkspaceCreate, admin: PlatformAdmin, audit: PlatformAudit, db: DbSession
+    body: WorkspaceCreate,
+    admin: PlatformAdmin,
+    audit: PlatformAudit,
+    db: DbSession,
+    gotrue: GoTrue,
 ) -> WorkspaceOut:
     """A new workspace and its first Owner (Platform Admin, with MFA)."""
-    workspace = await crud.create_workspace(db, data=body, created_by=admin.id, audit_ctx=audit)
+    workspace = await crud.create_workspace(
+        db, gotrue=gotrue, data=body, created_by=admin.id, audit_ctx=audit
+    )
     return WorkspaceOut.model_validate(workspace)
 
 

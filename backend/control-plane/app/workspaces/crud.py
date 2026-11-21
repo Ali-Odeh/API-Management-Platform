@@ -7,9 +7,10 @@ from app.audit import crud as audit
 from app.audit.changes import created
 from app.audit.context import AuditContext
 from app.core.db import flush_or_raise
-from app.core.errors import ConflictError, UnprocessableError
+from app.core.errors import ConflictError
 from app.core.pagination import PageParams, paginate
 from app.core.permissions import Role
+from app.gotrue.client import GoTrueAdmin
 from app.members import crud as members_crud
 from app.members.models import WorkspaceMember
 from app.users import crud as users_crud
@@ -54,7 +55,7 @@ async def get_or_create_default_workspace(db: AsyncSession) -> Workspace:
     if workspace is None:
         workspace = Workspace(id=uuid.uuid4(), name="Default", slug=DEFAULT_WORKSPACE_SLUG)
         db.add(workspace)
-        _record_created(db, AuditContext.system(), workspace, owner_email=None)
+        _record_created(db, AuditContext.system(), workspace, owner_email=None, invited=False)
         await db.flush()  # send the INSERT now so workspace.id is usable
     return workspace
 
@@ -86,23 +87,22 @@ async def list_my_workspaces(
 
 
 async def create_workspace(
-    db: AsyncSession, *, data: WorkspaceCreate, created_by: uuid.UUID, audit_ctx: AuditContext
+    db: AsyncSession,
+    *,
+    gotrue: GoTrueAdmin,
+    data: WorkspaceCreate,
+    created_by: uuid.UUID,
+    audit_ctx: AuditContext,
 ) -> Workspace:
     """A new workspace with its first Owner, in one transaction (Platform Admin).
 
-    The owner must already be a user (they signed in once); inviting a new
-    person by email comes with MT.4. Their row stays share-locked from the
-    "is active?" check to the commit, so a parallel disable either finishes
-    first (and this answers 422) or waits until the workspace exists: never
-    a new workspace whose only Owner was disabled in between.
+    A new person is invited by email and owns the workspace from their first
+    login (decision 8). A known owner's row stays share-locked until the
+    commit, so a parallel disable either finishes first (422) or waits until
+    the workspace exists: never a new workspace whose only Owner was
+    disabled in between.
     """
-    owner = await users_crud.get_by_email_locked(db, data.owner_email)
-    if owner is None:
-        raise UnprocessableError(
-            "No user with this email; they must sign in once first (invitations: MT.4)"
-        )
-    if not owner.is_active:
-        raise UnprocessableError("This user is disabled")
+    owner, invited = await users_crud.get_or_invite(db, gotrue, data.owner_email)
 
     workspace = Workspace(name=data.name, slug=data.slug)
     db.add(workspace)
@@ -114,14 +114,19 @@ async def create_workspace(
         db, workspace.id, user_id=owner.id, role=Role.OWNER, added_by=created_by
     )
     # One event for the workspace and its first Owner, platform-level (PLAN.md section 6).
-    _record_created(db, audit_ctx, workspace, owner_email=owner.email)
+    _record_created(db, audit_ctx, workspace, owner_email=owner.email, invited=invited)
     await db.commit()
     await db.refresh(workspace)
     return workspace
 
 
 def _record_created(
-    db: AsyncSession, audit_ctx: AuditContext, workspace: Workspace, *, owner_email: str | None
+    db: AsyncSession,
+    audit_ctx: AuditContext,
+    workspace: Workspace,
+    *,
+    owner_email: str | None,
+    invited: bool,
 ) -> None:
     audit.record(
         db,
@@ -131,5 +136,8 @@ def _record_created(
         target_type="workspace",
         target_id=workspace.id,
         target_name=workspace.slug,
-        changes=created({"name": workspace.name, "slug": workspace.slug, "owner": owner_email}),
+        changes=created(
+            {"name": workspace.name, "slug": workspace.slug, "owner": owner_email}
+            | ({"invited": True} if invited else {})
+        ),
     )
