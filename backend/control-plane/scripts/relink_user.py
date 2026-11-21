@@ -15,6 +15,7 @@ import sys
 
 async def relink(email: str) -> int:
     # Imported here: the app needs settings from the environment.
+    from app.audit.context import AuditContext
     from app.core.config import get_settings
     from app.core.db import SessionLocal, engine
     from app.core.errors import AppError
@@ -24,7 +25,7 @@ async def relink(email: str) -> int:
     gotrue = create_gotrue_admin(get_settings())
     try:
         async with SessionLocal() as db:
-            old, new = await crud.relink_user(db, gotrue, email=email)
+            old, new = await crud.relink_user(db, gotrue, email=email, audit=AuditContext.system())
     except AppError as exc:
         print(f"Not changed: {exc.detail}", file=sys.stderr)
         return 1

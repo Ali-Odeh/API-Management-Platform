@@ -9,6 +9,8 @@ from httpx import AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.context import AuditContext
+from app.audit.models import ActorType
 from app.core.db import SessionLocal
 from app.core.errors import ForbiddenError
 from app.core.identity import TokenClaims
@@ -388,7 +390,9 @@ async def _first_request_while_another_saves(
 
     monkeypatch.setattr(users_crud, "_by_email", lookup_then_lose_the_race)
     async with SessionLocal() as db:
-        return await users_crud.get_or_create_from_token(db, claims)
+        return await users_crud.get_or_create_from_token(
+            db, claims, audit=AuditContext(ActorType.USER)
+        )
 
 
 async def test_losing_the_race_returns_the_other_requests_row(
@@ -432,6 +436,8 @@ async def test_row_made_between_our_two_lookups_is_returned(
 
     monkeypatch.setattr(users_crud, "_by_auth_user_id", miss_then_lose_the_race)
     async with SessionLocal() as db:
-        user = await users_crud.get_or_create_from_token(db, claims)
+        user = await users_crud.get_or_create_from_token(
+            db, claims, audit=AuditContext(ActorType.USER)
+        )
 
     assert user.id == competitor.id

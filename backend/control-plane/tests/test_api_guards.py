@@ -9,26 +9,31 @@ lock, and these fail without anyone writing a new test.
 - Isolation: a member of workspace A can never reach workspace B's objects.
 """
 
+import json
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
 import pytest
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
-from httpx import AsyncClient
-from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, pool, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.audit.models import AuditEvent
 from app.core.config import get_settings
+from app.core.db import SessionLocal
 from app.core.deps import PermissionCheck, require_platform_admin
 from app.core.permissions import ROLE_PERMISSIONS, Permission, Role
 from app.keys.models import ApiKey
 from app.main import app
 from app.users.models import User
 from app.workspaces.crud import WORKSPACE_NOT_FOUND
+from tests.conftest import OWNER_URL
 from tests.factories import (
     make_api_key,
     make_consumer,
@@ -471,6 +476,209 @@ async def test_filtering_by_another_workspaces_object_is_422(
         headers=_headers(tenants.alice),
     )
     assert r.status_code == 422, r.text
+
+
+# ---- Audit guard: every change leaves exactly one event (decision 11)
+
+MUTATING = sorted(e for e in SIGNED_IN if e[0] in {"POST", "PATCH", "DELETE"})
+GETS = sorted(e for e in SIGNED_IN if e[0] == "GET")
+
+# The event each mutating endpoint writes. A new one must be added here, which
+# is the point: an endpoint without an audit event can't go unnoticed.
+_ACTIONS: dict[Endpoint, str] = {
+    ("POST", "/api/v1/workspaces"): "workspace.created",
+    ("PATCH", "/api/v1/users/{user_id}"): "user.disable",
+    ("POST", "/api/v1/workspaces/{slug}/services"): "service.create",
+    ("PATCH", "/api/v1/workspaces/{slug}/services/{service_id}"): "service.update",
+    ("DELETE", "/api/v1/workspaces/{slug}/services/{service_id}"): "service.delete",
+    ("POST", "/api/v1/workspaces/{slug}/routes"): "route.create",
+    ("PATCH", "/api/v1/workspaces/{slug}/routes/{route_id}"): "route.update",
+    ("DELETE", "/api/v1/workspaces/{slug}/routes/{route_id}"): "route.delete",
+    ("POST", "/api/v1/workspaces/{slug}/consumers"): "consumer.create",
+    ("PATCH", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): "consumer.update",
+    ("DELETE", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): "consumer.delete",
+    ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): "key.create",
+    ("DELETE", "/api/v1/workspaces/{slug}/keys/{key_id}"): "key.revoke",
+}
+
+# Valid requests for the platform endpoints (the workspace ones use _VALID_BODIES).
+_PLATFORM_BODIES: dict[Endpoint, Callable[[User], dict[str, Any]]] = {
+    ("POST", "/api/v1/workspaces"): lambda person: {
+        "name": "Newco", "slug": "newco", "owner_email": person.email,
+    },
+    ("PATCH", "/api/v1/users/{user_id}"): lambda person: {"is_active": False},
+}  # fmt: skip
+
+
+def test_every_mutating_endpoint_names_its_audit_event() -> None:
+    assert set(_ACTIONS) == set(MUTATING)
+    assert set(_PLATFORM_BODIES) == set(MUTATING) - set(WORKSPACE)
+
+
+@dataclass
+class Actors:
+    owner: User  # Owner of `acme`
+    platform_admin: User  # not a member of `acme`
+    person: User  # the one platform endpoints act on
+
+
+@pytest.fixture
+async def actors(db: AsyncSession, acme: dict[str, uuid.UUID]) -> Actors:
+    owner = await make_user(db, email="owner@acme.test")
+    await make_member(db, acme["workspace_id"], owner.id, Role.OWNER)
+    platform_admin = await make_user(db, email="platform@example.com", is_platform_admin=True)
+    person = await make_user(db, email="person@example.com")
+    return Actors(owner=owner, platform_admin=platform_admin, person=person)
+
+
+async def _mutate(
+    client: AsyncClient,
+    endpoint: Endpoint,
+    acme: dict[str, uuid.UUID],
+    actors: Actors,
+    *,
+    as_platform_admin: bool = False,
+) -> Any:
+    """A valid request that changes something: as acme's Owner, or for platform
+    endpoints (and with `as_platform_admin`) as the Platform Admin with MFA."""
+    method, path = endpoint
+    if endpoint in WORKSPACE:
+        user = actors.platform_admin if as_platform_admin else actors.owner
+        return await _valid_request(client, method, path, acme, user, mfa=as_platform_admin)
+    body = _PLATFORM_BODIES[endpoint](actors.person)
+    url = _url(path, ids={"user_id": actors.person.id})
+    return await client.request(
+        method, url, json=body, headers=_headers(actors.platform_admin, mfa=True)
+    )
+
+
+async def _event_ids() -> set[uuid.UUID]:
+    async with SessionLocal() as session:  # a fresh session: no cached rows
+        return set(await session.scalars(select(AuditEvent.id)))
+
+
+async def _events_since(seen: set[uuid.UUID]) -> list[AuditEvent]:
+    async with SessionLocal() as session:
+        events = await session.scalars(select(AuditEvent).where(AuditEvent.id.not_in(seen)))
+        return list(events)
+
+
+@pytest.mark.parametrize(("method", "path"), MUTATING)
+async def test_every_change_writes_exactly_one_event(
+    client: AsyncClient,
+    db: AsyncSession,
+    acme: dict[str, uuid.UUID],
+    actors: Actors,
+    method: str,
+    path: str,
+) -> None:
+    seen = await _event_ids()
+
+    r = await _mutate(client, (method, path), acme, actors)
+
+    assert 200 <= r.status_code < 300, r.text
+    [event] = await _events_since(seen)
+    in_workspace = (method, path) in WORKSPACE
+    actor = actors.owner if in_workspace else actors.platform_admin
+    assert event.action == _ACTIONS[(method, path)]
+    assert event.workspace_id == (acme["workspace_id"] if in_workspace else None)
+    assert (event.actor_user_id, event.actor_email) == (actor.id, actor.email)
+    assert event.actor_type == ("user" if in_workspace else "platform_admin")
+    assert event.request_id == r.headers["X-Request-ID"]
+    assert event.changes  # what changed, field by field
+    # Never a secret: no key hash, and the raw key only ever in its one answer.
+    recorded = json.dumps([event.changes, event.target_name])
+    assert "key_hash" not in recorded
+    hashes = (await db.scalars(select(ApiKey.key_hash))).all()
+    assert not any(h in recorded for h in hashes)
+    if r.status_code == 201 and "key" in r.json():
+        assert r.json()["key"] not in recorded
+
+
+# The table each kind of change writes to.
+_TABLES = {
+    "workspace": "workspaces",
+    "user": "users",
+    "service": "services",
+    "route": "routes",
+    "consumer": "consumers",
+    "key": "api_keys",
+}
+
+
+@asynccontextmanager
+async def _database_refuses_writes_to(table: str) -> AsyncIterator[None]:
+    """A temporary trigger makes Postgres refuse any write to `table`."""
+    owner = create_async_engine(OWNER_URL, poolclass=pool.NullPool)
+    async with owner.begin() as conn:
+        await conn.execute(
+            text(
+                "CREATE OR REPLACE FUNCTION test_refuse() RETURNS trigger LANGUAGE plpgsql "
+                "AS $$ BEGIN RAISE EXCEPTION 'refused by the test'; END $$"
+            )
+        )
+        await conn.execute(
+            text(
+                f"CREATE TRIGGER trg_test_refuse BEFORE INSERT OR UPDATE OR DELETE ON {table} "
+                "FOR EACH ROW EXECUTE FUNCTION test_refuse()"
+            )
+        )
+    try:
+        yield
+    finally:
+        async with owner.begin() as conn:
+            await conn.execute(text(f"DROP TRIGGER trg_test_refuse ON {table}"))
+        await owner.dispose()
+
+
+@pytest.mark.parametrize(("method", "path"), MUTATING)
+async def test_a_change_that_fails_leaves_no_event(
+    acme: dict[str, uuid.UUID], actors: Actors, method: str, path: str
+) -> None:
+    # The database refuses the change itself. Its event was staged in the same
+    # transaction, so it must be gone too; an event written on its own (say,
+    # committed before the change) would survive and fail this test.
+    table = _TABLES[_ACTIONS[(method, path)].split(".")[0]]
+    seen = await _event_ids()
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
+    async with (
+        _database_refuses_writes_to(table),
+        AsyncClient(transport=transport, base_url="http://test") as client,
+    ):
+        r = await _mutate(client, (method, path), acme, actors)
+
+    assert r.status_code == 500
+    assert await _events_since(seen) == []
+
+
+@pytest.mark.parametrize(("method", "path"), sorted(set(MUTATING) & set(WORKSPACE)))
+async def test_platform_admin_changes_show_in_the_workspace_log(
+    client: AsyncClient, acme: dict[str, uuid.UUID], actors: Actors, method: str, path: str
+) -> None:
+    # The Platform Admin isn't a member of `acme`: the workspace's Owners see
+    # what they did there, marked as platform power (decision 11).
+    seen = await _event_ids()
+
+    r = await _mutate(client, (method, path), acme, actors, as_platform_admin=True)
+
+    assert 200 <= r.status_code < 300, r.text
+    [event] = await _events_since(seen)
+    assert event.workspace_id == acme["workspace_id"]
+    assert event.actor_type == "platform_admin"
+    assert event.actor_user_id == actors.platform_admin.id
+
+
+@pytest.mark.parametrize(("method", "path"), GETS)
+async def test_reading_writes_no_event(
+    client: AsyncClient, acme: dict[str, uuid.UUID], actors: Actors, method: str, path: str
+) -> None:
+    seen = await _event_ids()
+    if (method, path) in WORKSPACE:
+        r = await _valid_request(client, method, path, acme, actors.owner, mfa=False)
+    else:
+        r = await client.get(_url(path), headers=_headers(actors.platform_admin, mfa=True))
+    assert r.status_code == 200, r.text
+    assert await _events_since(seen) == []
 
 
 # ---- Internal endpoints need the internal token

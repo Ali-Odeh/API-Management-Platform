@@ -10,6 +10,9 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import crud as audit
+from app.audit.changes import Changes, created, snapshot, updated
+from app.audit.context import AuditContext
 from app.consumers import crud as consumers_crud
 from app.core.db import commit_or_raise
 from app.core.errors import AppError, ConflictError, NotFoundError
@@ -19,6 +22,9 @@ from app.keys.models import KEY_PREFIX_LENGTH, UQ_API_KEY_HASH, ApiKey
 from app.keys.schemas import KeyCreate
 
 MAX_ACTIVE_KEYS_PER_CONSUMER = 10
+# What a key's audit events record: never its hash, and the raw key exists
+# only in create_key's answer; the prefix is how people tell keys apart.
+AUDIT_FIELDS = ("consumer_id", "name", "key_prefix")
 _GENERATE_ATTEMPTS = 3
 
 
@@ -40,7 +46,12 @@ async def list_keys(
 
 
 async def create_key(
-    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID, data: KeyCreate
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    consumer_id: uuid.UUID,
+    data: KeyCreate,
+    audit: AuditContext,
 ) -> tuple[ApiKey, str]:
     """Generate a key for a consumer. Returns the stored row and the raw key."""
     await _lock_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)
@@ -54,6 +65,7 @@ async def create_key(
     for _ in range(_GENERATE_ATTEMPTS):
         raw_key = generate_api_key()
         key = ApiKey(
+            id=uuid.uuid4(),
             workspace_id=workspace_id,
             consumer_id=consumer_id,
             name=data.name,
@@ -61,6 +73,8 @@ async def create_key(
             key_hash=hash_api_key(raw_key),
         )
         db.add(key)
+        # Inside the loop: a collision's rollback takes the staged event with it.
+        _record(db, audit, key, "key.create", created(snapshot(key, AUDIT_FIELDS)))
         try:
             await commit_or_raise(db, {UQ_API_KEY_HASH: _HashCollisionError("hash collision")})
         except _HashCollisionError:
@@ -89,15 +103,20 @@ async def _lock_consumer(
     )
 
 
-async def revoke_key(db: AsyncSession, workspace_id: uuid.UUID, *, key_id: uuid.UUID) -> None:
-    """Mark a key revoked. Idempotent: revoking again keeps the first revoked_at."""
+async def revoke_key(
+    db: AsyncSession, workspace_id: uuid.UUID, *, key_id: uuid.UUID, audit: AuditContext
+) -> None:
+    """Mark a key revoked. Idempotent: revoking again keeps the first revoked_at
+    (and, since nothing changes, writes no second audit event)."""
     key = await db.scalar(
         select(ApiKey).where(ApiKey.id == key_id, ApiKey.workspace_id == workspace_id)
     )
     if key is None:
         raise NotFoundError("API key not found")
     if key.revoked_at is None:
+        before = snapshot(key, ("revoked_at",))
         key.revoked_at = datetime.now(UTC)
+        _record(db, audit, key, "key.revoke", updated(before, snapshot(key, ("revoked_at",))))
         await db.commit()
 
 
@@ -106,3 +125,18 @@ async def _count_active_keys(db: AsyncSession, *, consumer_id: uuid.UUID) -> int
         ApiKey.consumer_id == consumer_id, ApiKey.revoked_at.is_(None)
     )
     return await db.scalar(query) or 0
+
+
+def _record(
+    db: AsyncSession, audit_ctx: AuditContext, key: ApiKey, action: str, changes: Changes
+) -> None:
+    audit.record(
+        db,
+        audit_ctx,
+        workspace_id=key.workspace_id,
+        action=action,
+        target_type="key",
+        target_id=key.id,
+        target_name=key.key_prefix,
+        changes=changes,
+    )

@@ -9,6 +9,7 @@ from httpx import AsyncClient, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.context import AuditContext
 from app.services import crud
 from app.services.models import Service
 from app.services.schemas import ServiceCreate
@@ -249,4 +250,6 @@ async def test_other_integrity_errors_are_not_reported_as_409(db: AsyncSession) 
     # bug, so it must surface as an error instead of a misleading "name taken".
     data = ServiceCreate(name="orders", upstream_url="http://x:1")
     with pytest.raises(IntegrityError):
-        await crud.create_service(db, workspace_id=uuid.uuid4(), data=data)
+        await crud.create_service(
+            db, workspace_id=uuid.uuid4(), data=data, audit=AuditContext.system()
+        )

@@ -3,6 +3,9 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import crud as audit
+from app.audit.changes import created
+from app.audit.context import AuditContext
 from app.core.db import flush_or_raise
 from app.core.errors import ConflictError, UnprocessableError
 from app.core.pagination import PageParams, paginate
@@ -46,11 +49,12 @@ async def get_workspace_and_role(
 
 
 async def get_or_create_default_workspace(db: AsyncSession) -> Workspace:
-    """Return the `default` workspace, creating it on first run."""
+    """Return the `default` workspace, creating it on first run (audited as `system`)."""
     workspace = await get_workspace_by_slug(db, DEFAULT_WORKSPACE_SLUG)
     if workspace is None:
-        workspace = Workspace(name="Default", slug=DEFAULT_WORKSPACE_SLUG)
+        workspace = Workspace(id=uuid.uuid4(), name="Default", slug=DEFAULT_WORKSPACE_SLUG)
         db.add(workspace)
+        _record_created(db, AuditContext.system(), workspace, owner_email=None)
         await db.flush()  # send the INSERT now so workspace.id is usable
     return workspace
 
@@ -82,7 +86,7 @@ async def list_my_workspaces(
 
 
 async def create_workspace(
-    db: AsyncSession, *, data: WorkspaceCreate, created_by: uuid.UUID
+    db: AsyncSession, *, data: WorkspaceCreate, created_by: uuid.UUID, audit_ctx: AuditContext
 ) -> Workspace:
     """A new workspace with its first Owner, in one transaction (Platform Admin).
 
@@ -109,6 +113,23 @@ async def create_workspace(
     members_crud.add_member(
         db, workspace.id, user_id=owner.id, role=Role.OWNER, added_by=created_by
     )
+    # One event for the workspace and its first Owner, platform-level (PLAN.md section 6).
+    _record_created(db, audit_ctx, workspace, owner_email=owner.email)
     await db.commit()
     await db.refresh(workspace)
     return workspace
+
+
+def _record_created(
+    db: AsyncSession, audit_ctx: AuditContext, workspace: Workspace, *, owner_email: str | None
+) -> None:
+    audit.record(
+        db,
+        audit_ctx,
+        workspace_id=None,  # a lifecycle event: platform-level, survives a purge
+        action="workspace.created",
+        target_type="workspace",
+        target_id=workspace.id,
+        target_name=workspace.slug,
+        changes=created({"name": workspace.name, "slug": workspace.slug, "owner": owner_email}),
+    )

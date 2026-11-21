@@ -5,11 +5,17 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import crud as audit
+from app.audit.changes import Changes, created, deleted, snapshot, updated
+from app.audit.context import AuditContext
 from app.consumers.models import UQ_CONSUMER_NAME, Consumer, ConsumerStatus
 from app.consumers.schemas import ConsumerCreate, ConsumerUpdate
 from app.core.db import commit_or_raise
 from app.core.errors import AppError, ConflictError, NotFoundError
 from app.core.pagination import PageParams, paginate
+
+# What a consumer's audit events record (blocking is a `status` change).
+AUDIT_FIELDS = ("name", "email", "status", "rate_limit_per_min")
 
 
 def _name_taken(name: str) -> dict[str, AppError]:
@@ -49,30 +55,55 @@ async def get_consumer(
 
 
 async def create_consumer(
-    db: AsyncSession, workspace_id: uuid.UUID, *, data: ConsumerCreate
+    db: AsyncSession, workspace_id: uuid.UUID, *, data: ConsumerCreate, audit: AuditContext
 ) -> Consumer:
-    consumer = Consumer(workspace_id=workspace_id, **data.model_dump())
+    consumer = Consumer(id=uuid.uuid4(), workspace_id=workspace_id, **data.model_dump())
     db.add(consumer)
+    _record(db, audit, consumer, "consumer.create", created(snapshot(consumer, AUDIT_FIELDS)))
     await commit_or_raise(db, _name_taken(data.name))
     await db.refresh(consumer)
     return consumer
 
 
 async def update_consumer(
-    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID, data: ConsumerUpdate
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    consumer_id: uuid.UUID,
+    data: ConsumerUpdate,
+    audit: AuditContext,
 ) -> Consumer:
     consumer = await get_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)
+    before = snapshot(consumer, AUDIT_FIELDS)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(consumer, field, value)
+    if changes := updated(before, snapshot(consumer, AUDIT_FIELDS)):
+        _record(db, audit, consumer, "consumer.update", changes)
     await commit_or_raise(db, _name_taken(consumer.name))
     await db.refresh(consumer)
     return consumer
 
 
 async def delete_consumer(
-    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID
+    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID, audit: AuditContext
 ) -> None:
     """Delete a consumer. The database deletes its API keys too (ON DELETE CASCADE)."""
     consumer = await get_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)
+    _record(db, audit, consumer, "consumer.delete", deleted(snapshot(consumer, AUDIT_FIELDS)))
     await db.delete(consumer)
     await db.commit()
+
+
+def _record(
+    db: AsyncSession, audit_ctx: AuditContext, consumer: Consumer, action: str, changes: Changes
+) -> None:
+    audit.record(
+        db,
+        audit_ctx,
+        workspace_id=consumer.workspace_id,
+        action=action,
+        target_type="consumer",
+        target_id=consumer.id,
+        target_name=consumer.name,
+        changes=changes,
+    )
