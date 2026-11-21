@@ -10,6 +10,7 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.models import AuditEvent
 from app.consumers import crud as consumers_crud
 from app.core.db import SessionLocal
 from app.core.permissions import Role
@@ -22,7 +23,7 @@ from app.users.models import User
 from app.workspaces import crud as workspaces_crud
 from app.workspaces.models import Workspace
 from tests.factories import expect_violation, make_member, make_user, make_workspace
-from tests.fakes import bearer, make_token
+from tests.fakes import FakeGoTrue, bearer, make_token
 
 WORKSPACES = "/api/v1/workspaces"
 MY_WORKSPACES = "/api/v1/me/workspaces"
@@ -101,23 +102,32 @@ async def test_taken_slug_is_409(
     assert r.json() == {"detail": "Slug 'default' is already taken"}
 
 
-@pytest.mark.parametrize(
-    ("email", "detail"),
-    [
-        ("nobody@acme.test", "No user with this email; they must sign in once first"),
-        ("disabled@acme.test", "This user is disabled"),
-    ],
-)
-async def test_owner_must_be_an_active_user(
-    client: AsyncClient, db: AsyncSession, mfa_headers: Headers, email: str, detail: str
+async def test_a_disabled_owner_is_422(
+    client: AsyncClient, db: AsyncSession, mfa_headers: Headers
 ) -> None:
     await make_user(db, email="disabled@acme.test", is_active=False)
 
-    r = await client.post(WORKSPACES, json=_body(owner_email=email), headers=mfa_headers)
+    r = await client.post(
+        WORKSPACES, json=_body(owner_email="disabled@acme.test"), headers=mfa_headers
+    )
 
     assert r.status_code == 422
-    assert r.json()["detail"].startswith(detail)
+    assert r.json() == {"detail": "This user is disabled"}
     assert await db.scalar(select(Workspace).where(Workspace.slug == "acme")) is None
+
+
+async def test_a_new_owner_is_invited_and_owns_it_from_their_first_login(
+    client: AsyncClient, db: AsyncSession, mfa_headers: Headers, gotrue: FakeGoTrue
+) -> None:
+    r = await client.post(WORKSPACES, json=_body(owner_email="new@acme.test"), headers=mfa_headers)
+
+    assert r.status_code == 201
+    assert gotrue.invited == ["new@acme.test"]
+    first_login = bearer(make_token(gotrue.accounts["new@acme.test"], "new@acme.test"))
+    mine = (await client.get(MY_WORKSPACES, headers=first_login)).json()["items"]
+    assert [(w["slug"], w["role"]) for w in mine] == [("acme", "owner")]
+    event = await db.scalar(select(AuditEvent).where(AuditEvent.target_name == "acme"))
+    assert event is not None and event.changes["invited"] == [None, True]
 
 
 @pytest.mark.parametrize(

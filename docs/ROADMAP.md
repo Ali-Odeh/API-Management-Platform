@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 21, 2026 · **Current step:** MT.3 done (audit log, least-privilege database logins, retention job); next: MT.4
+**Last updated:** Nov 21, 2026 · **Current step:** MT.4 done (members, invitations, owner rules); next: MT.5
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅⬜⬜⬜⬜⬜⬜⬜⬜⬜ 3/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅⬜⬜⬜⬜⬜⬜⬜⬜ 4/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 794 passing (about 3 min), including permission, isolation and audit guards over every endpoint and every role, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 904 passing (about 3.5 min), including permission, isolation and audit guards over every endpoint and every role, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **26 stories pass in about 7 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **29 stories pass in about 9 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -131,7 +131,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.1 | Identity: GoTrue, `users`, JWT verification, Platform Admin with MFA | ✅ |
 | MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ✅ |
 | MT.3 | Audit log | ✅ |
-| MT.4 | Members and owners | ⬜ |
+| MT.4 | Members and owners | ✅ |
 | MT.5 | Workspace lifecycle and quotas | ⬜ |
 | MT.6 | Incremental config protocol | ⬜ |
 | MT.7 | Gateway tenancy | ⬜ |
@@ -206,6 +206,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Audit: `member.add`, `member.role_change`, `member.remove`, `member.leave`, `member.owner_assigned_by_platform`
 
 **Done when:** an invitation email arrives in Mailpit and leads to a working membership; a concurrency test with two owners demoting each other at the same moment always leaves one owner; all rules above have tests.
+
+**Status:** ✅ Done (Nov 21). Commits `29b1768` (a new owner invited on workspace creation), `817e8ca` (members API with owner rules and row locks), then e2e and docs. The concurrency tests widen the race window and were checked to fail without the owner-row lock (both owners demoted, or both left). e2e accepts a real invitation from Mailpit, sets a password and logs in.
 
 ### MT.5 Workspace lifecycle and quotas [6, 10]
 
@@ -454,3 +456,8 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.3 | The audit guard's rollback test makes Postgres refuse the change itself (a temporary trigger), not every commit | Refusing every commit would also pass with an event committed on its own; this way only one shared transaction passes |
 | Nov 21 | MT.3 | Run migrations and test setup separately from the API container. Strip upstream URL credentials from audit events, lock key rows during revocation and preserve the request ID on unhandled 500 responses | The running API has no privileged database credentials. Concurrent revocations produce one event, and clients can correlate unexpected errors |
 | Nov 21 | MT.3 | `upstream_url` with a username or password is refused (422); audit events still strip credentials from services saved before | A password there was stored, returned by `GET` (to Viewers too) and sent to the gateway, which never uses it. Secrets never appear in API answers (AGENTS.md) |
+| Nov 21 | MT.4 | A new person's `users` row and membership are made when they are added, bound to the GoTrue account the admin API finds or invites; no invitations table; an existing GoTrue account gets no second email | Decision 8's simple flow: they are a member from their first login with nothing to sync; binding through the trusted admin API keeps MT.1's "never by a token's email" rule |
+| Nov 21 | MT.4 | Adding someone records one event, `member.add` (or `member.owner_assigned_by_platform`), with `invited` in its changes; no separate `user.create` | One request, one event (the audit guard's rule); the event says a new person was invited |
+| Nov 21 | MT.4 | Changing your own role is `409`; removing yourself through `DELETE /members/{user_id}` is allowed (as `member.remove`), under the last-owner rule like leaving | Decision 9 forbids only your own role change; the last-owner rule protects the rest |
+| Nov 21 | MT.4 | Disabling a user is not refused when they are a workspace's last active Owner | A compromised account must be stoppable at once; the Platform Admin is the safety net and can assign a new Owner |
+| Nov 21 | MT.4 | e2e invites a new address every run and deletes its membership, GoTrue account and email afterwards; its `users` row stays | The invitation is only really sent to someone new; people are never deleted, only disabled |

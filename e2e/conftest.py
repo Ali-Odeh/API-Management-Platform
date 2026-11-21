@@ -18,6 +18,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 import pytest
@@ -25,6 +26,8 @@ import pytest
 # Addresses inside the Compose network (the e2e container runs there).
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://control-plane:8000")
 GOTRUE_URL = os.environ.get("GOTRUE_URL", "http://auth:9999")
+# Mailpit catches the emails GoTrue sends (invitations); its API lists them.
+MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://mailpit:8025")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8080")
 # The backend as the gateway reaches it.
 MOCK_BACKEND_URL = os.environ.get("MOCK_BACKEND_URL", "http://mock-backend:9000")
@@ -235,6 +238,23 @@ class GoTrue:
         return Session(r.json()["access_token"], r.json()["refresh_token"])
 
     # Admin API (service-role key): only to set up and clean up test accounts.
+
+    def accept_invitation(self, link: str) -> Session:
+        """Open an invitation link as a browser would: GoTrue verifies it and
+        redirects with the new session in the URL fragment."""
+        link_parts = urlsplit(link)
+        r = self.http.get(f"{link_parts.path}?{link_parts.query}", follow_redirects=False)
+        assert r.status_code == 303, f"invitation link refused: {r.status_code} {r.text}"
+        session = dict(parse_qsl(urlsplit(r.headers["location"]).fragment))
+        assert "access_token" in session, f"no session in the redirect: {r.headers['location']}"
+        return Session(session["access_token"], session["refresh_token"])
+
+    def set_password(self, session: Session, password: str) -> None:
+        r = self.http.put("/user", json={"password": password}, headers=session.headers)
+        assert r.status_code == 200, f"setting the password failed: {r.status_code} {r.text}"
+
+    def delete_account(self, user_id: str) -> None:
+        self.http.delete(f"/admin/users/{user_id}", headers=self._admin_headers)
 
     def remove_factors(self, user_id: str, name: str) -> None:
         r = self.http.get(f"/admin/users/{user_id}/factors", headers=self._admin_headers)
