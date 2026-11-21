@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1148 passing (about 4.5 min), including permission, isolation and audit guards over every endpoint and every role, every endpoint in a suspended and in a deleted workspace, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 1152 passing (about 4.5 min), including permission, isolation and audit guards over every endpoint and every role, every endpoint in a suspended and in a deleted workspace, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -476,3 +476,5 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.5 | The purge job has its own login (`apim_purge`) and container (`workspace-purge`), like retention; it deletes children first, keeps the row as `purged`, and records `workspace.purged` (actor `system`) with how many rows of each table went | The API's login can't delete audit events, and must not; a guard test checks the job's table list against every model with a `workspace_id` |
 | Nov 21 | MT.5 | The two database jobs share `app/core/jobs.py` (asyncpg URL, the daily loop) | One loop, one failure rule for both |
 | Nov 21 | MT.5 | e2e makes a new workspace per lifecycle story (`e2e-lc-<random>`) and leaves it deleted | Slugs are never reused, so a story that deletes must use a new one; the purge job removes it after 30 days |
+| Nov 21 | MT.5 | Workspace writes lock the row (`FOR NO KEY UPDATE`) and check status and membership again, after a first unlocked check that answers non-members `404` without the lock. Writes in one workspace therefore run one at a time, including a member add's GoTrue call. Leaving a suspended workspace returns `403 workspace_suspended`. `PATCH /limits` returns `404` for deleted or purged workspaces (after review) | A member write and a lifecycle transition or role change run in order. Strangers can't stall a workspace or learn from timing that it exists. Admin writes are rare, so one at a time per workspace costs nothing noticeable. Both endpoints honor the workspace state rules |
+| Nov 21 | MT.5 | Adding a new person whose GoTrue id our `users` already holds (a parallel add, or an account whose email changed in GoTrue) is `409`, not `500` (after review) | Postgres may report the GoTrue-id index before the email index; the parallel-add test hit it once the timing changed |

@@ -53,6 +53,8 @@ def test_a_suspended_workspace_is_read_only_until_unsuspended(
     assert (detail.status_code, detail.json()["status_reason"]) == (200, "e2e abuse report")
     r = _service(owner, slug, "blocked")
     assert (r.status_code, r.json()) == (403, {"detail": "workspace_suspended"})
+    r = owner.delete(f"/me/workspaces/{slug}")
+    assert (r.status_code, r.json()) == (403, {"detail": "workspace_suspended"})
 
     assert admin.post(f"/workspaces/{slug}/unsuspend").status_code == 200
     r = _service(owner, slug, "allowed")
@@ -89,6 +91,8 @@ def test_a_deleted_workspace_disappears_and_can_be_restored(
     assert owner.request("DELETE", f"/workspaces/{slug}", json={"confirm": slug}).status_code == 204
     assert owner.get(f"/workspaces/{slug}").status_code == 404
     assert slug not in [w["slug"] for w in owner.get("/me/workspaces").json()["items"]]
+    r = admin.patch(f"/workspaces/{slug}/limits", json={"max_services": 1})
+    assert (r.status_code, r.json()) == (404, {"detail": "Workspace not found"})
     deleted = admin.get("/workspaces", params={"status": "deleted", "page_size": 100}).json()
     assert slug in [w["slug"] for w in deleted["items"]]
     # Its slug stays taken.

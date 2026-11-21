@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.context import AuditContext
@@ -19,7 +20,7 @@ from app.core.db import SessionLocal
 from app.core.errors import NotFoundError
 from app.core.permissions import Role
 from app.users.models import User
-from app.workspaces import lifecycle
+from app.workspaces import crud, lifecycle
 from app.workspaces.models import Workspace, WorkspaceStatus
 from tests.factories import (
     make_consumer,
@@ -190,6 +191,49 @@ async def test_two_suspensions_at_once_make_one(
 
     assert sorted(r.status_code for r in answers) == [200, 409]
     assert len(await _events("workspace.suspended")) == 1
+
+
+async def test_a_member_write_holds_the_lifecycle_lock_until_commit(
+    client: AsyncClient, acme: Workspace, owner: Headers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rename = crud.rename_workspace
+
+    async def rename_with_lock_check(*args: Any, **kwargs: Any) -> Workspace:
+        # At the start of the write, a transition in another transaction must wait.
+        async with SessionLocal() as session:
+            query = select(Workspace.id).where(Workspace.id == acme.id).with_for_update(nowait=True)
+            with pytest.raises(DBAPIError) as error:
+                await session.execute(query)
+            assert getattr(error.value.orig, "sqlstate", None) == "55P03"  # lock_not_available
+        return await rename(*args, **kwargs)
+
+    monkeypatch.setattr(crud, "rename_workspace", rename_with_lock_check)
+
+    r = await client.patch(f"{WORKSPACES}/acme", json={"name": "Acme Corp"}, headers=owner)
+
+    assert r.status_code == 200, r.text
+    async with SessionLocal() as session:
+        query = select(Workspace.id).where(Workspace.id == acme.id).with_for_update(nowait=True)
+        assert await session.scalar(query) == acme.id
+
+
+async def test_a_stranger_never_waits_on_the_workspace_lock(
+    client: AsyncClient, db: AsyncSession, acme: Workspace
+) -> None:
+    # A non-member's write is refused before the lock: it can't stall the
+    # workspace's writers, and its timing can't reveal that the workspace
+    # exists (a busy one would make it wait, an unknown slug wouldn't).
+    stranger = _headers(await make_user(db, email="stranger@example.com"))
+    body = {"name": "x", "upstream_url": "http://mock-backend:9000"}
+    async with SessionLocal() as holder:
+        await holder.execute(select(Workspace.id).where(Workspace.id == acme.id).with_for_update())
+
+        for request in (
+            client.post(f"{WORKSPACES}/acme/services", json=body, headers=stranger),
+            client.delete("/api/v1/me/workspaces/acme", headers=stranger),
+        ):
+            r = await asyncio.wait_for(request, timeout=5)
+            assert (r.status_code, r.json()) == (404, {"detail": "Workspace not found"})
 
 
 # ---- Delete (Owner or Platform Admin) and restore (Platform Admin)

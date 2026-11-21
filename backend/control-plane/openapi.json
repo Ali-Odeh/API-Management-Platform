@@ -2342,7 +2342,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+            "description": "Not allowed: user_disabled, account_conflict or workspace_suspended"
           },
           "404": {
             "content": {
@@ -3982,16 +3982,6 @@
               }
             },
             "description": "Workspace not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "workspace_deleted or workspace_purged: its limits are frozen"
           },
           "422": {
             "content": {

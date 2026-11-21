@@ -435,10 +435,10 @@ The admin API lives under `/api/v1`. Every call carries a **GoTrue access token*
 **How a request is authorized**
 
 1. **Who:** verify the GoTrue JWT (signature, expiry, audience `authenticated`, a UUID `sub` and an email). Missing or invalid → `401`. The `users` row is found by `sub`, or created just in time from the token's claims (`403 account_conflict` if another account's row holds that email). `users.is_active = false` → `403 user_disabled`.
-2. **Which workspace and which role:** one query resolves the slug and the caller's membership. Unknown workspace, a deleted one, or not a member → `404` (it doesn't reveal that the workspace exists). The Platform Admin passes this step for every workspace.
+2. **Which workspace and which role:** resolve the slug and the caller's membership. For a write, someone who isn't a member (and isn't the Platform Admin) gets `404` at once; anyone else then locks the workspace row (`FOR NO KEY UPDATE`), reads status and membership again, and holds the lock through the write transaction. Strangers never take or wait on the lock, so they can't stall a workspace and their timing can't reveal that it exists. Unknown workspace, a deleted one, or not a member → `404` (it doesn't reveal that the workspace exists). The Platform Admin passes this step for every workspace that is still active or suspended.
 3. **May they:** the endpoint declares a permission, e.g. `Annotated[WorkspaceAccess, require_permission(Permission.SERVICES_WRITE)]`. Not allowed → `403 permission_denied`. A Platform Admin may act in every workspace; where their own role there (if any) doesn't hold the permission, that platform power needs MFA (`403 mfa_required` without `aal2`), as on the platform endpoints. A suspended workspace refuses every write with `403 workspace_suspended`.
 
-The role is read from the database on every request, so a removed member or a lowered role takes effect on the very next request.
+The role is read from the database on every request. A write that waited for another write uses the membership and role in force after that write commits.
 
 **Roles and permissions**
 
@@ -459,7 +459,7 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | --- | --- | --- | --- |
 | GET | `/api/v1/me` | signed in | Current user |
 | GET | `/api/v1/me/workspaces` | signed in | My workspaces and my role in each |
-| DELETE | `/api/v1/me/workspaces/{slug}` | member | Leave a workspace (not the last owner) |
+| DELETE | `/api/v1/me/workspaces/{slug}` | member | Leave a workspace (not the last owner, not while it is suspended) |
 | GET, POST | `/api/v1/workspaces` | Platform Admin | List all (deleted and purged too; `?status=` filters), create `{name, slug, owner_email}` |
 | GET | `/api/v1/workspaces/{slug}` | `workspace:read` | Workspace details, limits, status |
 | PATCH | `/api/v1/workspaces/{slug}` | `workspace:write` | Rename (`name` only; the slug never changes) |
@@ -524,7 +524,7 @@ Transition rules (MT.5):
 - A transition from the wrong status → `409 workspace_<status>`, naming the current one (e.g. `workspace_suspended` when suspending again); `default` → `409 default_workspace`; a restore past `purge_after` → `409 restore_period_over`; a delete whose `confirm` isn't the slug → `422`.
 - Restore always returns to `active`, also for a workspace that was suspended when the Platform Admin deleted it (they suspend it again if needed).
 - Every transition locks the workspace row (`SELECT ... FOR UPDATE`), so parallel transitions (and a restore racing the purge job) run one after the other.
-- In a suspended workspace, only platform power writes (Platform Admin with MFA, audited as `platform_admin`); a deleted or purged one answers `404` on every workspace endpoint, for its members and the Platform Admin alike. `GET /me/workspaces` lists suspended ones (with `status` and `status_reason`), not deleted ones.
+- In a suspended workspace, only platform power writes (Platform Admin with MFA, audited as `platform_admin`). Leaving is a member write and answers `403 workspace_suspended`. A deleted or purged workspace answers `404` on its member endpoints for everyone. The Platform Admin also gets `404` on `PATCH /limits`. `GET /me/workspaces` lists suspended ones (with `status` and `status_reason`), not deleted ones.
 - The purge job runs as its own login (`apim_purge`, the only one besides retention that may delete audit events), daily and at start; it takes due workspaces with `FOR UPDATE SKIP LOCKED` and purges each in one transaction, recording `workspace.purged` (actor `system`) with how many rows of each table went.
 
 **Quotas** (defaults, adjustable per workspace by the Platform Admin): 100 services, 500 routes, 5,000 consumers, 10 active keys per consumer. Over a quota → `409 quota_exceeded`. Creation locks the workspace row (`FOR NO KEY UPDATE`) before counting, so parallel creations can't overshoot. Lowering a quota below what a workspace has refuses new objects and removes nothing.

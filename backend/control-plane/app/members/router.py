@@ -14,7 +14,7 @@ from app.core.deps import (
     request_audit,
     require_permission,
 )
-from app.core.errors import NotFoundError
+from app.core.errors import ForbiddenError, NotFoundError
 from app.core.openapi import error_responses
 from app.core.pagination import Page, Pagination
 from app.core.permissions import Permission, Role
@@ -24,6 +24,7 @@ from app.members.schemas import MemberAdded, MemberCreate, MemberOut, MemberUpda
 from app.users.models import User
 from app.workspaces import crud as workspaces_crud
 from app.workspaces.crud import WORKSPACE_NOT_FOUND
+from app.workspaces.models import WorkspaceStatus
 
 router = APIRouter(prefix="/api/v1", tags=["members"])
 
@@ -94,14 +95,19 @@ async def remove_member(user_id: uuid.UUID, access: CanWrite, db: DbSession) -> 
     tags=["me"],
     status_code=status.HTTP_204_NO_CONTENT,
     responses=error_responses(
-        {404: "Workspace not found (or not a member)", 409: "last_owner: you are its last Owner"}
+        {403: "Not allowed: user_disabled, account_conflict or workspace_suspended",
+         404: "Workspace not found (or not a member)", 409: "last_owner: you are its last Owner"}
     ),
-)
+)  # fmt: skip
 async def leave_workspace(slug: str, request: Request, user: CurrentUser, db: DbSession) -> None:
     """Leave a workspace I belong to (any role); its last active Owner can't."""
-    found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=user.id)
+    found = await workspaces_crud.lock_membership(
+        db, slug, user_id=user.id, is_platform_admin=False
+    )
     if found is None or found.role is None:
         raise NotFoundError(WORKSPACE_NOT_FOUND)
+    if found.status == WorkspaceStatus.SUSPENDED:
+        raise ForbiddenError("workspace_suspended")
     await crud.leave(
         db,
         found.workspace_id,

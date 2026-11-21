@@ -235,7 +235,7 @@ async def test_a_deleted_workspaces_limits_are_frozen(
 ) -> None:
     await set_status(acme.id, status)
     r = await client.patch(f"{ACME}/limits", json={"max_services": 5}, headers=mfa_headers)
-    assert (r.status_code, r.json()) == (409, {"detail": f"workspace_{status}"})
+    assert (r.status_code, r.json()) == (404, {"detail": "Workspace not found"})
 
 
 async def test_unknown_workspace_limits_are_404(

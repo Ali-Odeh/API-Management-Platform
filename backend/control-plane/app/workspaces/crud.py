@@ -41,13 +41,19 @@ class Membership(NamedTuple):
 
 
 async def get_workspace_and_role(
-    db: AsyncSession, slug: str, *, user_id: uuid.UUID
+    db: AsyncSession, slug: str, *, user_id: uuid.UUID, lock: bool = False
 ) -> Membership | None:
-    """The workspace, its status and the user's role in it, in one query.
+    """The workspace, its status and the user's role in it.
 
     None when no workspace has this slug, or it was deleted (or purged):
     a deleted workspace is gone for everyone acting in it (decision 10).
+    With `lock`, the workspace row is locked first; see lock_membership.
     """
+    if lock:  # workspace rows are never deleted, so the row is there to lock
+        await db.execute(
+            select(Workspace.id).where(Workspace.slug == slug).with_for_update(key_share=True)
+        )
+
     row = (
         await db.execute(
             select(Workspace.id, Workspace.status, WorkspaceMember.role)
@@ -62,6 +68,25 @@ async def get_workspace_and_role(
     if row is None or row.status.is_gone:
         return None
     return Membership(row.id, row.status, Role(row.role) if row.role is not None else None)
+
+
+async def lock_membership(
+    db: AsyncSession, slug: str, *, user_id: uuid.UUID, is_platform_admin: bool
+) -> Membership | None:
+    """For a write: the membership, read again after locking the workspace row.
+
+    The lock (FOR NO KEY UPDATE, the quota checks' lock, held until the
+    caller's transaction ends) puts a member's write and a lifecycle
+    transition or role change in one order: the write sees the status and
+    role in force once the other commits. Someone with no business in the
+    workspace (not a member, not the Platform Admin) gets None without
+    touching the lock, so they can't stall its writers, and how long they
+    wait can't reveal that the workspace exists.
+    """
+    found = await get_workspace_and_role(db, slug, user_id=user_id)
+    if found is None or (found.role is None and not is_platform_admin):
+        return None
+    return await get_workspace_and_role(db, slug, user_id=user_id, lock=True)
 
 
 async def get_or_create_default_workspace(db: AsyncSession) -> Workspace:
@@ -168,7 +193,7 @@ async def change_limits(
 
     In the workspace's own log, so its Owners see why a quota moved. The row
     is locked, so a quota check at the same moment counts against the old
-    limit or the new one. A deleted workspace's limits are frozen (409).
+    limit or the new one. A deleted or purged workspace is not found.
     """
     workspace = await db.scalar(
         select(Workspace)
@@ -176,10 +201,8 @@ async def change_limits(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if workspace is None:
+    if workspace is None or workspace.status.is_gone:
         raise NotFoundError(WORKSPACE_NOT_FOUND)
-    if workspace.status.is_gone:
-        raise ConflictError(f"workspace_{workspace.status}")
     before = snapshot(workspace, LIMIT_COLUMNS)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(workspace, field, value)

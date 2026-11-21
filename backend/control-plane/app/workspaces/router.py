@@ -142,7 +142,7 @@ async def restore_workspace(
 @router.patch(
     "/workspaces/{slug}/limits",
     tags=["platform"],
-    responses=_transition("workspace_deleted or workspace_purged: its limits are frozen"),
+    responses=_NOT_FOUND,
 )
 async def change_limits(
     slug: str, body: LimitsUpdate, admin: PlatformAdmin, audit: PlatformAudit, db: DbSession

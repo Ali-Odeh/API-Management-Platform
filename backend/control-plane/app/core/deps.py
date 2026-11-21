@@ -146,8 +146,8 @@ class WorkspaceAccess:
 class PermissionCheck:
     """Steps 2 and 3 of every workspace request (PLAN.md section 6).
 
-    One query resolves the slug in the URL and the caller's membership. An
-    unknown workspace, or one the caller isn't a member of, answers 404, so
+    Resolves the slug in the URL and the caller's membership. An unknown
+    workspace, or one the caller isn't a member of, answers 404, so
     it doesn't reveal that the workspace exists. A role without the
     permission answers 403 permission_denied. A Platform Admin may act in
     every workspace; where their own role doesn't cover it, that power
@@ -156,7 +156,9 @@ class PermissionCheck:
     A suspended workspace is read-only for its members: any write answers
     403 workspace_suspended (decision 10). Only platform power still writes
     there (with MFA, audited as such), e.g. to delete an abusive workspace.
-    A deleted one is not found at all.
+    A deleted one is not found at all. A write locks the workspace row
+    before its final check (workspaces_crud.lock_membership), so a
+    suspension or a role change that commits first is always seen.
 
     A class (not a closure) so the guard tests can read `.permission` from
     every endpoint's dependencies.
@@ -168,7 +170,12 @@ class PermissionCheck:
     async def __call__(
         self, slug: str, request: Request, caller: CurrentCaller, db: DbSession
     ) -> WorkspaceAccess:
-        found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=caller.user.id)
+        if self.permission.is_read:
+            found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=caller.user.id)
+        else:
+            found = await workspaces_crud.lock_membership(
+                db, slug, user_id=caller.user.id, is_platform_admin=caller.user.is_platform_admin
+            )
         if found is None:
             raise NotFoundError(WORKSPACE_NOT_FOUND)
         workspace_id, status, role = found

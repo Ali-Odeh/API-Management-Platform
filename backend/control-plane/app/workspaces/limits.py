@@ -53,8 +53,8 @@ async def check_quota(db: AsyncSession, workspace_id: uuid.UUID, column: str) ->
 
     Locks the workspace row first (FOR NO KEY UPDATE, until the caller's
     commit), so parallel creations count one after the other: two requests
-    can't both see "99 of 100" and both add one. The lock doesn't block the
-    workspace's other writes: their foreign keys only take KEY SHARE.
+    can't both see "99 of 100" and both add one. The lock is compatible with
+    the KEY SHARE locks taken by foreign-key checks.
     """
     own = await db.scalar(
         select(getattr(Workspace, column))

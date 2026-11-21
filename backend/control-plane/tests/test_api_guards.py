@@ -767,15 +767,17 @@ async def set_status(workspace_id: uuid.UUID, status: WorkspaceStatus) -> None:
         await session.commit()
 
 
-@pytest.mark.parametrize(("method", "path"), WORKSPACE_ENDPOINTS)
+@pytest.mark.parametrize(("method", "path"), [*WORKSPACE_ENDPOINTS, LEAVE])
 async def test_a_suspended_workspace_is_read_only_for_its_members(
     client: AsyncClient, acme: dict[str, uuid.UUID], actors: Actors, method: str, path: str
 ) -> None:
     await set_status(acme["workspace_id"], WorkspaceStatus.SUSPENDED)
 
-    r = await _valid_request(client, method, path, acme, actors.owner, mfa=False)
+    endpoint = (method, path)
+    member = actors.leaver if endpoint == LEAVE else actors.owner
+    r = await _valid_request(client, method, path, acme, member, mfa=False)
 
-    if WORKSPACE[(method, path)].is_read:
+    if endpoint != LEAVE and WORKSPACE[endpoint].is_read:
         assert r.status_code == 200, r.text
     else:
         assert r.status_code == 403
