@@ -1,6 +1,8 @@
-"""The config snapshot the gateway downloads (plan section 6, "Gateway config snapshot").
+"""The answer of GET /internal/config (PLAN.md section 6, "Gateway config").
 
-Everything the gateway needs to serve traffic without ever touching Postgres.
+Everything the gateway needs to serve traffic without ever touching Postgres,
+per workspace. Each workspace is complete, so the gateway replaces it as a
+whole; only the workspaces that changed after the gateway's `since` come back.
 """
 
 import uuid
@@ -8,20 +10,37 @@ import uuid
 from pydantic import BaseModel, ConfigDict
 
 from app.consumers.models import ConsumerStatus
+from app.workspaces.models import WorkspaceStatus
+
+
+class TargetConfig(BaseModel):
+    """A backend instance. Until service targets exist (MT.10), each service
+    has exactly one: its upstream_url, with the service's id."""
+
+    id: uuid.UUID
+    url: str
+    weight: int
+
+
+class ServiceConfig(BaseModel):
+    """An active service."""
+
+    id: uuid.UUID
+    timeout_ms: int
+    targets: list[TargetConfig]
 
 
 class RouteConfig(BaseModel):
-    """An active route on an active service, joined with what the proxy needs."""
+    """An active route on an active service."""
 
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    service_id: uuid.UUID
     path_prefix: str
     methods: list[str]
     strip_prefix: bool
     auth_required: bool
-    upstream_url: str
-    timeout_ms: int
 
 
 class KeyConfig(BaseModel):
@@ -36,7 +55,30 @@ class KeyConfig(BaseModel):
     rate_limit_per_min: int
 
 
-class ConfigSnapshot(BaseModel):
+class GatewayLimits(BaseModel):
+    """The workspace's limits the gateway enforces (MT.8), as they apply:
+    its own values or the platform defaults. The gateway never needs the defaults."""
+
+    rate_limit_per_min: int
+    max_concurrent: int
+
+
+class WorkspaceConfigOut(BaseModel):
+    """One workspace, complete, as of `version`."""
+
+    id: uuid.UUID
+    slug: str
+    status: WorkspaceStatus  # active or suspended (suspended: the gateway answers 403)
     version: int
-    routes: list[RouteConfig]
-    keys: list[KeyConfig]
+    hosts: list[str]  # the host labels it is served on: its slug (custom domains later)
+    limits: GatewayLimits
+    services: list[ServiceConfig]
+    routes: list[RouteConfig]  # sorted by path_prefix
+    keys: list[KeyConfig]  # sorted by id
+
+
+class ConfigAnswer(BaseModel):
+    seq: int
+    full: bool  # true: every workspace; the gateway replaces everything it has
+    workspaces: list[WorkspaceConfigOut]  # changed after `since` (all of them when full)
+    deleted: list[uuid.UUID]  # left the config (deleted or purged) after `since`

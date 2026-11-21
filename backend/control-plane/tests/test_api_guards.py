@@ -757,11 +757,13 @@ async def test_reading_writes_no_event(
 async def set_status(workspace_id: uuid.UUID, status: WorkspaceStatus) -> None:
     """Put a workspace in a status directly, with the fields that status needs."""
     now = datetime.now(UTC)
-    values: dict[str, Any] = {"status": status}
-    if status == WorkspaceStatus.SUSPENDED:
-        values["status_reason"] = "set by a test"
-    if status.is_gone:
-        values |= {"deleted_at": now, "purge_after": now + timedelta(days=30)}
+    gone = status.is_gone
+    values: dict[str, Any] = {
+        "status": status,
+        "status_reason": "set by a test" if status == WorkspaceStatus.SUSPENDED else None,
+        "deleted_at": now if gone else None,
+        "purge_after": now + timedelta(days=30) if gone else None,
+    }
     async with SessionLocal() as session:
         await session.execute(update(Workspace).where(Workspace.id == workspace_id).values(values))
         await session.commit()

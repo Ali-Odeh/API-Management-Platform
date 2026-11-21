@@ -150,33 +150,39 @@
         "title": "AuditEventOut",
         "type": "object"
       },
-      "ConfigSnapshot": {
+      "ConfigAnswer": {
         "properties": {
-          "keys": {
+          "deleted": {
             "items": {
-              "$ref": "#/components/schemas/KeyConfig"
+              "format": "uuid",
+              "type": "string"
             },
-            "title": "Keys",
+            "title": "Deleted",
             "type": "array"
           },
-          "routes": {
-            "items": {
-              "$ref": "#/components/schemas/RouteConfig"
-            },
-            "title": "Routes",
-            "type": "array"
+          "full": {
+            "title": "Full",
+            "type": "boolean"
           },
-          "version": {
-            "title": "Version",
+          "seq": {
+            "title": "Seq",
             "type": "integer"
+          },
+          "workspaces": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceConfigOut"
+            },
+            "title": "Workspaces",
+            "type": "array"
           }
         },
         "required": [
-          "version",
-          "routes",
-          "keys"
+          "seq",
+          "full",
+          "workspaces",
+          "deleted"
         ],
-        "title": "ConfigSnapshot",
+        "title": "ConfigAnswer",
         "type": "object"
       },
       "ConsumerCreate": {
@@ -351,6 +357,25 @@
           "detail"
         ],
         "title": "ErrorOut",
+        "type": "object"
+      },
+      "GatewayLimits": {
+        "description": "The workspace's limits the gateway enforces (MT.8), as they apply:\nits own values or the platform defaults. The gateway never needs the defaults.",
+        "properties": {
+          "max_concurrent": {
+            "title": "Max Concurrent",
+            "type": "integer"
+          },
+          "rate_limit_per_min": {
+            "title": "Rate Limit Per Min",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rate_limit_per_min",
+          "max_concurrent"
+        ],
+        "title": "GatewayLimits",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1155,7 +1180,7 @@
         "type": "string"
       },
       "RouteConfig": {
-        "description": "An active route on an active service, joined with what the proxy needs.",
+        "description": "An active route on an active service.",
         "properties": {
           "auth_required": {
             "title": "Auth Required",
@@ -1177,27 +1202,23 @@
             "title": "Path Prefix",
             "type": "string"
           },
+          "service_id": {
+            "format": "uuid",
+            "title": "Service Id",
+            "type": "string"
+          },
           "strip_prefix": {
             "title": "Strip Prefix",
             "type": "boolean"
-          },
-          "timeout_ms": {
-            "title": "Timeout Ms",
-            "type": "integer"
-          },
-          "upstream_url": {
-            "title": "Upstream Url",
-            "type": "string"
           }
         },
         "required": [
           "id",
+          "service_id",
           "path_prefix",
           "methods",
           "strip_prefix",
-          "auth_required",
-          "upstream_url",
-          "timeout_ms"
+          "auth_required"
         ],
         "title": "RouteConfig",
         "type": "object"
@@ -1410,6 +1431,34 @@
         "title": "RouteUpdate",
         "type": "object"
       },
+      "ServiceConfig": {
+        "description": "An active service.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetConfig"
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "timeout_ms": {
+            "title": "Timeout Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "timeout_ms",
+          "targets"
+        ],
+        "title": "ServiceConfig",
+        "type": "object"
+      },
       "ServiceCreate": {
         "properties": {
           "is_active": {
@@ -1581,6 +1630,31 @@
         "title": "Suspension",
         "type": "object"
       },
+      "TargetConfig": {
+        "description": "A backend instance. Until service targets exist (MT.10), each service\nhas exactly one: its upstream_url, with the service's id.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "weight"
+        ],
+        "title": "TargetConfig",
+        "type": "object"
+      },
       "Usage": {
         "properties": {
           "consumers": {
@@ -1688,6 +1762,71 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WorkspaceConfigOut": {
+        "description": "One workspace, complete, as of `version`.",
+        "properties": {
+          "hosts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Hosts",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/KeyConfig"
+            },
+            "title": "Keys",
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/GatewayLimits"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/RouteConfig"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceConfig"
+            },
+            "title": "Services",
+            "type": "array"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceStatus"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "status",
+          "version",
+          "hosts",
+          "limits",
+          "services",
+          "routes",
+          "keys"
+        ],
+        "title": "WorkspaceConfigOut",
         "type": "object"
       },
       "WorkspaceCreate": {
@@ -5668,9 +5807,22 @@
     },
     "/internal/config": {
       "get": {
-        "description": "The full config snapshot, or 304 if the gateway's version is current.\n\nWith `?wait=30` and nothing new, the request is held open and answered the\nmoment the config changes (Postgres NOTIFY), or with 304 after 30 seconds.",
+        "description": "The workspaces that changed after `since`, or 304 if none did.\n\nEach changed workspace comes back complete; deleted ones by id. A full\nanswer (`full: true`, every workspace) for `since=0`, or a `since` newer\nthan the database's sequence (e.g. after a reset). With `?wait=30` and\nnothing new, the request is held open and answered the moment the config\nchanges (Postgres NOTIFY), or with 304 after 30 seconds.",
         "operationId": "get_config_internal_config_get",
         "parameters": [
+          {
+            "description": "The last `seq` the gateway applied; 0 for everything",
+            "in": "query",
+            "name": "since",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "The last `seq` the gateway applied; 0 for everything",
+              "minimum": 0,
+              "title": "Since",
+              "type": "integer"
+            }
+          },
           {
             "description": "Long polling: seconds to hold the request if nothing changed",
             "in": "query",
@@ -5686,9 +5838,9 @@
             }
           },
           {
-            "description": "The version the gateway has, e.g. \"45\"",
-            "in": "header",
-            "name": "if-none-match",
+            "description": "Only these workspaces (slugs, comma-separated): a dedicated gateway",
+            "in": "query",
+            "name": "workspaces",
             "required": false,
             "schema": {
               "anyOf": [
@@ -5699,8 +5851,27 @@
                   "type": "null"
                 }
               ],
-              "description": "The version the gateway has, e.g. \"45\"",
-              "title": "If-None-Match"
+              "description": "Only these workspaces (slugs, comma-separated): a dedicated gateway",
+              "title": "Workspaces"
+            }
+          },
+          {
+            "description": "Database generation from the last config",
+            "in": "header",
+            "name": "X-Config-Generation",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Database generation from the last config",
+              "title": "X-Config-Generation"
             }
           }
         ],
@@ -5709,14 +5880,22 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ConfigSnapshot"
+                  "$ref": "#/components/schemas/ConfigAnswer"
                 }
               }
             },
-            "description": "Successful Response"
+            "description": "Successful Response",
+            "headers": {
+              "X-Config-Generation": {
+                "schema": {
+                  "format": "uuid",
+                  "type": "string"
+                }
+              }
+            }
           },
           "304": {
-            "description": "Not modified: the gateway's version is still current"
+            "description": "Not modified: nothing changed after `since`"
           },
           "401": {
             "content": {

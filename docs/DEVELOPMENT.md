@@ -256,9 +256,20 @@ Watch the gateway's long polling (two windows; `INTERNAL_TOKEN` is in `.env`):
 ```powershell
 # Window 1: ask like the gateway does. It waits, because nothing has changed.
 $it = @{ "X-Internal-Token" = "<INTERNAL_TOKEN>" }
-$etag = (Invoke-WebRequest -UseBasicParsing http://localhost:8000/internal/config -Headers $it).Headers['ETag']
-Invoke-WebRequest -UseBasicParsing "http://localhost:8000/internal/config?wait=30" -Headers ($it + @{ "If-None-Match" = $etag })
-# Window 2: change anything in Swagger (e.g. block a consumer). Window 1 answers at once.
+$config = Invoke-WebRequest http://localhost:8000/internal/config -Headers $it
+$seq = ($config.Content | ConvertFrom-Json).seq
+$it["X-Config-Generation"] = @($config.Headers["X-Config-Generation"])[0]
+Invoke-RestMethod "http://localhost:8000/internal/config?since=$seq&wait=30" -Headers $it | ConvertTo-Json -Depth 6
+# Window 2: change anything in Swagger (e.g. block a consumer). Window 1 answers at
+# once, with only the workspace that changed (MT.6).
+```
+
+After restoring a backup, run this SQL as the migration database owner before
+starting the control plane. The backup can contain a sequence a gateway has
+already seen. The new generation makes it replace that snapshot in full.
+
+```sql
+UPDATE public.config_seq SET generation = gen_random_uuid() WHERE id = 1;
 ```
 
 For editor autocomplete only (optional), a local venv:

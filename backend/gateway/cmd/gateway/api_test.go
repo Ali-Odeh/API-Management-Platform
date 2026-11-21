@@ -48,14 +48,14 @@ func TestAPIHandlerEndToEnd(t *testing.T) {
 	defer backend.Close()
 
 	upstream, _ := url.Parse(backend.URL)
-	snap := &config.Snapshot{
+	snap := snapshotOf(&config.Workspace{
 		Version: 1,
 		Routes: []config.Route{{
 			ID: "r1", PathPrefix: "/v1/orders", Methods: []string{"GET"}, AuthRequired: true,
 			Upstream: upstream, Timeout: 5 * time.Second,
 		}},
 		Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
-	}
+	})
 	var logs bytes.Buffer
 	api := apiHandler(staticSource{snap}, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
@@ -114,9 +114,9 @@ func TestAPIHandlerTimesTheBackend(t *testing.T) {
 	}))
 	defer backend.Close()
 	upstream, _ := url.Parse(backend.URL)
-	snap := &config.Snapshot{Version: 1, Routes: []config.Route{{
+	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{{
 		ID: "r1", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: false, Upstream: upstream, Timeout: 5 * time.Second,
-	}}}
+	}}})
 	var logs bytes.Buffer
 	api := apiHandler(staticSource{snap}, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
@@ -152,14 +152,14 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 
 	// Two versions that differ in every field the chain reads.
 	version := func(v int64, consumer string, timeout time.Duration) *config.Snapshot {
-		return &config.Snapshot{
+		return snapshotOf(&config.Workspace{
 			Version: v,
 			Routes: []config.Route{{
 				ID: fmt.Sprintf("r%d", v), PathPrefix: "/v1", Methods: []string{"GET"}, AuthRequired: true,
 				Upstream: upstream, Timeout: timeout,
 			}},
 			Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: consumer, ConsumerStatus: config.ConsumerActive}},
-		}
+		})
 	}
 	a, b := version(1, "consumer-a", 5*time.Second), version(2, "consumer-b", 4*time.Second)
 	source := &swappingSource{}
@@ -216,11 +216,11 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 //
 //	go test -run=^$ -bench=. -benchmem ./cmd/gateway
 func BenchmarkAPIHandlerChain(b *testing.B) {
-	snap := &config.Snapshot{
+	snap := snapshotOf(&config.Workspace{
 		Version: 1,
 		Routes:  []config.Route{{ID: "r1", PathPrefix: "/v1/orders", Methods: []string{"GET"}, AuthRequired: true}},
 		Keys:    map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
-	}
+	})
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	// The same chain as apiHandler, with an instant backend instead of the
 	// forwarder, so only the gateway's own cost is measured.
@@ -243,4 +243,12 @@ type allowAll struct{}
 
 func (allowAll) Allow(_ context.Context, _ string, limit int) (ratelimit.Result, error) {
 	return ratelimit.Result{Allowed: true, Limit: limit, Remaining: limit - 1}, nil
+}
+
+// snapshotOf is a config with ws as its `default` workspace (until MT.7
+// every request is served from it).
+func snapshotOf(ws *config.Workspace) *config.Snapshot {
+	ws.ID, ws.Slug, ws.Status = "ws-default", config.DefaultHost, config.WorkspaceActive
+	ws.Hosts = []string{config.DefaultHost}
+	return config.NewSnapshot(ws.Version, ws)
 }

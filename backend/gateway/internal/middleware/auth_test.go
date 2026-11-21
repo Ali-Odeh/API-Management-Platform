@@ -33,7 +33,7 @@ type seen struct {
 // with one private and one public route and two keys.
 func newAuthGateway(t *testing.T) (http.Handler, *seen) {
 	t.Helper()
-	snap := &config.Snapshot{
+	snap := snapshotOf(&config.Workspace{
 		Version: 1,
 		Routes: []config.Route{
 			{ID: "private", PathPrefix: "/private", Methods: []string{"GET"}, AuthRequired: true},
@@ -43,7 +43,7 @@ func newAuthGateway(t *testing.T) (http.Handler, *seen) {
 			hashAPIKey(activeKey):  {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive, RateLimitPerMin: 60},
 			hashAPIKey(blockedKey): {ID: "k2", ConsumerID: "c2", ConsumerStatus: config.ConsumerBlocked, RateLimitPerMin: 60},
 		},
-	}
+	})
 	got := &seen{}
 	backend := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		*got = seen{called: true, apiKey: r.Header.Get(APIKeyHeader), consumerID: r.Header.Get(ConsumerIDHeader)}
@@ -143,15 +143,15 @@ func TestHashAPIKeyMatchesTheControlPlane(t *testing.T) {
 // Matching and auth use one snapshot: a key added in a newer version is not
 // seen by a request that matched in the older one.
 func TestAuthUsesTheRoutersSnapshot(t *testing.T) {
-	old := &config.Snapshot{
+	old := snapshotOf(&config.Workspace{
 		Version: 1,
 		Routes:  []config.Route{{ID: "r", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: true}},
 		Keys:    map[string]config.Key{},
-	}
-	source := &switchingSource{first: old, then: &config.Snapshot{
-		Version: 2, Routes: old.Routes,
+	})
+	source := &switchingSource{first: old, then: snapshotOf(&config.Workspace{
+		Version: 2, Routes: old.Default().Routes,
 		Keys: map[string]config.Key{hashAPIKey(activeKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
-	}}
+	})}
 	gw := proxy.NewRouter(source, Auth(slog.New(slog.DiscardHandler))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})))
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.Header.Set(APIKeyHeader, activeKey)
@@ -203,4 +203,12 @@ func TestLoggerShowsConsumerAndKey(t *testing.T) {
 	if l["consumer_id"] != "c1" || l["key_id"] != "k1" {
 		t.Errorf("log line = %v", l)
 	}
+}
+
+// snapshotOf is a config with ws as its `default` workspace (until MT.7
+// every request is served from it).
+func snapshotOf(ws *config.Workspace) *config.Snapshot {
+	ws.ID, ws.Slug, ws.Status = "ws-default", config.DefaultHost, config.WorkspaceActive
+	ws.Hosts = []string{config.DefaultHost}
+	return config.NewSnapshot(ws.Version, ws)
 }

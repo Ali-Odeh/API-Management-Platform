@@ -61,10 +61,10 @@ func newGateway(t *testing.T, tr testRoute) (http.Handler, *strings.Builder) {
 	if tr.timeout == 0 {
 		tr.timeout = 5 * time.Second
 	}
-	snap := &config.Snapshot{Version: 1, Routes: []config.Route{{
+	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{{
 		ID: "r1", PathPrefix: tr.prefix, Methods: []string{"GET", "POST"},
 		StripPrefix: tr.strip, Upstream: upstream, Timeout: tr.timeout,
-	}}}
+	}}})
 	logs := &strings.Builder{}
 	f := NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)))
 	return NewRouter(fakeSource{snap}, f), logs

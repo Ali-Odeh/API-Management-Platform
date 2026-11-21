@@ -35,7 +35,7 @@ func (f *fakeLimiter) Allow(_ context.Context, consumerID string, limit int) (ra
 // 200, with a private route (consumer limit 42) and a public one.
 func newLimitedGateway(t *testing.T, limiter Allower, log *slog.Logger) (http.Handler, *bool) {
 	t.Helper()
-	snap := &config.Snapshot{
+	snap := snapshotOf(&config.Workspace{
 		Version: 1,
 		Routes: []config.Route{
 			{ID: "private", PathPrefix: "/private", Methods: []string{"GET"}, AuthRequired: true},
@@ -45,7 +45,7 @@ func newLimitedGateway(t *testing.T, limiter Allower, log *slog.Logger) (http.Ha
 			hashAPIKey(activeKey):  {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive, RateLimitPerMin: 42},
 			hashAPIKey(blockedKey): {ID: "k2", ConsumerID: "c2", ConsumerStatus: config.ConsumerBlocked, RateLimitPerMin: 42},
 		},
-	}
+	})
 	called := new(bool)
 	backend := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		*called = true

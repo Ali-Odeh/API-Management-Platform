@@ -40,10 +40,13 @@ const servedConsumer = "serve-test-consumer"
 // long poll. A wrong token gets 401.
 func fakeControlPlane(t *testing.T, backendURL string, limit int) *httptest.Server {
 	t.Helper()
-	body := fmt.Sprintf(`{"version": 1,
-		"routes": [{"id": "r1", "path_prefix": "/v1/orders", "methods": ["GET"], "strip_prefix": false,
-		            "auth_required": true, "upstream_url": %q, "timeout_ms": 5000}],
-		"keys": [{"id": "k1", "key_hash": %q, "consumer_id": %q, "consumer_status": "active", "rate_limit_per_min": %d}]}`,
+	body := fmt.Sprintf(`{"seq": 1, "full": true, "deleted": [], "workspaces": [{
+		"id": "w0", "slug": "default", "status": "active", "version": 1, "hosts": ["default"],
+		"limits": {"rate_limit_per_min": 6000, "max_concurrent": 200},
+		"services": [{"id": "s1", "timeout_ms": 5000, "targets": [{"id": "s1", "url": %q, "weight": 100}]}],
+		"routes": [{"id": "r1", "service_id": "s1", "path_prefix": "/v1/orders", "methods": ["GET"],
+		            "strip_prefix": false, "auth_required": true}],
+		"keys": [{"id": "k1", "key_hash": %q, "consumer_id": %q, "consumer_status": "active", "rate_limit_per_min": %d}]}]}`,
 		backendURL, sha256Hex(testKey), servedConsumer, limit)
 	served := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +55,7 @@ func fakeControlPlane(t *testing.T, backendURL string, limit int) *httptest.Serv
 			return
 		}
 		select {
-		case served <- struct{}{}: // first request: the full snapshot
+		case served <- struct{}{}: // first request: the full config
 			w.Header().Set("ETag", `"1"`)
 			_, _ = io.WriteString(w, body)
 		default: // later: nothing changes, hold until the gateway stops

@@ -14,15 +14,15 @@ import (
 
 func BenchmarkAuthenticate(b *testing.B) {
 	for _, n := range []int{100, 100_000} {
-		snap := &config.Snapshot{Keys: make(map[string]config.Key, n)}
+		ws := &config.Workspace{Keys: make(map[string]config.Key, n)}
 		for i := range n {
-			snap.Keys[hashAPIKey(fmt.Sprintf("ak_live_%032d", i))] = config.Key{ID: "k", ConsumerStatus: config.ConsumerActive}
+			ws.Keys[hashAPIKey(fmt.Sprintf("ak_live_%032d", i))] = config.Key{ID: "k", ConsumerStatus: config.ConsumerActive}
 		}
 		valid := []string{fmt.Sprintf("ak_live_%032d", n/2)}
 
 		b.Run(fmt.Sprintf("keys=%d", n), func(b *testing.B) {
 			for b.Loop() {
-				authenticate(snap, valid)
+				authenticate(ws, valid)
 			}
 		})
 	}

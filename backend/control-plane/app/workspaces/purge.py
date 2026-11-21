@@ -26,6 +26,9 @@ logger = logging.getLogger("workspace_purge")
 # checks it against every model with a workspace_id, so a new table can't be
 # forgotten (a purge that left rows behind would never fail on its own).
 TENANT_TABLES = ("api_keys", "routes", "services", "consumers", "workspace_members", "audit_events")
+# Kept on purpose: the workspace row (its slug stays taken) and its config
+# row, whose sequence tells a gateway that was away that the workspace is gone.
+KEPT_TABLES = ("workspaces", "workspace_config")
 
 # SKIP LOCKED: a workspace being restored right now (its row locked) is left
 # for the next round, when it is no longer due.
