@@ -1,14 +1,17 @@
-"""Writing (and, from the endpoints, reading) audit events."""
+"""Writing and reading audit events."""
 
 import ipaddress
 import uuid
 from ipaddress import IPv4Address, IPv6Address
 
+from sqlalchemy import Select, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.changes import Changes
 from app.audit.context import AuditContext
 from app.audit.models import AuditEvent
+from app.audit.schemas import AuditFilters
+from app.core.pagination import PageParams, paginate
 
 
 def record(
@@ -51,3 +54,40 @@ def _parse_ip(address: str | None) -> IPv4Address | IPv6Address | None:
         return ipaddress.ip_address(address) if address else None
     except ValueError:
         return None
+
+
+async def list_workspace_events(
+    db: AsyncSession, workspace_id: uuid.UUID, *, filters: AuditFilters, page: PageParams
+) -> tuple[list[AuditEvent], int]:
+    """A workspace's log, newest first: its members' and the Platform Admin's changes there."""
+    query = _filtered(filters).where(AuditEvent.workspace_id == workspace_id)
+    return await paginate(db, query, page)
+
+
+async def list_all_events(
+    db: AsyncSession,
+    *,
+    filters: AuditFilters,
+    page: PageParams,
+    workspace_id: uuid.UUID | None = None,
+) -> tuple[list[AuditEvent], int]:
+    """Every event, platform-level ones included, newest first (Platform Admin)."""
+    query = _filtered(filters)
+    if workspace_id is not None:
+        query = query.where(AuditEvent.workspace_id == workspace_id)
+    return await paginate(db, query, page)
+
+
+def _filtered(filters: AuditFilters) -> Select[tuple[AuditEvent]]:
+    query = select(AuditEvent).order_by(AuditEvent.created_at.desc(), AuditEvent.id)
+    if filters.actor is not None:
+        query = query.where(AuditEvent.actor_email == filters.actor.strip().lower())
+    if filters.action is not None:
+        query = query.where(AuditEvent.action == filters.action)
+    if filters.target_type is not None:
+        query = query.where(AuditEvent.target_type == filters.target_type)
+    if filters.since is not None:
+        query = query.where(AuditEvent.created_at >= filters.since)
+    if filters.until is not None:
+        query = query.where(AuditEvent.created_at < filters.until)
+    return query

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 
 from app.audit import crud as audit
 from app.audit.context import AuditContext
+from app.audit.router import router as audit_router
 from app.consumers.router import router as consumers_router
 from app.core.config import Settings, get_settings
 from app.core.db import SessionLocal, driver_dsn, engine
@@ -110,6 +111,7 @@ app.include_router(services_router, responses=_IN_WORKSPACE)
 app.include_router(routes_router, responses=_IN_WORKSPACE)
 app.include_router(consumers_router, responses=_IN_WORKSPACE)
 app.include_router(keys_router, responses=_IN_WORKSPACE)
+app.include_router(audit_router, responses=_IN_WORKSPACE)
 app.include_router(gateway_config_router)  # documents its own 401 (internal token)
 
 
