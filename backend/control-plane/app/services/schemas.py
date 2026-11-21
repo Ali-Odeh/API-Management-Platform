@@ -14,6 +14,8 @@ from pydantic import (
     TypeAdapter,
 )
 
+from app.core.config import get_settings
+from app.core.egress import internal_host_reason
 from app.core.schemas import PartialUpdate, SlugName
 from app.services.models import DEFAULT_TIMEOUT_MS
 
@@ -33,6 +35,14 @@ def _normalize_upstream_url(value: str) -> str:
     # gateway, which ignores it anyway: refuse it rather than leak it.
     if url.username or url.password:
         raise ValueError("upstream_url must not contain a username or password")
+    # SSRF (decision 3): a clear answer now for what is plainly internal. The
+    # gateway checks the address it really connects to anyway.
+    reason = internal_host_reason(url.host or "", get_settings().allowed_upstreams)
+    if reason:
+        raise ValueError(
+            f"upstream_url must not point inside the platform ({reason}); "
+            "only the Platform Admin can allow one (UPSTREAM_ALLOW)"
+        )
     return str(url).rstrip("/")
 
 

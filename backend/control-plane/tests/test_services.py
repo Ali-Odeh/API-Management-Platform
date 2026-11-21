@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.context import AuditContext
+from app.core.config import get_settings
 from app.services import crud
 from app.services.models import Service
 from app.services.schemas import ServiceCreate
@@ -72,6 +73,64 @@ async def test_create_invalid_input_is_422(
     client: AsyncClient, auth_headers: Headers, overrides: dict[str, Any]
 ) -> None:
     r = await create(client, auth_headers, **overrides)
+    assert r.status_code == 422
+
+
+# ---- SSRF (decision 3): plainly internal upstreams are refused on save
+
+
+@pytest.mark.parametrize(
+    "upstream_url",
+    [
+        "http://127.0.0.1:9000",
+        "http://2130706433",  # 127.0.0.1 as one number
+        "http://0x7f.0.0.1",
+        "http://[::1]:8000",
+        "http://[::ffff:127.0.0.1]",
+        "http://169.254.169.254/latest",  # cloud metadata
+        "http://10.1.2.3",
+        "http://localhost:5432",
+        "https://LOCALHOST.",
+        "http://admin.localhost",
+        "http://metadata.google.internal",
+    ],
+)
+async def test_internal_upstreams_are_refused(
+    client: AsyncClient, auth_headers: Headers, upstream_url: str
+) -> None:
+    r = await create(client, auth_headers, upstream_url=upstream_url)
+    assert r.status_code == 422
+    assert "must not point inside the platform" in r.text
+    assert "UPSTREAM_ALLOW" in r.text
+
+
+async def test_internal_upstreams_are_refused_on_update(
+    client: AsyncClient, auth_headers: Headers
+) -> None:
+    created = (await create(client, auth_headers)).json()
+    r = await client.patch(
+        f"{URL}/{created['id']}", json={"upstream_url": "http://10.0.0.5"}, headers=auth_headers
+    )
+    assert r.status_code == 422
+    assert "10.0.0.5 is an internal address" in r.text
+
+
+async def test_names_are_left_to_the_gateway(client: AsyncClient, auth_headers: Headers) -> None:
+    # A name that may resolve inside the platform is the gateway's to refuse,
+    # at connect time; here it can't be known.
+    r = await create(client, auth_headers, upstream_url="http://redis:6379")
+    assert r.status_code == 201
+
+
+async def test_the_platform_admin_can_allow_an_internal_upstream(
+    client: AsyncClient, auth_headers: Headers, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(get_settings(), "upstream_allow", "10.20.0.0/16,billing.internal")
+
+    for name, upstream_url in [("a", "http://10.20.0.9:8080"), ("b", "http://billing.internal")]:
+        r = await create(client, auth_headers, name=name, upstream_url=upstream_url)
+        assert r.status_code == 201, r.text
+    r = await create(client, auth_headers, name="c", upstream_url="http://10.21.0.9")
     assert r.status_code == 422
 
 

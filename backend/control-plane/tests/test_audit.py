@@ -186,7 +186,7 @@ async def test_upstream_credentials_of_older_services_stay_out_of_audit_events(
 
     r = await client.patch(
         f"{SERVICES}/{updated_one.id}",
-        json={"upstream_url": "https://[::1]:8000/v2"},
+        json={"upstream_url": "https://[2001:db8::1]:8000/v2"},
         headers=auth_headers,
     )
     assert r.status_code == 200
@@ -195,7 +195,7 @@ async def test_upstream_credentials_of_older_services_stay_out_of_audit_events(
 
     events = {e.action: e.changes["upstream_url"] for e in await _events(db, seen)}
     assert events == {
-        "service.update": ["http://mock-backend:9000/v1", "https://[::1]:8000/v2"],
+        "service.update": ["http://mock-backend:9000/v1", "https://[2001:db8::1]:8000/v2"],
         "service.delete": ["http://mock-backend:9000/v1", None],
     }
 

@@ -26,6 +26,21 @@ def test_settings_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.database_url == "postgresql+asyncpg://u:p@db:5432/x"
 
 
+def test_settings_read_the_upstream_allow_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UPSTREAM_ALLOW", "mock-backend, 10.20.0.0/16")
+    allow = Settings(_env_file=None).allowed_upstreams
+    assert allow.hosts == frozenset({"mock-backend"})
+    assert [str(n) for n in allow.networks] == ["10.20.0.0/16"]
+
+
+def test_settings_refuse_an_unreadable_upstream_allow_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("UPSTREAM_ALLOW", "mock-backend,http://redis")
+    with pytest.raises(ValidationError, match="http://redis"):
+        Settings(_env_file=None)
+
+
 async def test_get_db_session_can_query_postgres() -> None:
     # Use the real dependency the endpoints will use, against real Postgres.
     session_gen = get_db()
