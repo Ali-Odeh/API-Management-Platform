@@ -24,6 +24,7 @@ docker compose ps
 | `mock-backend` | `mock-backend:9000` | `localhost:9000` | Echo service to proxy to (`?delay_ms=` answers late) |
 | `auth` | `auth:9999` | `localhost:9999` | GoTrue: login, MFA, refresh, invitations |
 | `audit-retention` | — | — | Deletes audit events older than `AUDIT_RETENTION_DAYS` (default 365), at start and daily |
+| `workspace-purge` | — | — | Purges workspaces deleted more than `PURGE_AFTER_DAYS` (default 30) ago, at start and daily |
 | `mailpit` | `mailpit:1025` (SMTP) | `localhost:8025` | Catches every email GoTrue sends (web UI) |
 | `postgres` | `postgres:5432` | `localhost:5434` | Databases `apim` (config) and `auth` (GoTrue's own), for pgAdmin / DBeaver |
 | `redis` | `redis:6379` | `localhost:6379` | Rate-limit buckets |
@@ -147,6 +148,25 @@ $lines = Get-Content .env | ForEach-Object {
 docker compose up -d --build --wait      # then: Remove-Item .env.mt2
 ```
 
+### Upgrading an MT.4 install: the purge login (MT.5)
+
+MT.5 adds a fourth database login, `apim_purge`, for the workspace purge
+job. Add its URL to an existing `.env` (the `control-plane-db-init` job
+creates the login with this password on the next start):
+
+```powershell
+$bytes = New-Object byte[] 16
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$password = -join ($bytes | ForEach-Object { $_.ToString("x2") })
+$db = ((Select-String -Path .env -Pattern '^DATABASE_URL=(.*)').Matches.Groups[1].Value).Split('/')[-1]
+$line = "PURGE_DATABASE_URL=postgresql+asyncpg://apim_purge:$password@postgres:5432/$db`n"
+[IO.File]::AppendAllText("$PWD\.env", $line, (New-Object Text.UTF8Encoding $false))   # LF, no BOM
+docker compose up -d --build --wait
+```
+
+The workspace limits (`WORKSPACE_*`) and `PURGE_AFTER_DAYS` have defaults;
+add them to `.env` only to change them (see `.env.example`).
+
 ## Control plane (FastAPI)
 
 Three database logins (PLAN.md section 5): the API uses `apim_app`
@@ -158,6 +178,13 @@ container uses `apim_retention`. Run a retention round by hand with:
 
 ```powershell
 docker compose exec audit-retention python -m scripts.audit_retention --once
+```
+
+The `workspace-purge` container uses `apim_purge` and purges workspaces whose
+restore period (`purge_after`) is over. Run a round by hand with:
+
+```powershell
+docker compose exec workspace-purge python -m scripts.workspace_purge --once
 ```
 
 The code is mounted into the container and uvicorn runs with `--reload`, so

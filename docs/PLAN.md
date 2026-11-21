@@ -335,7 +335,7 @@ erDiagram
 
 | Table | Rule |
 | --- | --- |
-| `workspaces` | `slug` unique (`varchar(50)`, as today), CHECK `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$` and 3–50 chars (a valid DNS label), immutable; reserved slugs refused with 422: `www`, `api`, `app`, `admin`, `platform`, `portal`, `auth`, `login`, `mail`, `status`, `docs`, `static`, `internal`, `gateway`, `health`; `status` CHECK in (`active`, `suspended`, `deleted`, `purged`); limit columns NULL or > 0 |
+| `workspaces` | `slug` unique (`varchar(50)`, as today), CHECK `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$` and 3–50 chars (a valid DNS label), immutable; reserved slugs refused with 422: `www`, `api`, `app`, `admin`, `platform`, `portal`, `auth`, `login`, `mail`, `status`, `docs`, `static`, `internal`, `gateway`, `health`; `status` CHECK in (`active`, `suspended`, `deleted`, `purged`); `default` always `active`; `status_reason` only when `suspended`; `deleted_at` and `purge_after` set exactly when `deleted` or `purged`, `purge_after` after `deleted_at`; limit columns NULL or > 0; partial index on `purge_after` WHERE `status = 'deleted'` (MT.5) |
 | `users` | `auth_user_id` unique; NULL only for a row made before its GoTrue account was resolved (the migrated MVP admin, until startup links it); `email` unique and always stored lowercase, CHECK `email = lower(email)` |
 | `workspace_members` | unique (`workspace_id`, `user_id`); `role` CHECK in (`owner`, `api_admin`, `viewer`); index on `user_id` (for "my workspaces") |
 | `services` | unique (`workspace_id`, `name`); unique (`id`, `workspace_id`) as the target of composite FKs; `lb_algorithm` CHECK in (`round_robin`); positive health-check numbers |
@@ -396,15 +396,16 @@ Postgres rules this design must follow (checked against the Postgres 16 docs):
 
 The application's database user has only `INSERT` and `SELECT` on `audit_events`. A retention job (default 1 year), running as a separate database user, is the only thing that deletes rows. Each change and its audit row are written in the same transaction. Audit events must exclude secrets. The log records keys by prefix and strips userinfo from upstream URLs before recording old and new values.
 
-**Database logins (MT.3).** The API can't connect as the owner, a superuser that ignores every grant. Three logins:
+**Database logins (MT.3, MT.5).** The API can't connect as the owner, a superuser that ignores every grant. Four logins:
 
 | Login | Setting | May |
 | --- | --- | --- |
 | the owner (`POSTGRES_USER`) | `MIGRATION_DATABASE_URL` | everything: migrations and setup only |
 | `apim_app` | `DATABASE_URL` | read and write every table, but only `INSERT` and `SELECT` on `audit_events`; never `alembic_version` |
 | `apim_retention` | `AUDIT_RETENTION_DATABASE_URL` | `SELECT` and `DELETE` on `audit_events`, nothing else |
+| `apim_purge` | `PURGE_DATABASE_URL` | the workspace purge job (MT.5): `SELECT` and `DELETE` on every table with workspace data, audit events included; `INSERT` on `audit_events` (its own `workspace.purged`); `UPDATE` of `workspaces.status` only; `config_version` for the trigger its deletes run |
 
-The one-shot `control-plane-db-init` service creates or updates the two logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
+The one-shot `control-plane-db-init` service creates or updates the three logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
 
 **v2 tables**
 
@@ -459,7 +460,7 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | GET | `/api/v1/me` | signed in | Current user |
 | GET | `/api/v1/me/workspaces` | signed in | My workspaces and my role in each |
 | DELETE | `/api/v1/me/workspaces/{slug}` | member | Leave a workspace (not the last owner) |
-| GET, POST | `/api/v1/workspaces` | Platform Admin | List all, create `{name, slug, owner_email}` |
+| GET, POST | `/api/v1/workspaces` | Platform Admin | List all (deleted and purged too; `?status=` filters), create `{name, slug, owner_email}` |
 | GET | `/api/v1/workspaces/{slug}` | `workspace:read` | Workspace details, limits, status |
 | PATCH | `/api/v1/workspaces/{slug}` | `workspace:write` | Rename (`name` only; the slug never changes) |
 | PATCH | `/api/v1/workspaces/{slug}/limits` | Platform Admin | Rate limit, concurrency and quotas |
@@ -490,7 +491,7 @@ There is no login endpoint: the dashboard logs in with GoTrue directly. The MVP'
 
 - Lists take `?page=` and `?page_size=` (max 100) and return `{ items, total }`, newest first. Some lists also filter: routes by `?service_id=`, consumers by `?status=`, audit events by `?actor=`, `?action=`, `?target_type=`, `?from=`, `?to=`. A filter naming an object that isn't in this workspace (another workspace's, or none) → `422`, as in a body
 - Errors return `{ "detail": "..." }` with the right status code: 401 not signed in, 403 not allowed, 404 unknown id or workspace (or another workspace's), 409 duplicate, still in use, `last_owner` or `quota_exceeded`, 422 invalid input or a reference to something not in this workspace
-- `PATCH` changes only the fields sent; sending `null` is rejected
+- `PATCH` changes only the fields sent; sending `null` is rejected, except in `PATCH /limits`, where `null` puts a limit back to the platform default (MT.5)
 - A route `path_prefix` of `/health` or below it (`/health/db`) is reserved by the gateway and rejected with 422. `/healthy` and `/api/health` are fine. v2 adds `/metrics`
 - Upstream and target URLs: only `http` and `https`, without a query string, a fragment, a username or a password (each → 422: a password would be stored, returned by the API and sent to the gateway, which ignores it); an internal IP literal or a known internal name (`localhost`, `*.internal`) not covered by `UPSTREAM_ALLOW` → 422. The gateway enforces the real check at connect time (section 7)
 - Every write records an audit event in the same transaction (section 5): exactly one per change; a request that changes nothing (a PATCH with the same values, revoking a revoked key) records none. Actions are `<target>.<verb>` (`service.create`, `route.update`, `consumer.delete`, `key.create`, `key.revoke`, `user.create`, `user.disable`, `user.enable`, `user.relink`, `member.add`), lifecycle events as listed below (`workspace.created`). `actor_type` is `platform_admin` when only platform power allowed the change (and on platform endpoints), `user` within the person's own role, `system` for startup and scripts
@@ -515,9 +516,20 @@ There is no login endpoint: the dashboard logs in with GoTrue directly. The MVP'
 | `deleted` | Removed from the config (`404` on its host) | Hidden from members (`404`); the Platform Admin can restore within 30 days |
 | `purged` | — | A daily job deleted all of its data; the row stays so the slug is never reused |
 
-Lifecycle events (`workspace.created`, `suspended`, `unsuspended`, `deleted`, `restored`, `purged`) are platform-level audit events (`workspace_id` NULL, `target_id` = the workspace).
+Lifecycle events (`workspace.created`, `suspended`, `unsuspended`, `deleted`, `restored`, `purged`) are platform-level audit events (`workspace_id` NULL, `target_id` = the workspace). A rename (`workspace.update`) and a limits change (`workspace.limits_change`) are recorded in the workspace's own log, so its Owners see them.
 
-**Quotas** (defaults, adjustable per workspace by the Platform Admin): 100 services, 500 routes, 5,000 consumers, 10 active keys per consumer. Over a quota → `409 quota_exceeded`.
+Transition rules (MT.5):
+
+- Suspend `{reason}` (1–500 characters, shown to members) only from `active`; unsuspend only from `suspended`; restore only from `deleted` and before `purge_after`. Delete from `active` or `suspended` (members can't delete a suspended workspace: it is read-only for them; the Platform Admin can).
+- A transition from the wrong status → `409 workspace_<status>`, naming the current one (e.g. `workspace_suspended` when suspending again); `default` → `409 default_workspace`; a restore past `purge_after` → `409 restore_period_over`; a delete whose `confirm` isn't the slug → `422`.
+- Restore always returns to `active`, also for a workspace that was suspended when the Platform Admin deleted it (they suspend it again if needed).
+- Every transition locks the workspace row (`SELECT ... FOR UPDATE`), so parallel transitions (and a restore racing the purge job) run one after the other.
+- In a suspended workspace, only platform power writes (Platform Admin with MFA, audited as `platform_admin`); a deleted or purged one answers `404` on every workspace endpoint, for its members and the Platform Admin alike. `GET /me/workspaces` lists suspended ones (with `status` and `status_reason`), not deleted ones.
+- The purge job runs as its own login (`apim_purge`, the only one besides retention that may delete audit events), daily and at start; it takes due workspaces with `FOR UPDATE SKIP LOCKED` and purges each in one transaction, recording `workspace.purged` (actor `system`) with how many rows of each table went.
+
+**Quotas** (defaults, adjustable per workspace by the Platform Admin): 100 services, 500 routes, 5,000 consumers, 10 active keys per consumer. Over a quota → `409 quota_exceeded`. Creation locks the workspace row (`FOR NO KEY UPDATE`) before counting, so parallel creations can't overshoot. Lowering a quota below what a workspace has refuses new objects and removes nothing.
+
+**Workspace answer:** every workspace response carries `status`, `status_reason`, `deleted_at`, `purge_after`, `limits` (effective values) and `limit_overrides` (the workspace's own, `null` = default); `GET /workspaces/{slug}` adds `usage` (`services`, `routes`, `consumers`). `PATCH /limits` bounds: rate limit 1–1,000,000, in flight 1–10,000, services 1–10,000, routes 1–100,000, consumers 1–1,000,000.
 
 **Generate a key**
 
@@ -894,6 +906,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | `auth` | 9999 | GoTrue (MT, pinned `v2.197.0`): login, MFA, refresh, invitations, recovery |
 | `control-plane-db-init` | — | One-shot job that prepares the Postgres logins and runs migrations before the API starts |
 | `audit-retention` | — | Deletes audit events older than `AUDIT_RETENTION_DAYS`, at start and once a day, as `apim_retention` (MT.3); gets only that login and the period |
+| `workspace-purge` | — | Purges workspaces deleted more than `PURGE_AFTER_DAYS` ago, at start and once a day, as `apim_purge` (MT.5); gets only that login |
 | `mailpit` | 1025 (SMTP), 8025 (UI, bound to 127.0.0.1) | Catches every email locally and in CI (MT); its inbox holds invitation and reset links, so it isn't reachable from the network |
 | `redis` | 6379 | Rate-limit state |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
@@ -919,6 +932,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Control plane | `WORKSPACE_MAX_SERVICES`, `_ROUTES`, `_CONSUMERS` | defaults `100`, `500`, `5000` |
 | Control plane | `MAX_REQUEST_BODY`, `MAX_REQUEST_BODY_CEILING` | defaults `10MB`, `100MB` |
 | Control plane | `PURGE_AFTER_DAYS`, `AUDIT_RETENTION_DAYS` | defaults `30`, `365` |
+| control-plane-db-init, workspace-purge | `PURGE_DATABASE_URL` | `postgresql+asyncpg://apim_purge:<password>@postgres:5432/apim` (MT.5) |
 | GoTrue | `GOTRUE_DB_DATABASE_URL` | the `auth` database, as its own login `gotrue` (password `GOTRUE_DB_PASSWORD`), which can't open `apim` |
 | GoTrue | `GOTRUE_JWT_SECRET`, `GOTRUE_JWT_EXP` | shared with the control plane; `600` (10 minutes) |
 | GoTrue | `GOTRUE_DISABLE_SIGNUP` | `true`: joining is only by being added to a workspace |
@@ -1005,7 +1019,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.2 Workspaces and roles: memberships, permissions, URLs under `/workspaces/{slug}`, isolation tests [0, 2, 5, 13]
 - [x] MT.3 Audit log: same-transaction records for every write, guard test, audit endpoints, retention [11]
 - [x] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]
-- [ ] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]
+- [x] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]
 - [ ] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
 - [ ] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]
 - [ ] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
