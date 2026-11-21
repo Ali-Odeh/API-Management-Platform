@@ -2,7 +2,7 @@
 
     python -m scripts.prepare_database
 
-Run by the control-plane container on every start, before `alembic upgrade head`.
+Run by the control-plane-db-init job before `alembic upgrade head`.
 """
 
 import asyncio

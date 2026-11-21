@@ -64,7 +64,7 @@ flowchart LR
 | **Config propagation** | An admin change reaches the gateway in about **70 ms** |
 | **Route matching** | 0.4 µs for 100 routes, no memory allocations (Go benchmark) |
 | **Gateway tests** | 362 tests and table cases, **98% coverage**, the race detector, 5 fuzz tests |
-| **Control plane tests** | 791 tests, **100% coverage**, mypy strict; permission, isolation and audit guards over every endpoint |
+| **Control plane tests** | 794 tests, **100% coverage**, mypy strict; permission, isolation and audit guards over every endpoint |
 | **End to end** | 26 stories on the real stack (GoTrue login with MFA, workspace isolation, audit log), in CI on every push |
 
 The load test ran on one laptop with Docker Desktop; the differences between runs (with and without the gateway) are the meaningful part.

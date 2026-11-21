@@ -10,6 +10,7 @@ database through its own engine (no pooled connection crosses event loops).
 """
 
 import asyncio
+import os
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -26,7 +27,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.core.config import get_settings
 from app.core.db import get_db
 from app.main import app
 from app.users import crud as users_crud
@@ -88,7 +88,7 @@ def _alembic() -> Config:
 
 def _engine() -> AsyncEngine:
     # The owner: at the MVP revision the API's own login has no privileges yet.
-    return create_async_engine(get_settings().migration_database_url, poolclass=pool.NullPool)
+    return create_async_engine(os.environ["MIGRATION_DATABASE_URL"], poolclass=pool.NullPool)
 
 
 async def _snapshot(engine: AsyncEngine) -> dict[str, list[dict[str, Any]]]:

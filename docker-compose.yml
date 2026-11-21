@@ -1,3 +1,14 @@
+# The API gets its own database login. The owner and retention URLs go only
+# to the services that need them.
+x-control-plane-environment: &control-plane-environment
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+  INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN in .env}
+  GOTRUE_URL: ${GOTRUE_URL:-http://auth:9999}
+  GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:?set GOTRUE_JWT_SECRET in .env}
+  GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:?set GOTRUE_SERVICE_ROLE_KEY in .env}
+  PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?set PLATFORM_ADMIN_EMAIL in .env}
+  PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -114,25 +125,38 @@ services:
       timeout: 3s
       retries: 10
 
+  control-plane-db-init:
+    build: ./backend/control-plane
+    # This one-shot job also provides the environment for the database tests.
+    environment:
+      <<: *control-plane-environment
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?set MIGRATION_DATABASE_URL in .env}
+      AUDIT_RETENTION_DATABASE_URL: ${AUDIT_RETENTION_DATABASE_URL:?set AUDIT_RETENTION_DATABASE_URL in .env}
+    command: sh -c "python -m scripts.prepare_database && alembic upgrade head"
+    volumes:
+      - ./backend/control-plane:/code
+    depends_on:
+      auth-db-init:
+        condition: service_completed_successfully
+
   control-plane:
     build: ./backend/control-plane
-    env_file: .env          # *DATABASE_URL, INTERNAL_TOKEN, GOTRUE_*, PLATFORM_ADMIN_*
     environment:
+      <<: *control-plane-environment
       # Docker Desktop on Windows doesn't pass file-change events into
       # containers, so the --reload watcher polls for changes instead.
       WATCHFILES_FORCE_POLLING: "true"
-    # Make sure the database logins exist (MT.3), apply migrations as the
-    # owner, then run in dev mode (restart when you save a .py file).
+    # Run in dev mode (restart when you save a .py file).
     # --timeout-graceful-shutdown: long-poll requests can stay open up to 60 s;
     # on restart, close them after 3 s instead of waiting (the gateway just asks again).
-    command: sh -c "python -m scripts.prepare_database && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3
     volumes:
       - ./backend/control-plane:/code   # your code, live inside the container
     ports:
       - "8000:8000"
     depends_on:
-      postgres:
-        condition: service_healthy
+      control-plane-db-init:
+        condition: service_completed_successfully
       # At startup it makes sure the first Platform Admin exists in GoTrue.
       auth:
         condition: service_healthy

@@ -8,8 +8,10 @@ from enum import Enum
 
 import asyncpg
 import pytest
-from httpx import AsyncClient
-from sqlalchemy import select
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.types import Message, Receive, Scope, Send
 
@@ -17,14 +19,16 @@ from app.audit import crud as audit_crud
 from app.audit.changes import created, deleted, snapshot, updated
 from app.audit.context import AuditContext
 from app.audit.models import AuditEvent
-from app.core.db import driver_dsn
+from app.core.db import SessionLocal, driver_dsn
+from app.core.errors import register_error_handlers
 from app.core.request_id import RequestIdMiddleware
 from app.gotrue import client as gotrue_client
+from app.keys import crud as keys_crud
 from app.main import app
 from app.users import crud as users_crud
 from app.users.models import User
 from app.workspaces.models import Workspace
-from tests.factories import make_consumer, make_route, make_service, make_user
+from tests.factories import make_api_key, make_consumer, make_route, make_service, make_user
 from tests.fakes import FakeGoTrue, bearer, make_token
 
 Headers = dict[str, str]
@@ -153,6 +157,46 @@ async def test_an_unsafe_or_missing_request_id_is_replaced(
     assert new_id != sent and len(new_id) == 32  # a fresh uuid4, as hex
 
 
+async def test_an_unexpected_error_echoes_the_request_id() -> None:
+    mini = FastAPI()
+    register_error_handlers(mini)
+    mini.add_middleware(RequestIdMiddleware)
+
+    @mini.get("/fail")
+    async def fail() -> None:
+        raise RuntimeError("private exception detail")
+
+    transport = ASGITransport(app=mini, raise_app_exceptions=False)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.get("/fail", headers={"X-Request-ID": "trace-500"})
+
+    assert r.status_code == 500 and r.text == "Internal Server Error"
+    assert r.headers["X-Request-ID"] == "trace-500"
+
+
+async def test_upstream_credentials_are_omitted_from_every_audit_change(
+    client: AsyncClient, db: AsyncSession, auth_headers: Headers
+) -> None:
+    seen = await _ids(db)
+    original = "http://fixture-user:fixture-password@mock-backend:9000/v1"
+    replacement = "https://next-user:next-password@[::1]:8000/v2"
+    service = await client.post(
+        SERVICES, json={"name": "orders", "upstream_url": original}, headers=auth_headers
+    )
+    assert service.status_code == 201
+    path = f"{SERVICES}/{service.json()['id']}"
+    r = await client.patch(path, json={"upstream_url": replacement}, headers=auth_headers)
+    assert r.status_code == 200
+    assert (await client.delete(path, headers=auth_headers)).status_code == 204
+
+    events = {e.action: e.changes["upstream_url"] for e in await _events(db, seen)}
+    assert events == {
+        "service.create": [None, "http://mock-backend:9000/v1"],
+        "service.update": ["http://mock-backend:9000/v1", "https://[::1]:8000/v2"],
+        "service.delete": ["https://[::1]:8000/v2", None],
+    }
+
+
 # ---- A request that changes nothing writes no event
 
 
@@ -198,6 +242,40 @@ async def test_revoking_twice_writes_one_event(
         r = await client.delete(f"/api/v1/workspaces/default/keys/{key_id}", headers=auth_headers)
         assert r.status_code == 204
     assert [e.action for e in await _events(db, seen)] == ["key.create", "key.revoke"]
+
+
+async def test_parallel_revokes_keep_the_first_timestamp_and_event(
+    db: AsyncSession, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    consumer = await make_consumer(db, workspace.id)
+    key = await make_api_key(db, workspace.id, consumer.id)
+    workspace_id, key_id = workspace.id, key.id
+    seen = await _ids(db)
+    ctx = AuditContext.system()
+    real_commit = db.commit
+
+    async def commit_after_competing_revoke() -> None:
+        # The other request arrives after we read the key but before we write it.
+        async with SessionLocal() as other:
+            await other.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            with pytest.raises(DBAPIError) as error:
+                await keys_crud.revoke_key(other, workspace_id, key_id=key_id, audit=ctx)
+            assert getattr(error.value.orig, "sqlstate", None) == "55P03"  # lock timeout
+        await real_commit()
+
+    monkeypatch.setattr(db, "commit", commit_after_competing_revoke)
+    await keys_crud.revoke_key(db, workspace_id, key_id=key_id, audit=ctx)
+    await db.refresh(key)
+    first = key.revoked_at
+    assert first is not None
+
+    async with SessionLocal() as other:
+        await keys_crud.revoke_key(other, workspace_id, key_id=key_id, audit=ctx)
+
+    await db.refresh(key)
+    assert key.revoked_at == first
+    [event] = await _events(db, seen)
+    assert event.action == "key.revoke" and event.target_id == key_id
 
 
 async def test_repeated_disable_writes_one_event(

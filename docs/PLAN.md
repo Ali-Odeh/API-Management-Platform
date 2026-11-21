@@ -394,7 +394,7 @@ Postgres rules this design must follow (checked against the Postgres 16 docs):
 
 **Audit rows are append-only**
 
-The application's database user has only `INSERT` and `SELECT` on `audit_events`. A retention job (default 1 year), running as a separate database user, is the only thing that deletes rows. Each change and its audit row are written in the same transaction. No secrets are ever recorded: a key appears only as its prefix; `key_hash` and tokens never.
+The application's database user has only `INSERT` and `SELECT` on `audit_events`. A retention job (default 1 year), running as a separate database user, is the only thing that deletes rows. Each change and its audit row are written in the same transaction. Audit events must exclude secrets. The log records keys by prefix and strips userinfo from upstream URLs before recording old and new values.
 
 **Database logins (MT.3).** The API can't connect as the owner, a superuser that ignores every grant. Three logins:
 
@@ -404,7 +404,7 @@ The application's database user has only `INSERT` and `SELECT` on `audit_events`
 | `apim_app` | `DATABASE_URL` | read and write every table, but only `INSERT` and `SELECT` on `audit_events`; never `alembic_version` |
 | `apim_retention` | `AUDIT_RETENTION_DATABASE_URL` | `SELECT` and `DELETE` on `audit_events`, nothing else |
 
-The two logins are created or updated (password from their URL) by `scripts/prepare_database.py` before migrations on every start; the table privileges are granted by migrations, with default privileges for later tables.
+The one-shot `control-plane-db-init` service creates or updates the two logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
 
 **v2 tables**
 
@@ -891,6 +891,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | `postgres` | 5432 (host 5434) | Databases `apim` (ours) and `auth` (GoTrue's). Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
 | `auth-db-init` | — | One-shot job before GoTrue starts (MT): creates GoTrue's login (`gotrue`), the `auth` database and schema, and the `postgres` role GoTrue's migrations expect; safe to repeat |
 | `auth` | 9999 | GoTrue (MT, pinned `v2.197.0`): login, MFA, refresh, invitations, recovery |
+| `control-plane-db-init` | — | One-shot job that prepares the Postgres logins and runs migrations before the API starts |
 | `audit-retention` | — | Deletes audit events older than `AUDIT_RETENTION_DAYS`, at start and once a day, as `apim_retention` (MT.3); gets only that login and the period |
 | `mailpit` | 1025 (SMTP), 8025 (UI, bound to 127.0.0.1) | Catches every email locally and in CI (MT); its inbox holds invitation and reset links, so it isn't reachable from the network |
 | `redis` | 6379 | Rate-limit state |
@@ -904,8 +905,8 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Service | Variable | Example |
 | --- | --- | --- |
 | Control plane | `DATABASE_URL` | `postgresql+asyncpg://apim_app:<password>@postgres:5432/apim` (the API's own login, MT.3) |
-| Control plane | `MIGRATION_DATABASE_URL` | `postgresql+asyncpg://app:app@postgres:5432/apim` (the owner: migrations and setup) |
-| Control plane, audit-retention | `AUDIT_RETENTION_DATABASE_URL` | `postgresql+asyncpg://apim_retention:<password>@postgres:5432/apim` |
+| control-plane-db-init | `MIGRATION_DATABASE_URL` | `postgresql+asyncpg://app:app@postgres:5432/apim` (the owner for migrations and setup) |
+| control-plane-db-init, audit-retention | `AUDIT_RETENTION_DATABASE_URL` | `postgresql+asyncpg://apim_retention:<password>@postgres:5432/apim` |
 | Control plane | `INTERNAL_TOKEN` | shared secret with the gateway |
 | Control plane | `GOTRUE_URL` | `http://auth:9999` |
 | Control plane | `GOTRUE_JWT_SECRET` | the secret GoTrue signs with, to verify its tokens (same value as GoTrue's) |

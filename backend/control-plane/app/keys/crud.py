@@ -109,7 +109,10 @@ async def revoke_key(
     """Mark a key revoked. Idempotent: revoking again keeps the first revoked_at
     (and, since nothing changes, writes no second audit event)."""
     key = await db.scalar(
-        select(ApiKey).where(ApiKey.id == key_id, ApiKey.workspace_id == workspace_id)
+        select(ApiKey)
+        .where(ApiKey.id == key_id, ApiKey.workspace_id == workspace_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if key is None:
         raise NotFoundError("API key not found")

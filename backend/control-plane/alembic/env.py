@@ -6,6 +6,7 @@ of it with `connection.run_sync(...)`.
 """
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -13,7 +14,6 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.core.config import get_settings
 from app.core.db import Base
 
 # isort: split
@@ -38,7 +38,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 # The owner, not the API's login: migrations create tables and grant privileges.
-DATABASE_URL = get_settings().migration_database_url
+DATABASE_URL = os.environ["MIGRATION_DATABASE_URL"]
 
 
 def run_migrations_offline() -> None:

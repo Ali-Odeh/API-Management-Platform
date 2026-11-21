@@ -173,6 +173,12 @@ jobs:
       - name: Start the stack and wait until every service is healthy
         run: docker compose up -d --build --wait
 
+      - name: Check that the API has no privileged database credentials
+        run: >-
+          docker compose exec -T control-plane python -c
+          'import os; assert not {"MIGRATION_DATABASE_URL", "AUDIT_RETENTION_DATABASE_URL",
+          "POSTGRES_PASSWORD", "PGPASSWORD", "GOTRUE_DB_PASSWORD"}.intersection(os.environ)'
+
       - name: End-to-end tests
         run: docker compose run --rm e2e
 

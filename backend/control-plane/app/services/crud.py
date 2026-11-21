@@ -6,6 +6,7 @@ service in another workspace behaves exactly like one that doesn't exist.
 """
 
 import uuid
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -98,6 +99,8 @@ async def delete_service(
 def _record(
     db: AsyncSession, audit_ctx: AuditContext, service: Service, action: str, changes: Changes
 ) -> None:
+    if "upstream_url" in changes:
+        changes["upstream_url"] = [_without_credentials(url) for url in changes["upstream_url"]]
     audit.record(
         db,
         audit_ctx,
@@ -108,3 +111,12 @@ def _record(
         target_name=service.name,
         changes=changes,
     )
+
+
+def _without_credentials(url: str | None) -> str | None:
+    if url is None:
+        return None
+    parts = urlsplit(url)
+    # Older services can already contain credentials. Strip the userinfo
+    # from both sides of the audit change, including on delete.
+    return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl()

@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 791 passing (about 3 min), including permission, isolation and audit guards over every endpoint and every role, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 794 passing (about 3 min), including permission, isolation and audit guards over every endpoint and every role, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -452,3 +452,4 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.3 | `audit_events` has no `updated_at` and no foreign keys; the `?actor=` filter takes an email | Events never change and must outlive their actor, target and workspace; people search by email |
 | Nov 21 | MT.3 | The retention job is its own Compose service (`audit-retention`) with only its login and the period, deleting in batches of 5000 once a day; a failed round is retried the next day | It never holds the API's secrets, and the API never holds a login that can delete events |
 | Nov 21 | MT.3 | The audit guard's rollback test makes Postgres refuse the change itself (a temporary trigger), not every commit | Refusing every commit would also pass with an event committed on its own; this way only one shared transaction passes |
+| Nov 21 | MT.3 | Run migrations and test setup separately from the API container. Strip upstream URL credentials from audit events, lock key rows during revocation and preserve the request ID on unhandled 500 responses | The running API has no privileged database credentials. Concurrent revocations produce one event, and clients can correlate unexpected errors |
