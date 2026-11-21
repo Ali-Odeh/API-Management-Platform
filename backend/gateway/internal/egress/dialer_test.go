@@ -139,7 +139,7 @@ func TestOtherDialErrorsPassThrough(t *testing.T) {
 	if _, blocked := errors.AsType[*BlockedError](err); err == nil || blocked {
 		t.Errorf("dial a closed port = %v, want a plain connection error", err)
 	}
-	if err := d.check("tcp", "not-an-address", nil); err == nil {
+	if err := d.check(context.Background(), "tcp", "not-an-address", nil); err == nil {
 		t.Error("check accepted an address it can't read")
 	}
 }
@@ -150,24 +150,18 @@ func TestOtherDialErrorsPassThrough(t *testing.T) {
 // never by what the name meant earlier.
 func TestDNSRebindingIsRefusedAtConnectTime(t *testing.T) {
 	port, accepted := listen(t)
-	answers := []netip.Addr{
-		netip.MustParseAddr("127.0.0.1"), // the "public" answer: allowed below, as a stand-in
-		netip.MustParseAddr("127.0.0.2"), // then the internal one
-	}
-	dns := fakeDNS(t, answers)
-	d := newTestDialer(t, "127.0.0.1/32")
-	resolver := &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "udp", dns)
-	}}
-	d.guarded.Resolver = resolver
+	d, answer := dialerWithFakeDNS(t, "127.0.0.1/32")
 
+	answer(netip.MustParseAddr("127.0.0.1")) // the "public" answer: allowed above, as a stand-in
 	if err := dial(d, "rebind.test.:"+port); err != nil {
 		t.Fatalf("first dial (allowed answer): %v", err)
 	}
+	internal := netip.MustParseAddr("127.0.0.2")
+	answer(internal) // the same name, now internal
 	err := dial(d, "rebind.test.:"+port)
 	blocked, ok := errors.AsType[*BlockedError](err)
-	if !ok || blocked.Addr != answers[1] {
-		t.Fatalf("second dial = %v, want refused for %s", err, answers[1])
+	if !ok || blocked.Host != "rebind.test." || blocked.Addr != internal {
+		t.Fatalf("second dial = %v, want refused for %s", err, internal)
 	}
 	time.Sleep(50 * time.Millisecond) // give a wrongly made second connection time to arrive
 	if n := waitForCount(accepted, 1); n != 1 {
@@ -175,17 +169,48 @@ func TestDNSRebindingIsRefusedAtConnectTime(t *testing.T) {
 	}
 }
 
-// fakeDNS answers A queries over UDP with the next address of answers (the
-// last one repeats), and AAAA queries with no address. It speaks just
-// enough DNS for Go's resolver.
-func fakeDNS(t *testing.T, answers []netip.Addr) string {
+// A name with an internal and an allowed address: the internal one is never
+// connected to, and when the allowed one fails too, the error is the
+// connection's, not the policy's (whatever order Go tries them in).
+func TestAMixedAnswerIsNotBlamedOnThePolicy(t *testing.T) {
+	d, answer := dialerWithFakeDNS(t, "127.0.0.1/32")
+	answer(netip.MustParseAddr("127.0.0.2"), netip.MustParseAddr("127.0.0.1"))
+
+	err := dial(d, "mixed.test.:1") // nothing listens on 127.0.0.1:1
+
+	if err == nil {
+		t.Fatal("dial to a closed port succeeded")
+	}
+	if _, blocked := errors.AsType[*BlockedError](err); blocked {
+		t.Errorf("dial = %v; an allowed address was tried and failed, so this is no policy refusal", err)
+	}
+}
+
+// dialerWithFakeDNS is a dialer whose names resolve through fakeDNS; answer
+// sets the addresses the next lookups return.
+func dialerWithFakeDNS(t *testing.T, allow ...string) (*Dialer, func(...netip.Addr)) {
+	t.Helper()
+	dns, answer := fakeDNS(t)
+	d := newTestDialer(t, allow...)
+	d.guarded.Resolver = &net.Resolver{PreferGo: true, Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "udp", dns)
+	}}
+	return d, answer
+}
+
+// fakeDNS answers A queries over UDP with the addresses last given to
+// answer, and AAAA queries with none. It speaks just enough DNS for Go's
+// resolver. The test changes the answer between dials, so a query Go's
+// resolver retries gets the same answer.
+func fakeDNS(t *testing.T) (addr string, answer func(...netip.Addr)) {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen udp: %v", err)
 	}
 	t.Cleanup(func() { pc.Close() })
-	var asked atomic.Int64
+	var current atomic.Pointer[[]netip.Addr]
+	current.Store(&[]netip.Addr{})
 	go func() {
 		buf := make([]byte, 512)
 		for {
@@ -210,17 +235,20 @@ func fakeDNS(t *testing.T, answers []netip.Addr) string {
 
 			reply := append([]byte{}, query[:end]...)
 			reply[2], reply[3] = 0x81, 0x80 // a response, recursion available, no error
-			reply[6], reply[7] = 0, 0       // no answers ...
+			reply[6], reply[7] = 0, 0       // the answer count, set below
 			reply[8], reply[9], reply[10], reply[11] = 0, 0, 0, 0
 			if qtype == 1 { // A
-				i := min(int(asked.Add(1))-1, len(answers)-1)
-				ip := answers[i].As4()
-				reply[7] = 1 // ... except one
-				reply = append(reply, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4)
-				reply = append(reply, ip[:]...)
+				addrs := *current.Load()
+				reply[7] = byte(len(addrs))
+				for _, a := range addrs {
+					ip := a.As4()
+					// The name (a pointer to the question's), type A, class IN, TTL 0, 4 bytes.
+					reply = append(reply, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 0, 0, 4)
+					reply = append(reply, ip[:]...)
+				}
 			}
 			_, _ = pc.WriteTo(reply, from)
 		}
 	}()
-	return pc.LocalAddr().String()
+	return pc.LocalAddr().String(), func(addrs ...netip.Addr) { current.Store(&addrs) }
 }

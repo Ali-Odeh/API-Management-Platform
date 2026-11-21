@@ -10,6 +10,7 @@
 package egress
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -55,7 +56,8 @@ type Policy struct {
 
 // NewPolicy builds a policy from UPSTREAM_ALLOW's entries: host names
 // ("mock-backend"), addresses ("10.20.0.5") and networks ("10.20.0.0/16").
-// Empty entries are ignored; any other unreadable entry is an error.
+// Empty entries are ignored; any other unreadable entry is an error, and so
+// is one that could never match (so an exception that looks set always works).
 func NewPolicy(allow []string) (*Policy, error) {
 	p := &Policy{hosts: make(map[string]bool)}
 	for _, entry := range allow {
@@ -64,11 +66,20 @@ func NewPolicy(allow []string) (*Policy, error) {
 			continue
 		}
 		if prefix, err := netip.ParsePrefix(entry); err == nil {
-			p.prefixes = append(p.prefixes, prefix.Masked())
+			prefix, err = comparablePrefix(prefix)
+			if err != nil {
+				return nil, fmt.Errorf("%q: %w", entry, err)
+			}
+			p.prefixes = append(p.prefixes, prefix)
 			continue
 		}
 		if addr, err := netip.ParseAddr(entry); err == nil {
-			p.prefixes = append(p.prefixes, netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen()))
+			if addr.Zone() != "" {
+				// A zone names a local interface; such an exception would match nothing.
+				return nil, fmt.Errorf("%q: an address with a zone (%%%s) can't be allowed", entry, addr.Zone())
+			}
+			addr = addr.Unmap()
+			p.prefixes = append(p.prefixes, netip.PrefixFrom(addr, addr.BitLen()))
 			continue
 		}
 		name := normalizeHost(entry)
@@ -78,6 +89,21 @@ func NewPolicy(allow []string) (*Policy, error) {
 		p.hosts[name] = true
 	}
 	return p, nil
+}
+
+// comparablePrefix puts a network in the form AllowsAddr compares with:
+// addresses are unmapped before the check, so an IPv4-mapped network
+// (::ffff:10.0.0.0/104) becomes the IPv4 network it means (10.0.0.0/8).
+func comparablePrefix(prefix netip.Prefix) (netip.Prefix, error) {
+	// Judged as written: masking ::ffff:10.0.0.0/8 would give ::/8, which no
+	// longer looks mapped but would allow ::1.
+	if !prefix.Addr().Is4In6() {
+		return prefix.Masked(), nil
+	}
+	if prefix.Bits() < 96 {
+		return netip.Prefix{}, errors.New("an IPv4-mapped network must be /96 or longer; write the IPv4 network instead")
+	}
+	return netip.PrefixFrom(prefix.Addr().Unmap(), prefix.Bits()-96).Masked(), nil
 }
 
 // AllowsHost reports whether host (as written in the upstream URL) is on the
@@ -138,8 +164,10 @@ func normalizeHost(host string) string {
 	return strings.TrimSuffix(strings.ToLower(host), ".")
 }
 
-// isHostName reports whether s is a DNS name: dot-separated labels of a-z,
-// 0-9 and '-', each 1 to 63 long, not starting or ending with '-'.
+// isHostName reports whether s is a host name: dot-separated labels of a-z,
+// 0-9, '-' and '_', each 1 to 63 long, not starting or ending with '-'.
+// '_' isn't valid in public DNS names, but Docker and internal resolvers
+// serve names such as billing_api, which an operator may need to allow.
 func isHostName(s string) bool {
 	if s == "" || len(s) > 253 {
 		return false
@@ -149,7 +177,7 @@ func isHostName(s string) bool {
 			return false
 		}
 		for _, c := range []byte(label) {
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
 				return false
 			}
 		}

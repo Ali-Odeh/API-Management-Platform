@@ -109,11 +109,74 @@ func TestPolicyExceptions(t *testing.T) {
 }
 
 func TestNewPolicyRefusesUnreadableEntries(t *testing.T) {
-	for _, entry := range []string{"http://mock-backend", "mock-backend:9000", "10.0.0.0/33", "-x", "a..b", "under_score", strings.Repeat("a", 64)} {
+	for _, entry := range []string{"http://mock-backend", "mock-backend:9000", "10.0.0.0/33", "-x", "a..b", "a b", strings.Repeat("a", 64)} {
 		if _, err := NewPolicy([]string{entry}); err == nil || !strings.Contains(err.Error(), "not a host name") {
 			t.Errorf("NewPolicy(%q) error = %v, want one naming the entry", entry, err)
 		}
 	}
+}
+
+// An entry that could never match is refused at start, so an exception that
+// looks set always works.
+func TestNewPolicyRefusesEntriesThatCouldNeverMatch(t *testing.T) {
+	for entry, want := range map[string]string{
+		"fe80::1%eth0":      "zone",
+		"::ffff:10.0.0.0/8": "/96 or longer",
+	} {
+		if _, err := NewPolicy([]string{entry}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("NewPolicy(%q) error = %v, want one mentioning %q", entry, err, want)
+		}
+	}
+}
+
+// An IPv4-mapped network means its IPv4 network; Docker and internal names
+// with '_' can be allowed.
+func TestNewPolicyAcceptsMappedNetworksAndUnderscores(t *testing.T) {
+	p, err := NewPolicy([]string{"::ffff:10.20.0.0/112", "::ffff:192.168.1.7", "billing_api"})
+	if err != nil {
+		t.Fatalf("NewPolicy: %v", err)
+	}
+	for addr, want := range map[string]bool{"10.20.3.4": true, "::ffff:10.20.3.4": true, "10.21.0.1": false, "192.168.1.7": true} {
+		if got := p.AllowsAddr(netip.MustParseAddr(addr)); got != want {
+			t.Errorf("AllowsAddr(%s) = %v, want %v", addr, got, want)
+		}
+	}
+	if !p.AllowsHost("billing_api") || !p.AllowsHost("BILLING_API.") {
+		t.Error("billing_api is not allowed")
+	}
+}
+
+// FuzzNewPolicy feeds UPSTREAM_ALLOW random lists: it never panics, and
+// every entry it accepts is really allowed afterwards (by name, address or
+// network), so no exception that looks set silently fails.
+func FuzzNewPolicy(f *testing.F) {
+	for _, seed := range []string{"mock-backend", "10.20.0.0/16, billing_api", "::ffff:10.0.0.0/104", "fe80::1%eth0", "192.168.1.7,,x.internal.", "0.0.0.0/0", "a..b"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, list string) {
+		entries := strings.Split(list, ",")
+		p, err := NewPolicy(entries)
+		if err != nil {
+			return
+		}
+		for _, entry := range entries {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			if prefix, err := netip.ParsePrefix(entry); err == nil {
+				if addr := prefix.Masked().Addr(); !p.AllowsAddr(addr) {
+					t.Errorf("accepted network %q, but %s isn't allowed", entry, addr)
+				}
+			} else if addr, err := netip.ParseAddr(entry); err == nil {
+				if !p.AllowsAddr(addr) {
+					t.Errorf("accepted address %q, but it isn't allowed", entry)
+				}
+			} else if !p.AllowsHost(entry) {
+				t.Errorf("accepted name %q, but it isn't allowed", entry)
+			}
+		}
+	})
 }
 
 // FuzzDenied checks the deny list against a second, independent reading of

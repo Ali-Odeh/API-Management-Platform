@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -39,7 +40,7 @@ func NewDialer(policy *Policy, timeout, keepAlive time.Duration) *Dialer {
 		policy: policy,
 		open:   &net.Dialer{Timeout: timeout, KeepAlive: keepAlive},
 	}
-	d.guarded = &net.Dialer{Timeout: timeout, KeepAlive: keepAlive, Control: d.check}
+	d.guarded = &net.Dialer{Timeout: timeout, KeepAlive: keepAlive, ControlContext: d.check}
 	return d
 }
 
@@ -56,24 +57,44 @@ func (d *Dialer) DialContext(ctx context.Context, network, addr string) (net.Con
 	if d.policy.AllowsHost(host) {
 		return d.open.DialContext(ctx, network, addr)
 	}
-	conn, err := d.guarded.DialContext(ctx, network, addr)
-	if blocked, ok := errors.AsType[*BlockedError](err); ok {
-		// The hook only knows the address; name the host for the log.
-		return nil, &BlockedError{Host: host, Addr: blocked.Addr}
+	attempt := &dialAttempt{}
+	conn, err := d.guarded.DialContext(context.WithValue(ctx, attemptKey{}, attempt), network, addr)
+	blocked, ok := errors.AsType[*BlockedError](err)
+	if !ok {
+		return conn, err
 	}
-	return conn, err
+	if attempt.passed.Load() {
+		// A name with several addresses: one was refused, but another was
+		// allowed and tried, and it failed. Go reports the first error, the
+		// refusal; the policy isn't why nothing answered, so say so.
+		return nil, &net.OpError{Op: "dial", Net: network, Err: fmt.Errorf(
+			"%s: no allowed address accepted the connection (%s was refused as internal)", host, blocked.Addr)}
+	}
+	// The hook only knows the address; name the host for the log.
+	return nil, &BlockedError{Host: host, Addr: blocked.Addr}
 }
 
-// check is net.Dialer's Control hook. It runs after DNS has answered and
-// the socket exists, but before it connects: address is the resolved
+// dialAttempt notes, for one DialContext call, whether any address passed
+// the policy (Go may try several addresses of one name).
+type dialAttempt struct {
+	passed atomic.Bool
+}
+
+type attemptKey struct{}
+
+// check is net.Dialer's ControlContext hook. It runs after DNS has answered
+// and the socket exists, but before it connects: address is the resolved
 // "ip:port" about to be used.
-func (d *Dialer) check(_, address string, _ syscall.RawConn) error {
+func (d *Dialer) check(ctx context.Context, _, address string, _ syscall.RawConn) error {
 	ap, err := netip.ParseAddrPort(address)
 	if err != nil {
 		return fmt.Errorf("unexpected address %q: %w", address, err)
 	}
 	if !d.policy.AllowsAddr(ap.Addr()) {
 		return &BlockedError{Addr: ap.Addr()}
+	}
+	if attempt, ok := ctx.Value(attemptKey{}).(*dialAttempt); ok {
+		attempt.passed.Store(true)
 	}
 	return nil
 }

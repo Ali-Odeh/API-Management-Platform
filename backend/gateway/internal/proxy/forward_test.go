@@ -387,6 +387,10 @@ func TestClassifyPutsThePolicyFirst(t *testing.T) {
 	if status, code := classify(context.DeadlineExceeded, blocked); status != http.StatusBadGateway || code != "upstream_not_allowed" {
 		t.Errorf("classify = %d %s, want 502 upstream_not_allowed", status, code)
 	}
+	// A client that left gets nothing either way: recorded as 499, not logged.
+	if status, _ := classify(context.Canceled, blocked); status != StatusClientClosedRequest {
+		t.Errorf("client gone and refused = %d, want 499", status)
+	}
 	wrapped := fmt.Errorf("dial: %w", blocked)
 	if _, code := classify(nil, wrapped); code != "upstream_not_allowed" {
 		t.Errorf("a wrapped refusal = %s", code)

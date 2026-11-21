@@ -146,6 +146,7 @@ jobs:
           go test -run='^$' -fuzz='^FuzzParseAnswer$' -fuzztime=10s ./internal/config
           go test -run='^$' -fuzz='^FuzzLabel$' -fuzztime=10s ./internal/tenant
           go test -run='^$' -fuzz='^FuzzDenied$' -fuzztime=10s ./internal/egress
+          go test -run='^$' -fuzz='^FuzzNewPolicy$' -fuzztime=10s ./internal/egress
 
       - name: Docker image builds
         run: docker build --tag gateway:ci .

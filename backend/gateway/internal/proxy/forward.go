@@ -35,15 +35,16 @@ const StatusClientClosedRequest = 499
 // answer back to the client. One Forwarder (and one connection pool) serves
 // every route; the target is picked per request from the route.
 type Forwarder struct {
-	proxy *httputil.ReverseProxy
-	log   *slog.Logger
+	proxy    *httputil.ReverseProxy
+	log      *slog.Logger
+	refusals *refusalLog
 }
 
 // NewForwarder builds the forwarder with its connection pool. Every new
 // connection goes through policy (SSRF protection): an internal address it
 // doesn't allow is never connected to. A nil policy is the deny list alone.
 func NewForwarder(log *slog.Logger, policy *egress.Policy) *Forwarder {
-	f := &Forwarder{log: log}
+	f := &Forwarder{log: log, refusals: newRefusalLog(log)}
 	f.proxy = &httputil.ReverseProxy{
 		Rewrite:      rewrite,
 		Transport:    timedTransport{next: newTransport(policy)},
@@ -161,11 +162,7 @@ func (f *Forwarder) handleError(w http.ResponseWriter, r *http.Request, err erro
 		return
 	}
 	if blocked, ok := errors.AsType[*egress.BlockedError](err); ok {
-		// A tenant's service points inside the platform: worth an operator's
-		// look, but not the backend's fault.
-		f.log.Warn("upstream not allowed (internal address)",
-			"workspace_id", m.Workspace.ID, "route_id", m.Route.ID,
-			"upstream", blocked.Host, "address", blocked.Addr.String())
+		f.refusals.warn(m.Workspace.ID, m.Route.ID, blocked)
 		respond.Error(w, status, code)
 		return
 	}
@@ -175,19 +172,23 @@ func (f *Forwarder) handleError(w http.ResponseWriter, r *http.Request, err erro
 	respond.Error(w, status, code)
 }
 
+// codeNotAllowed is the answer for an upstream the egress policy refused.
+const codeNotAllowed = "upstream_not_allowed"
+
 // classify decides who caused a failed backend call. ctxErr is the request
 // context's error: our route timeout (DeadlineExceeded) or the client
 // leaving (Canceled).
 func classify(ctxErr, err error) (status int, code string) {
 	var netErr net.Error
 	switch {
+	case errors.Is(ctxErr, context.Canceled):
+		// The client left: nobody gets an answer, whatever else went wrong.
+		return StatusClientClosedRequest, "client_closed_request"
 	case isBlocked(err):
 		// Before the timeouts: refused at once, it is never a slow backend.
-		return http.StatusBadGateway, "upstream_not_allowed"
+		return http.StatusBadGateway, codeNotAllowed
 	case errors.Is(ctxErr, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, "gateway_timeout"
-	case errors.Is(ctxErr, context.Canceled):
-		return StatusClientClosedRequest, "client_closed_request"
 	case errors.As(err, &netErr) && netErr.Timeout():
 		// The connect or TLS timeout ran out: the backend is too slow to
 		// even accept us.
