@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
 )
@@ -38,12 +39,14 @@ type Forwarder struct {
 	log   *slog.Logger
 }
 
-// NewForwarder builds the forwarder with its connection pool.
-func NewForwarder(log *slog.Logger) *Forwarder {
+// NewForwarder builds the forwarder with its connection pool. Every new
+// connection goes through policy (SSRF protection): an internal address it
+// doesn't allow is never connected to. A nil policy is the deny list alone.
+func NewForwarder(log *slog.Logger, policy *egress.Policy) *Forwarder {
 	f := &Forwarder{log: log}
 	f.proxy = &httputil.ReverseProxy{
 		Rewrite:      rewrite,
-		Transport:    timedTransport{next: newTransport()},
+		Transport:    timedTransport{next: newTransport(policy)},
 		ErrorHandler: f.handleError,
 	}
 	return f
@@ -63,11 +66,14 @@ func (t timedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, err
 }
 
-func newTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}
+func newTransport(policy *egress.Policy) *http.Transport {
+	// The check runs once per new connection; pooled connections are reused
+	// without it, so it costs nothing per request.
+	dialer := egress.NewDialer(policy, dialTimeout, 30*time.Second)
 	return &http.Transport{
 		// Proxy is left nil on purpose: backend calls never go through an
-		// HTTP_PROXY from the environment.
+		// HTTP_PROXY from the environment (which would also dial for us,
+		// around the egress check).
 		DialContext:           dialer.DialContext,
 		TLSHandshakeTimeout:   tlsHandshakeTimeout,
 		MaxIdleConns:          maxIdleConns,
@@ -154,6 +160,15 @@ func (f *Forwarder) handleError(w http.ResponseWriter, r *http.Request, err erro
 		w.WriteHeader(status)
 		return
 	}
+	if blocked, ok := errors.AsType[*egress.BlockedError](err); ok {
+		// A tenant's service points inside the platform: worth an operator's
+		// look, but not the backend's fault.
+		f.log.Warn("upstream not allowed (internal address)",
+			"workspace_id", m.Workspace.ID, "route_id", m.Route.ID,
+			"upstream", blocked.Host, "address", blocked.Addr.String())
+		respond.Error(w, status, code)
+		return
+	}
 	f.log.Warn("backend call failed",
 		"route_id", m.Route.ID, "upstream", m.Route.Upstream.Host,
 		"status", status, "error", err.Error())
@@ -166,6 +181,9 @@ func (f *Forwarder) handleError(w http.ResponseWriter, r *http.Request, err erro
 func classify(ctxErr, err error) (status int, code string) {
 	var netErr net.Error
 	switch {
+	case isBlocked(err):
+		// Before the timeouts: refused at once, it is never a slow backend.
+		return http.StatusBadGateway, "upstream_not_allowed"
 	case errors.Is(ctxErr, context.DeadlineExceeded):
 		return http.StatusGatewayTimeout, "gateway_timeout"
 	case errors.Is(ctxErr, context.Canceled):
@@ -179,4 +197,10 @@ func classify(ctxErr, err error) (status int, code string) {
 		// unreachable or broken.
 		return http.StatusBadGateway, "bad_gateway"
 	}
+}
+
+// isBlocked reports whether the egress policy refused the connection.
+func isBlocked(err error) bool {
+	_, ok := errors.AsType[*egress.BlockedError](err)
+	return ok
 }

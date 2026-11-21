@@ -224,6 +224,11 @@ services:
       # Workspaces are its subdomains: acme.localhost reaches workspace `acme`
       # (MT.7); any other name (localhost, gateway) serves `default`.
       GATEWAY_BASE_DOMAIN: ${GATEWAY_BASE_DOMAIN:-localhost}
+      # Internal hosts tenants' services may reach anyway (MT.9, SSRF
+      # protection); every other internal address gets 502
+      # upstream_not_allowed. The local stack allows the mock backend; set it
+      # empty in .env to allow nothing, as in production.
+      UPSTREAM_ALLOW: ${UPSTREAM_ALLOW-mock-backend}
     ports:
       # host 8081 -> container 8080. 127.0.0.1:8080 on the host is taken by
       # another Windows app. Containers still use gateway:8080.
