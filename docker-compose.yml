@@ -116,15 +116,16 @@ services:
 
   control-plane:
     build: ./backend/control-plane
-    env_file: .env          # DATABASE_URL, INTERNAL_TOKEN, GOTRUE_*, PLATFORM_ADMIN_*
+    env_file: .env          # *DATABASE_URL, INTERNAL_TOKEN, GOTRUE_*, PLATFORM_ADMIN_*
     environment:
       # Docker Desktop on Windows doesn't pass file-change events into
       # containers, so the --reload watcher polls for changes instead.
       WATCHFILES_FORCE_POLLING: "true"
-    # Apply migrations, then run in dev mode (restart when you save a .py file).
+    # Make sure the database logins exist (MT.3), apply migrations as the
+    # owner, then run in dev mode (restart when you save a .py file).
     # --timeout-graceful-shutdown: long-poll requests can stay open up to 60 s;
     # on restart, close them after 3 s instead of waiting (the gateway just asks again).
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3"
+    command: sh -c "python -m scripts.prepare_database && alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3"
     volumes:
       - ./backend/control-plane:/code   # your code, live inside the container
     ports:

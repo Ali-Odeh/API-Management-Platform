@@ -87,7 +87,8 @@ def _alembic() -> Config:
 
 
 def _engine() -> AsyncEngine:
-    return create_async_engine(get_settings().database_url, poolclass=pool.NullPool)
+    # The owner: at the MVP revision the API's own login has no privileges yet.
+    return create_async_engine(get_settings().migration_database_url, poolclass=pool.NullPool)
 
 
 async def _snapshot(engine: AsyncEngine) -> dict[str, list[dict[str, Any]]]:

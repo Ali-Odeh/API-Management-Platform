@@ -36,7 +36,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
-DATABASE_URL = get_settings().database_url
+# The owner, not the API's login: migrations create tables and grant privileges.
+DATABASE_URL = get_settings().migration_database_url
 
 
 def run_migrations_offline() -> None:

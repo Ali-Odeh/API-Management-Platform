@@ -18,7 +18,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # The API's own login (apim_app): no UPDATE or DELETE on audit events.
     database_url: str
+    # The schema owner, for migrations only (alembic/env.py).
+    migration_database_url: str
     internal_token: str
 
     # GoTrue (MT.1): it logs people in; we verify its tokens and call its admin API.
