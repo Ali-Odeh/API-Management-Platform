@@ -12,8 +12,17 @@ from app.gateway_config.schemas import ConfigSnapshot, KeyConfig, RouteConfig
 from app.keys.models import ApiKey
 from app.routes.models import Route
 from app.services.models import Service
+from app.workspaces.models import DEFAULT_WORKSPACE_SLUG, Workspace
 
 _VERSION_QUERY = select(ConfigVersion.version).where(ConfigVersion.id == SINGLETON_ID)
+
+# Until the gateway tells workspaces apart by Host (MT.6, MT.7), it serves only
+# `default`. Another workspace's routes and keys must not reach it: they would
+# work on the gateway's bare host, across tenants (path prefixes are unique
+# only per workspace since MT.2).
+_SERVED_WORKSPACE = (
+    select(Workspace.id).where(Workspace.slug == DEFAULT_WORKSPACE_SLUG).scalar_subquery()
+)
 
 
 async def get_config_version(db: AsyncSession) -> ConfigVersion:
@@ -61,7 +70,7 @@ async def read_snapshot(engine: AsyncEngine) -> ConfigSnapshot:
                     Service.timeout_ms,
                 )
                 .join(Service, Route.service_id == Service.id)
-                .where(Route.is_active, Service.is_active)
+                .where(Route.is_active, Service.is_active, Route.workspace_id == _SERVED_WORKSPACE)
                 .order_by(Route.path_prefix)
             )
             key_rows = await conn.execute(
@@ -73,7 +82,7 @@ async def read_snapshot(engine: AsyncEngine) -> ConfigSnapshot:
                     Consumer.rate_limit_per_min,
                 )
                 .join(Consumer, ApiKey.consumer_id == Consumer.id)
-                .where(ApiKey.revoked_at.is_(None))
+                .where(ApiKey.revoked_at.is_(None), ApiKey.workspace_id == _SERVED_WORKSPACE)
                 .order_by(ApiKey.id)
             )
             return ConfigSnapshot(

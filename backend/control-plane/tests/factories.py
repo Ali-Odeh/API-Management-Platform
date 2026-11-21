@@ -17,8 +17,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.consumers.models import Consumer
 from app.core.db import violated_constraint
+from app.core.permissions import Role
 from app.core.security import generate_api_key, hash_api_key
 from app.keys.models import KEY_PREFIX_LENGTH, ApiKey
+from app.members.models import WorkspaceMember
 from app.routes.models import Route
 from app.services.models import Service
 from app.users.models import User
@@ -44,6 +46,12 @@ async def make_user(
     if linked:
         fields.setdefault("auth_user_id", uuid.uuid4())
     return await _save(db, User(email=email, **fields))
+
+
+async def make_member(
+    db: AsyncSession, workspace_id: uuid.UUID, user_id: uuid.UUID, role: Role
+) -> WorkspaceMember:
+    return await _save(db, WorkspaceMember(workspace_id=workspace_id, user_id=user_id, role=role))
 
 
 async def make_service(

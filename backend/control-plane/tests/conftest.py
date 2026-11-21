@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
 from app.core.db import Base, SessionLocal, driver_dsn, engine
+from app.core.permissions import Role
 from app.gateway_config.models import ConfigVersion
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
@@ -37,7 +38,7 @@ from app.main import app
 from app.users.models import User
 from app.workspaces.crud import get_or_create_default_workspace
 from app.workspaces.models import Workspace
-from tests.factories import make_user, make_workspace
+from tests.factories import make_member, make_user, make_workspace
 from tests.fakes import FakeGoTrue, bearer, make_token
 
 ADMIN_EMAIL = "admin@test.local"
@@ -122,9 +123,11 @@ def gotrue() -> FakeGoTrue:
 
 @pytest.fixture
 async def admin(db: AsyncSession, workspace: Workspace) -> User:
-    """The Platform Admin, already linked to a GoTrue account (the MVP admin's
-    successor). The `default` workspace exists too."""
-    return await make_user(db, email=ADMIN_EMAIL, is_platform_admin=True)
+    """The Platform Admin, linked to a GoTrue account and Owner of `default`
+    (the MVP admin after the MT.1 and MT.2 migrations)."""
+    admin = await make_user(db, email=ADMIN_EMAIL, is_platform_admin=True)
+    await make_member(db, workspace.id, admin.id, Role.OWNER)  # as the MT.2 migration does
+    return admin
 
 
 @pytest.fixture

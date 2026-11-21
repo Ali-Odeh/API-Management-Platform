@@ -22,6 +22,7 @@ from app.core.db import Base
 from app.consumers import models as consumer_models  # noqa: F401
 from app.gateway_config import models as gateway_config_models  # noqa: F401
 from app.keys import models as key_models  # noqa: F401
+from app.members import models as member_models  # noqa: F401
 from app.routes import models as route_models  # noqa: F401
 from app.services import models as service_models  # noqa: F401
 from app.users import models as user_models  # noqa: F401

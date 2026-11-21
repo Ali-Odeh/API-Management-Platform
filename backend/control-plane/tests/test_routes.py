@@ -43,16 +43,18 @@ async def test_root_prefix_is_allowed(
     await make_route(db, workspace.id, service.id, path_prefix="/")
 
 
-async def test_path_prefix_unique_across_all_workspaces(
+async def test_path_prefix_unique_per_workspace(
     db: AsyncSession, workspace: Workspace, other_workspace: Workspace, service: Service
 ) -> None:
-    # MVP: the gateway matches by path only, so two tenants can't share a prefix.
+    # Two workspaces may both publish /v1/orders (the gateway tells them apart
+    # by Host from MT.7); one workspace can't have it twice.
     theirs = await make_service(db, other_workspace.id)
     await make_route(db, workspace.id, service.id, path_prefix="/v1/orders")
+    await make_route(db, other_workspace.id, theirs.id, path_prefix="/v1/orders")
     await expect_violation(
         db,
-        "uq_routes_path_prefix",
-        make_route(db, other_workspace.id, theirs.id, path_prefix="/v1/orders"),
+        "uq_routes_workspace_id_path_prefix",
+        make_route(db, workspace.id, service.id, path_prefix="/v1/orders"),
     )
 
 

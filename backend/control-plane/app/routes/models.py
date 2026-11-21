@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, String, false, true
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, String, UniqueConstraint, false, true
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,7 +10,7 @@ from app.core.models import TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceMixin
 HTTP_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
 
 # Constraint names, used by crud.py files to turn violations into clear 409 errors.
-UQ_ROUTE_PATH_PREFIX = "uq_routes_path_prefix"
+UQ_ROUTE_PATH_PREFIX = "uq_routes_workspace_id_path_prefix"
 FK_ROUTE_SERVICE = "fk_routes_service"
 
 _METHODS_SQL = ", ".join(f"'{m}'" for m in HTTP_METHODS)
@@ -34,14 +34,15 @@ class Route(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
         CheckConstraint(
             "path_prefix = '/' OR path_prefix NOT LIKE '%/'", name="path_prefix_no_trailing_slash"
         ),
+        # Unique per workspace: two workspaces may both publish /v1/orders;
+        # the gateway tells them apart by Host (MT.7).
+        UniqueConstraint("workspace_id", "path_prefix", name=UQ_ROUTE_PATH_PREFIX),
         CheckConstraint("cardinality(methods) > 0", name="methods_not_empty"),
         CheckConstraint(f"methods <@ ARRAY[{_METHODS_SQL}]::varchar[]", name="methods_known"),
     )
 
     service_id: Mapped[uuid.UUID] = mapped_column(index=True)
-    # Unique across ALL workspaces in the MVP: the gateway matches by path only.
-    # Milestone MT makes it unique per workspace (PLAN.md section 5).
-    path_prefix: Mapped[str] = mapped_column(String(255), unique=True)
+    path_prefix: Mapped[str] = mapped_column(String(255))
     methods: Mapped[list[str]] = mapped_column(ARRAY(String(10)))
     strip_prefix: Mapped[bool] = mapped_column(default=False, server_default=false())
     # Secure by default: a new route needs an API key unless turned off.
