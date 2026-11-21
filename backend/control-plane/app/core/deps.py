@@ -29,6 +29,7 @@ from app.core.db import get_db
 from app.core.errors import ForbiddenError, NotFoundError
 from app.core.identity import TokenClaims, verify_access_token
 from app.core.permissions import Permission, Role, role_allows
+from app.core.request_log import bind_workspace
 from app.gotrue.client import GoTrueAdmin
 from app.users import crud as users_crud
 from app.users.models import User
@@ -179,6 +180,7 @@ class PermissionCheck:
         if found is None:
             raise NotFoundError(WORKSPACE_NOT_FOUND)
         workspace_id, status, role = found
+        bind_workspace(workspace_id)  # every log line of this request names it
         role_allowed = role is not None and role_allows(role, self.permission)
         read_only = status == WorkspaceStatus.SUSPENDED and not self.permission.is_read
         actor_type = ActorType.USER

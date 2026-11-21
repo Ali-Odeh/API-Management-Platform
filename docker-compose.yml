@@ -157,7 +157,9 @@ services:
     # Run in dev mode (restart when you save a .py file).
     # --timeout-graceful-shutdown: long-poll requests can stay open up to 60 s;
     # on restart, close them after 3 s instead of waiting (the gateway just asks again).
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3
+    # --no-access-log: the app writes its own JSON request line, with
+    # request_id and workspace_id (app/core/request_log.py, MT.7).
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --timeout-graceful-shutdown 3 --no-access-log
     volumes:
       - ./backend/control-plane:/code   # your code, live inside the container
     ports:
@@ -219,6 +221,9 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?set INTERNAL_TOKEN in .env}
       CONFIG_WAIT: ${CONFIG_WAIT:-30s}
       REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
+      # Workspaces are its subdomains: acme.localhost reaches workspace `acme`
+      # (MT.7); any other name (localhost, gateway) serves `default`.
+      GATEWAY_BASE_DOMAIN: ${GATEWAY_BASE_DOMAIN:-localhost}
     ports:
       # host 8081 -> container 8080. 127.0.0.1:8080 on the host is taken by
       # another Windows app. Containers still use gateway:8080.

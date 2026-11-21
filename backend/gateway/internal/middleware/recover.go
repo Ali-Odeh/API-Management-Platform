@@ -33,6 +33,7 @@ func Recover(log *slog.Logger) Middleware {
 
 				log.Error("panic while serving a request",
 					"request_id", reqctx.From(r.Context()).RequestID,
+					"workspace_id", reqctx.From(r.Context()).WorkspaceID(),
 					"panic", fmt.Sprint(p),
 					"stack", string(debug.Stack()))
 

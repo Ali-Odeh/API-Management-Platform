@@ -251,6 +251,22 @@ click **Authorize** and paste an access token.
 Emails GoTrue sends (invitations, password recovery) land in Mailpit:
 `http://localhost:8025`.
 
+Each workspace is served on its own subdomain of `GATEWAY_BASE_DOMAIN`
+(default `localhost`, MT.7). `*.localhost` needs no DNS: `curl.exe` and
+browsers send it to this machine. Without a subdomain (`localhost:8081`),
+requests go to the `default` workspace.
+
+```powershell
+curl.exe http://acme.localhost:8081/v1/orders -H "X-API-Key: <a key of acme>"
+```
+
+Both services log JSON lines with `request_id` and `workspace_id`, so one
+request can be followed through both:
+
+```powershell
+docker compose logs gateway control-plane | Select-String "<workspace id>"
+```
+
 Watch the gateway's long polling (two windows; `INTERNAL_TOKEN` is in `.env`):
 
 ```powershell

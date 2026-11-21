@@ -184,7 +184,7 @@ docker compose run --rm loadtest            # k6 load test
 
 ## Status and what's next
 
-The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), and an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), are in. Next on the [roadmap](docs/ROADMAP.md):
+The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), and gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), are in. Next on the [roadmap](docs/ROADMAP.md):
 
-- **Gateway tenancy:** each workspace on its own subdomain, per-workspace limits, SSRF protection, load balancing with health checks, CORS.
+- **More gateway work:** per-workspace limits, SSRF protection, load balancing with health checks, CORS.
 - Later: plans and monthly quotas, usage analytics, Prometheus metrics, a developer portal, and finally the React app.

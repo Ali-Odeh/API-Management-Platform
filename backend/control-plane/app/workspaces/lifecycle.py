@@ -26,6 +26,7 @@ from app.audit.changes import Changes, snapshot, updated
 from app.audit.context import AuditContext
 from app.core.config import get_settings
 from app.core.errors import ConflictError, NotFoundError, UnprocessableError
+from app.core.request_log import bind_workspace
 from app.workspaces.crud import WORKSPACE_NOT_FOUND
 from app.workspaces.models import DEFAULT_WORKSPACE_SLUG, Workspace, WorkspaceStatus
 
@@ -102,6 +103,7 @@ async def _locked(db: AsyncSession, query: Select[tuple[Workspace]]) -> Workspac
     workspace = await db.scalar(query.with_for_update().execution_options(populate_existing=True))
     if workspace is None:
         raise NotFoundError(WORKSPACE_NOT_FOUND)
+    bind_workspace(workspace.id)  # the request's log lines name it, refusals too
     return workspace
 
 

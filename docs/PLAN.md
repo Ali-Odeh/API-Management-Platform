@@ -620,7 +620,7 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 1. **Request ID**: keeps a safe client `X-Request-ID` (1–128 chars, `A-Z a-z 0-9 . _ -`) or creates one; passes it upstream and back to the client
 2. **Logger**: records start time, writes the log line when the response is done (also for answers the proxy aborts)
 3. **Recover**: catches panics and returns 500 instead of crashing. It sits inside the logger (changed in step 3.5; the plan first had it outermost) so the panic's 500 appears in the request log; the proxy's deliberate `ErrAbortHandler` passes through
-4. **Tenant** (MT): finds the workspace from the `Host`; 404 if unknown, 403 if suspended. From here on everything uses that workspace only
+4. **Tenant** (MT.7): reads the snapshot once (503 `config_not_loaded` before the first one) and finds the workspace from the `Host`; 404 if unknown, 403 if suspended. From here on everything uses that workspace only
 5. **Route match**: finds the route among **the workspace's** routes by longest path prefix and method; 404 if no path fits, 405 if a path fits but no route allows the method (a CORS preflight is matched by path only)
 6. **CORS** (MT): answers a preflight for a route with CORS on; adds CORS headers to normal answers
 7. **Body limit** (MT): 413 if `Content-Length` is over the route's limit; wraps the body so an unannounced body is cut at the limit. Matching never reads the body, so checking after it is still before any upload is accepted
@@ -643,9 +643,9 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 **Tenant resolution (MT)**
 
 - The snapshot holds `host → workspace` and `workspace → (routes, keys, services, limits)`. The Host header's port is dropped; the first label is the workspace slug when the rest equals `GATEWAY_BASE_DOMAIN` (e.g. `acme.gw.example.com`, or `acme.localhost` locally).
-- No subdomain (the bare base domain or `localhost`): the `default` workspace, so MVP clients and tests keep working.
-- Unknown host or a workspace not in the snapshot: `404 {"error":"workspace_not_found"}`. Suspended: `403 {"error":"workspace_suspended"}`, before any route matching.
-- The workspace is put on the per-request notes card (`reqctx`) together with the snapshot pointer, so every later step uses the same workspace and config version.
+- No subdomain: the `default` workspace, so MVP clients and tests keep working. That is the bare base domain and, since MT.7, every other name that isn't under the base domain (`localhost`, an IP, an internal name like `gateway:8080`, no Host at all), like a reverse proxy's default server: such a name can never lead to another tenant. The name is matched without case, port or trailing dot.
+- A name under the base domain that isn't one valid DNS label (`a.b.gw.example.com`), or a workspace not in the snapshot: `404 {"error":"workspace_not_found"}`. Suspended: `403 {"error":"workspace_suspended"}`, before any route matching.
+- The workspace is put on the per-request notes card (`reqctx`), so every later step uses the same workspace and config version; the request log line (and a panic's) carries its id as `workspace_id`.
 - `X-Workspace-ID` from the client is removed; the gateway sets a trusted one for the backend.
 - Custom domains later: more host labels per workspace (`workspace_hosts`), same lookup.
 
@@ -950,7 +950,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Gateway | `CONFIG_WAIT` | `30s` (how long the control plane may hold a config request; whole seconds, 1 to 60) |
 | Gateway | `LISTEN_ADDR` | `:8080` (set in `docker-compose.yml`, next to the port mapping that depends on it) |
 | Gateway | `SHUTDOWN_TIMEOUT` | optional, default `5s` (time given to in-flight requests on stop) |
-| Gateway | `GATEWAY_BASE_DOMAIN` | `localhost` locally; e.g. `gw.example.com` in production (MT) |
+| Gateway | `GATEWAY_BASE_DOMAIN` | optional, default `localhost` (where `acme.localhost` needs no DNS); e.g. `gw.example.com` in production (MT.7) |
 | Gateway | `UPSTREAM_ALLOW` | same value as the control plane's (MT) |
 
 The MVP's `JWT_SECRET`, `JWT_EXPIRE_MINUTES`, `ADMIN_EMAIL` and `ADMIN_PASSWORD` are removed in MT. The gateway container gets only the variables it uses, not the whole `.env`: it never needs the database password, the GoTrue secrets or the service-role key.
@@ -1026,7 +1026,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]
 - [x] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]
 - [x] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
-- [ ] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]
+- [x] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]
 - [ ] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
 - [ ] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
 - [ ] MT.10 Load balancing: targets, weighted round robin, active and passive health checks [14]
@@ -1063,7 +1063,7 @@ Each service has its own tests, and one end-to-end script proves the whole stack
 **Observability**
 
 - **MVP:** structured JSON logs from both services, with the request ID carried from the gateway to the backend.
-- **MT:** `workspace_id` on every log line of both services; admin changes in the audit log; login events in GoTrue's own log.
+- **MT:** `workspace_id` on every log line of both services; admin changes in the audit log; login events in GoTrue's own log. Since MT.7 the control plane writes JSON lines: one `request` line per call (method, path without the query string, status, `latency_ms`, `request_id`, `workspace_id`; not `/health`), replacing uvicorn's access log, and every app log line during a request carries `request_id` and `workspace_id`. `httpx` logs at WARNING only (its INFO lines would show GoTrue lookups by email).
 - **v2:** Prometheus metrics from the gateway (`requests_total` by workspace, route and status, a latency histogram, `ratelimited_total`, target health, config sequence and last sync time) and a Grafana dashboard.
 - **v3:** OpenTelemetry traces across gateway and backend.
 

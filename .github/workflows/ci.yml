@@ -143,6 +143,7 @@ jobs:
           done
           go test -run='^$' -fuzz='^FuzzValidRequestID$' -fuzztime=10s ./internal/middleware
           go test -run='^$' -fuzz='^FuzzParseAnswer$' -fuzztime=10s ./internal/config
+          go test -run='^$' -fuzz='^FuzzLabel$' -fuzztime=10s ./internal/tenant
 
       - name: Docker image builds
         run: docker build --tag gateway:ci .

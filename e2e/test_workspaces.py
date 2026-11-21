@@ -44,12 +44,12 @@ def test_platform_admin_needs_mfa_outside_their_own_workspaces(
     assert admin.get(f"/workspaces/{TENANT}/services").status_code == 200  # with MFA
 
 
-def test_two_workspaces_may_publish_the_same_path_and_only_default_is_served(
+def test_the_bare_host_serves_only_default(
     owner: httpx.Client, world: World, gateway: httpx.Client
 ) -> None:
-    # Path prefixes are unique per workspace now. Until the gateway tells
-    # workspaces apart by Host (MT.7) it serves `default` only, so the
-    # tenant's route must never answer there.
+    # Path prefixes are unique per workspace. A request without a workspace
+    # subdomain goes to `default` (MT.7), so another workspace's route on the
+    # same path must never answer there (test_tenancy.py covers subdomains).
     prefix = world.prefix("shared")
     tenant = f"/workspaces/{TENANT}"
     service = owner.post(

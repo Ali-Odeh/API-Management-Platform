@@ -11,26 +11,17 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
 )
 
-// SnapshotSource gives the config snapshot in use, or nil before the first
-// one arrives. *config.Store satisfies it; tests pass a fake.
-//
-// The interface is declared here, where it is used, not in package config:
-// the router asks only for what it needs.
-type SnapshotSource interface {
-	Current() *config.Snapshot
-}
-
-// Router matches every API request to a route. It answers 503, 404 or 405
-// itself; a matched request goes on to next with the match in its context.
+// Router matches every API request to a route of its workspace. It answers
+// 400, 404 or 405 itself; a matched request goes on to next with the match
+// in its context.
 type Router struct {
-	source SnapshotSource
-	next   http.Handler
+	next http.Handler
 }
 
-// NewRouter builds a router that reads routes from source and passes matched
-// requests to next.
-func NewRouter(source SnapshotSource, next http.Handler) *Router {
-	return &Router{source: source, next: next}
+// NewRouter builds a router that matches requests within the workspace
+// tenant found for them, and passes matched requests to next.
+func NewRouter(next http.Handler) *Router {
+	return &Router{next: next}
 }
 
 func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -42,21 +33,14 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the config once. The whole request (matching now, the key check
-	// later) uses this one snapshot, even if a newer one arrives while the
-	// request is running.
-	snap := rt.source.Current()
-	if snap == nil {
-		w.Header().Set("Retry-After", "1")
-		respond.Error(w, http.StatusServiceUnavailable, "config_not_loaded")
-		return
-	}
-
-	// Every request goes to `default` until the gateway tells workspaces
-	// apart by Host (MT.7). Without it in the config, no route can match.
-	ws := snap.Default()
+	// The workspace tenant took from the one snapshot it read: matching now
+	// and the key check later use only its routes and keys, even if a newer
+	// config arrives while the request is running.
+	info := reqctx.From(r.Context())
+	ws := info.Workspace
 	if ws == nil {
-		respond.Error(w, http.StatusNotFound, "route_not_found")
+		// Only possible if main wires the router without tenant before it.
+		respond.Error(w, http.StatusInternalServerError, "internal_error")
 		return
 	}
 
@@ -71,7 +55,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reqctx.From(r.Context()).RouteID = route.ID // for the request log
+	info.RouteID = route.ID // for the request log
 	ctx := context.WithValue(r.Context(), matchKey{}, Match{Workspace: ws, Route: route})
 	rt.next.ServeHTTP(w, r.WithContext(ctx))
 }

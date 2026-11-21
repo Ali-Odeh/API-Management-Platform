@@ -67,7 +67,7 @@ func newGateway(t *testing.T, tr testRoute) (http.Handler, *strings.Builder) {
 	}}})
 	logs := &strings.Builder{}
 	f := NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)))
-	return NewRouter(fakeSource{snap}, f), logs
+	return routed(snap, f), logs
 }
 
 func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
