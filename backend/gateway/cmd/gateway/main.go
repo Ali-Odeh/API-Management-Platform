@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/inflight"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
@@ -100,7 +101,7 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // apiHandler builds the path of every API request, outermost first:
 //
 //	request ID → logger → recover → tenant (503/404/403) → router (400/404/405)
-//	  → auth (401/403) → rate limit (429) → forwarder (502/504)
+//	  → auth (401/403) → rate limit (429) → in flight (503) → forwarder (502/504)
 //
 // Recover sits inside the logger, so a panic's 500 shows in the request log.
 // Tenant finds the workspace from the Host before anything else: matching,
@@ -108,7 +109,8 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // the router: it needs the route (auth_required) and the workspace's keys.
 // The rate limit comes after auth: it needs the consumer, and refused
 // requests must cost no budget. It checks the workspace's bucket on every
-// request, public routes included.
+// request, public routes included. The in-flight limit comes last, so only
+// requests on their way to a backend hold one of the workspace's slots.
 // GET /health is answered by the server before this chain, so Docker's
 // health checks don't fill the log.
 func apiHandler(source tenant.SnapshotSource, baseDomain string, limiter middleware.Allower, log *slog.Logger) http.Handler {
@@ -116,6 +118,7 @@ func apiHandler(source tenant.SnapshotSource, baseDomain string, limiter middlew
 		proxy.NewForwarder(log),
 		middleware.Auth(log),
 		middleware.RateLimit(limiter, log),
+		middleware.InFlight(&inflight.Limiter{}, log),
 	)
 	return middleware.Chain(
 		proxy.NewRouter(afterMatch),
