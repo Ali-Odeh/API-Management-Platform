@@ -570,6 +570,114 @@
         "title": "KeyOut",
         "type": "object"
       },
+      "LimitOverrides": {
+        "description": "The workspace's own limits; null = the platform default.",
+        "properties": {
+          "max_concurrent": {
+            "anyOf": [
+              {
+                "description": "Requests in flight per gateway",
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Concurrent"
+          },
+          "max_consumers": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Consumers"
+          },
+          "max_routes": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Routes"
+          },
+          "max_services": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Services"
+          },
+          "rate_limit_per_min": {
+            "anyOf": [
+              {
+                "description": "Requests per minute",
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per Min"
+          }
+        },
+        "title": "LimitOverrides",
+        "type": "object"
+      },
+      "Limits": {
+        "description": "The limits as they apply: the workspace's own, or the platform default.",
+        "properties": {
+          "max_concurrent": {
+            "title": "Max Concurrent",
+            "type": "integer"
+          },
+          "max_consumers": {
+            "title": "Max Consumers",
+            "type": "integer"
+          },
+          "max_routes": {
+            "title": "Max Routes",
+            "type": "integer"
+          },
+          "max_services": {
+            "title": "Max Services",
+            "type": "integer"
+          },
+          "rate_limit_per_min": {
+            "title": "Rate Limit Per Min",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rate_limit_per_min",
+          "max_concurrent",
+          "max_services",
+          "max_routes",
+          "max_consumers"
+        ],
+        "title": "Limits",
+        "type": "object"
+      },
       "MemberAdded": {
         "properties": {
           "added_by": {
@@ -716,14 +824,45 @@
             "title": "Created At",
             "type": "string"
           },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
           },
+          "limit_overrides": {
+            "$ref": "#/components/schemas/LimitOverrides"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "purge_after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A deleted workspace can be restored until then",
+            "title": "Purge After"
           },
           "role": {
             "$ref": "#/components/schemas/Role"
@@ -731,12 +870,32 @@
           "slug": {
             "title": "Slug",
             "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceStatus"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
           }
         },
         "required": [
           "id",
           "name",
           "slug",
+          "status",
+          "status_reason",
+          "deleted_at",
+          "purge_after",
+          "limits",
+          "limit_overrides",
           "created_at",
           "role"
         ],
@@ -1329,6 +1488,48 @@
         "title": "ServiceUpdate",
         "type": "object"
       },
+      "Suspension": {
+        "properties": {
+          "reason": {
+            "description": "Shown to the workspace's members",
+            "examples": [
+              "Abuse report #1234"
+            ],
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "Suspension",
+        "type": "object"
+      },
+      "Usage": {
+        "properties": {
+          "consumers": {
+            "title": "Consumers",
+            "type": "integer"
+          },
+          "routes": {
+            "title": "Routes",
+            "type": "integer"
+          },
+          "services": {
+            "title": "Services",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "services",
+          "routes",
+          "consumers"
+        ],
+        "title": "Usage",
+        "type": "object"
+      },
       "UserOut": {
         "properties": {
           "created_at": {
@@ -1453,6 +1654,109 @@
         "title": "WorkspaceCreate",
         "type": "object"
       },
+      "WorkspaceDelete": {
+        "properties": {
+          "confirm": {
+            "description": "The workspace's slug, typed again",
+            "examples": [
+              "acme"
+            ],
+            "title": "Confirm",
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm"
+        ],
+        "title": "WorkspaceDelete",
+        "type": "object"
+      },
+      "WorkspaceDetail": {
+        "description": "One workspace, with how much of each quota it uses.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "limit_overrides": {
+            "$ref": "#/components/schemas/LimitOverrides"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "purge_after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A deleted workspace can be restored until then",
+            "title": "Purge After"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceStatus"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/Usage"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "status",
+          "status_reason",
+          "deleted_at",
+          "purge_after",
+          "limits",
+          "limit_overrides",
+          "created_at",
+          "usage"
+        ],
+        "title": "WorkspaceDetail",
+        "type": "object"
+      },
       "WorkspaceOut": {
         "properties": {
           "created_at": {
@@ -1460,27 +1764,109 @@
             "title": "Created At",
             "type": "string"
           },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
           },
+          "limit_overrides": {
+            "$ref": "#/components/schemas/LimitOverrides"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/Limits"
+          },
           "name": {
             "title": "Name",
             "type": "string"
           },
+          "purge_after": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A deleted workspace can be restored until then",
+            "title": "Purge After"
+          },
           "slug": {
             "title": "Slug",
             "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceStatus"
+          },
+          "status_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Reason"
           }
         },
         "required": [
           "id",
           "name",
           "slug",
+          "status",
+          "status_reason",
+          "deleted_at",
+          "purge_after",
+          "limits",
+          "limit_overrides",
           "created_at"
         ],
         "title": "WorkspaceOut",
+        "type": "object"
+      },
+      "WorkspaceStatus": {
+        "description": "Where a workspace is in its life (decision 10).",
+        "enum": [
+          "active",
+          "suspended",
+          "deleted",
+          "purged"
+        ],
+        "title": "WorkspaceStatus",
+        "type": "string"
+      },
+      "WorkspaceUpdate": {
+        "description": "Rename; the slug never changes (it is the gateway subdomain).",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "WorkspaceUpdate",
         "type": "object"
       }
     },
@@ -1761,7 +2147,7 @@
     },
     "/api/v1/me/workspaces": {
       "get": {
-        "description": "The workspaces I belong to and my role in each.",
+        "description": "The workspaces I belong to (suspended ones included) and my role in each.",
         "operationId": "my_workspaces_api_v1_me_workspaces_get",
         "parameters": [
           {
@@ -2038,9 +2424,27 @@
     },
     "/api/v1/workspaces": {
       "get": {
-        "description": "Every workspace (Platform Admin, with MFA).",
+        "description": "Every workspace, deleted and purged ones included (Platform Admin, with MFA).",
         "operationId": "list_workspaces_api_v1_workspaces_get",
         "parameters": [
+          {
+            "description": "Only this status",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/WorkspaceStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this status",
+              "title": "Status"
+            }
+          },
           {
             "description": "Page number, starting at 1",
             "in": "query",
@@ -2173,7 +2577,7 @@
                 }
               }
             },
-            "description": "Slug already taken"
+            "description": "Slug already taken (also by a deleted or purged workspace)"
           },
           "422": {
             "content": {
@@ -2198,7 +2602,97 @@
       }
     },
     "/api/v1/workspaces/{slug}": {
+      "delete": {
+        "description": "Delete the workspace: hidden from its members at once, restorable by the\nPlatform Admin until `purge_after`, then purged for good.",
+        "operationId": "delete_workspace_api_v1_workspaces__slug__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceDelete"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "default_workspace: it can't be deleted"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "`confirm` isn't the workspace's slug"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Workspace",
+        "tags": [
+          "workspaces"
+        ]
+      },
       "get": {
+        "description": "The workspace, its limits and how much of each quota it uses.",
         "operationId": "get_workspace_api_v1_workspaces__slug__get",
         "parameters": [
           {
@@ -2211,6 +2705,92 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Workspace",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "patch": {
+        "description": "Change the name; the slug (the gateway subdomain) never changes.",
+        "operationId": "rename_workspace_api_v1_workspaces__slug__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -2268,7 +2848,7 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Workspace",
+        "summary": "Rename Workspace",
         "tags": [
           "workspaces"
         ]
@@ -3658,6 +4238,94 @@
         ]
       }
     },
+    "/api/v1/workspaces/{slug}/restore": {
+      "post": {
+        "description": "Bring a deleted workspace back (active) before it is purged.",
+        "operationId": "restore_workspace_api_v1_workspaces__slug__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "workspace_<status>: only a deleted one; restore_period_over: past its purge_after"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore Workspace",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/workspaces/{slug}/routes": {
       "get": {
         "operationId": "list_routes_api_v1_workspaces__slug__routes_get",
@@ -4622,6 +5290,191 @@
         "summary": "Update Service",
         "tags": [
           "services"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/suspend": {
+      "post": {
+        "description": "Refuse the workspace's traffic and make it read-only for its members.",
+        "operationId": "suspend_workspace_api_v1_workspaces__slug__suspend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Suspension"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "default_workspace, or workspace_<status>: only an active one"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Suspend Workspace",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/unsuspend": {
+      "post": {
+        "operationId": "unsuspend_workspace_api_v1_workspaces__slug__unsuspend_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "workspace_<status>: only a suspended one"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unsuspend Workspace",
+        "tags": [
+          "platform"
         ]
       }
     },

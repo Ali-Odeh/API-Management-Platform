@@ -100,11 +100,11 @@ async def remove_member(user_id: uuid.UUID, access: CanWrite, db: DbSession) -> 
 async def leave_workspace(slug: str, request: Request, user: CurrentUser, db: DbSession) -> None:
     """Leave a workspace I belong to (any role); its last active Owner can't."""
     found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=user.id)
-    if found is None or found[1] is None:
+    if found is None or found.role is None:
         raise NotFoundError(WORKSPACE_NOT_FOUND)
     await crud.leave(
         db,
-        found[0],
+        found.workspace_id,
         user_id=user.id,
         audit_ctx=request_audit(request, ActorType.USER, user),
     )
