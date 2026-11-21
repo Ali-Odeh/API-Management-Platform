@@ -202,7 +202,9 @@ def test_public_route_needs_no_key(gateway: httpx.Client, world: World) -> None:
     route = world.route(world.service("public"), "public", auth_required=False)
     r = wait_for(lambda: gateway.get(route["path_prefix"]), 200)
     assert r.status_code == 200, r.text
-    assert "X-RateLimit-Limit" not in r.headers  # no consumer, so no limit
+    # No consumer, but the workspace's own limit applies (MT.8).
+    limits = world.admin.get(world.base).json()["limits"]
+    assert r.headers["X-RateLimit-Limit"] == str(limits["rate_limit_per_min"])
 
 
 def test_gateway_health(gateway: httpx.Client) -> None:
