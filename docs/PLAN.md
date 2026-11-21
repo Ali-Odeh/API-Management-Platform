@@ -377,7 +377,7 @@ The agent writes the Alembic migrations to match this exactly; column lengths an
 | `routes` | `workspace_id` (FK), `service_id` (FK), `path_prefix`, `methods` (text array), `strip_prefix`, `auth_required`, `is_active`, `max_body_bytes` (NULL = default), `cors_origins` (text array, empty = CORS off), `cors_methods`, `cors_headers`, `cors_credentials`, `cors_max_age` | `path_prefix` unique **per workspace** (was global in the MVP); the gateway separates workspaces by Host |
 | `consumers` | `workspace_id` (FK), `name`, `email`, `status` (`active` or `blocked`), `rate_limit_per_min` (default 60) | Unchanged |
 | `api_keys` | `workspace_id` (FK), `consumer_id` (FK), `key_prefix`, `key_hash` (unique), `name`, `last_used_at`, `revoked_at` | Unchanged; the raw key is never stored |
-| `config_seq` | `id` (always 1), `seq` (bigint), `updated_at` | Single row (a CHECK forbids a second one). Replaces `config_version`. System state: no uuid, no `workspace_id` |
+| `config_seq` | `id` (always 1), `seq` (bigint), `generation` (UUID), `updated_at` | Single row (a CHECK forbids a second one). A new database gets a new generation. Rotate it when restoring a backup. |
 | `workspace_config` | `workspace_id` (PK, FK), `version` (bigint), `seq` (bigint, indexed) | One row per workspace. `seq` = the global sequence at the workspace's last change |
 | `audit_events` | `workspace_id` (nullable), `actor_user_id`, `actor_email`, `actor_type` (`user`, `platform_admin`, `system`), `action`, `target_type`, `target_id`, `target_name`, `changes` (jsonb), `request_id`, `ip`, `user_agent` | Append-only (see below). `workspace_id` NULL = platform-level event. No FK on `workspace_id`, so platform-level rows survive a purge |
 
@@ -403,7 +403,7 @@ The application's database user has only `INSERT` and `SELECT` on `audit_events`
 | Login | Setting | May |
 | --- | --- | --- |
 | the owner (`POSTGRES_USER`) | `MIGRATION_DATABASE_URL` | everything: migrations and setup only |
-| `apim_app` | `DATABASE_URL` | read and write every table, but only `INSERT` and `SELECT` on `audit_events`; never `alembic_version` |
+| `apim_app` | `DATABASE_URL` | read and write application tables, with only `INSERT` and `SELECT` on `audit_events`, only `SELECT` on `config_seq` and `workspace_config`, and no access to `alembic_version` |
 | `apim_retention` | `AUDIT_RETENTION_DATABASE_URL` | `SELECT` and `DELETE` on `audit_events`, nothing else |
 | `apim_purge` | `PURGE_DATABASE_URL` | the workspace purge job (MT.5): `SELECT` and `DELETE` on every table with workspace data, audit events included; `INSERT` on `audit_events` (its own `workspace.purged`); `UPDATE` of `workspaces.status` only. The config triggers its deletes run need nothing more: `bump_workspaces` is `SECURITY DEFINER` (MT.6) |
 
@@ -597,6 +597,7 @@ ETag: "1046"
 **Details:**
 
 - `since` = the last `seq` the gateway applied (0 at start). Workspaces with `workspace_config.seq > since` come back, each **complete**. `full: true` (every workspace) when `since` is 0, newer than the database's sequence, or otherwise unusable.
+- Every `200` includes `X-Config-Generation`. The gateway echoes it from the last applied answer. A different generation forces a full answer even when `since` equals the current sequence. Callers omitting the header keep the sequence-only behavior. The restore procedure rotates the generation before bringing the API back up.
 - Nothing changed and `wait` > 0: the request is held until `NOTIFY config_changed` or the time runs out (`304`). `wait` is 0 to 60 seconds; the gateway sends 30.
 - `deleted` lists workspaces that left the config (deleted or purged). Suspended workspaces stay in with `status: "suspended"`, so the gateway can answer 403.
 - `hosts` holds the workspace's host labels (its slug today; custom domains later through `workspace_hosts`).
@@ -606,7 +607,7 @@ ETag: "1046"
 - Until service targets exist (MT.10), each service has exactly one target: its `upstream_url`, with the service's id as the target id and weight 100. Health-check, load-balancing, CORS and body-limit fields arrive with the steps that add them (MT.10, MT.11); the gateway ignores fields it doesn't know.
 - `304` carries `ETag: "<since>"`; a `200` carries `ETag: "<seq>"`. `?workspaces=` takes slugs; unknown ones are ignored.
 - Only active routes on active services with at least one active target, and non-revoked keys. Keys of blocked consumers stay in with `consumer_status: "blocked"`, so the gateway can answer `403`. Lists are sorted (routes by `path_prefix`, keys by `id`).
-- The sequence and the data are read in one `REPEATABLE READ` transaction, so they always match. Each `(workspace_id, version)` is built once and cached for every gateway that asks.
+- The generation, sequence and data are read in one `REPEATABLE READ` transaction. A generation change discards the cached workspace versions. The control plane streams complete workspaces in the JSON envelope and the gateway decodes them one at a time. It advances the cursor after the complete answer has been read and validated. An incomplete answer triggers a full resync.
 - Each control-plane process keeps one dedicated Postgres connection for `LISTEN`, reconnecting on its own. After waking or timing out, the sequence is re-read from the database, so a lost notification can delay an update but never hide it.
 - `?workspaces=acme,globex` (optional) limits the answer to those workspaces, for a dedicated gateway later.
 
@@ -710,7 +711,7 @@ Details (step 3.2):
 - The server starts without waiting for config. Until the first snapshot arrives the store is empty; step 3.3 answers such requests with `503 {"error":"config_not_loaded"}`.
 - Backoff after a failure: 1 s, 2 s, 4 s ... up to 30 s, each with random jitter (half to all of the value), reset after a success. A `304` is not a failure: the next request goes out at once, but never more than one per 250 ms.
 - The HTTP client timeout is `CONFIG_WAIT` + 10 s, so a held request is never cut short. Shutdown cancels a held request at once.
-- A body that isn't valid JSON or has no `seq` is rejected whole. A single bad route, target or key is skipped with a warning and the rest applied, so one bad row can't block other changes such as key revocations. Unknown JSON fields are ignored.
+- A body that isn't valid JSON, has no `seq`, is incomplete, has a workspace without an id, or is larger than 1 GiB is rejected whole: the snapshot stays and the next request asks with `since=0`. A workspace that can't be read (no slug, unknown status) is **dropped**: it stops being served, so its old keys can't stay valid, and the rest of the answer applies; after a partial answer the next request asks for everything, in case it was a one-off. A single bad route, target or key is skipped with a warning and the rest of its workspace applied, so one bad row can't block other changes such as key revocations. Unknown JSON fields are ignored.
 - A lower sequence than the current one only comes as a `full` answer (for example after a database reset) and is accepted: the control plane is the source of truth. A non-full answer with a lower sequence, or before any full one, is a protocol error: the gateway keeps its snapshot and, after the usual backoff, asks again with `since=0` (MT.6).
 
 **Token bucket**

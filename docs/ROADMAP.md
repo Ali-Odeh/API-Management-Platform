@@ -26,8 +26,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1195 passing (about 5.5 min), including the config triggers column by column, including permission, isolation and audit guards over every endpoint and every role, every endpoint in a suspended and in a deleted workspace, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
-| Coverage | 100% (minimum 90%) |
+| Tests | 1198 passing (about 7 min), including config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
+| Coverage | 99% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
 | Run all checks | `.\backend\control-plane\scripts\check.ps1` (`-Fix` to autofix) |
@@ -36,9 +36,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 399 passing (tests, table cases and fuzz seeds), about 3 s; the Redis tests need Docker's Redis; mock backend 7 |
-| Coverage | **98.3%** total (minimum 90%, enforced): 6 packages at 100%, config 99.3%, server 97.4%, ratelimit 95.2%, main 87.0% |
-| Fuzz tests | 5 (paths, matching, prefix stripping, request IDs); about 1.6 million random inputs in the first runs; 10 s each in CI |
+| Tests | 412 passing (tests, table cases and fuzz seeds), including config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
+| Coverage | **97.2%** total (minimum 90%, enforced), config 95.8%, server 97.4%, ratelimit 95.2%, main 87.0% |
+| Fuzz tests | 6 (paths, matching, prefix stripping, request IDs and config answers), 10 s each in CI |
 | Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; whole chain without network **≈ 8.5 µs**; one rate-limit check **≈ 0.48 ms** (Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back |
@@ -489,3 +489,5 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.6 | The answer carries every workspace; the gateway serves only `default` until MT.7 (no `default` → `404 route_not_found`) | Replaces the MT.2 rule "only `default` in the answer": the isolation now lives in the gateway, where MT.7 extends it to every Host |
 | Nov 22 | MT.6 | The per-`(workspace, version)` cache keeps one entry per workspace (its latest version) and drops deleted ones; one answer is built at a time | Bounded by the number of workspaces; a change waking many gateways builds each workspace once |
 | Nov 22 | MT.6 | A protocol error (a partial answer before any full one, or behind the current `seq`) keeps the snapshot and asks `since=0` after the usual backoff | Never guess; the backoff stops a misbehaving control plane from causing a busy loop |
+| Nov 22 | MT.6 | Review fixes add `X-Config-Generation`, make config tables read-only to the API role, and stream the existing JSON envelope by workspace | A restore can reuse sequence numbers, runtime writes belong in the triggers, and full sync must handle configs larger than 64 MiB |
+| Nov 22 | MT.6 | A workspace the gateway can't read is dropped (not served) and the rest of the answer applies; after a partial answer the gateway asks `since=0`. An answer is still refused whole when it is unreadable, incomplete, has a workspace without an id, or is over 1 GiB (second review) | Keeping its old config would leave stale keys in service; refusing the whole answer froze every tenant on one bad workspace, and a new gateway couldn't load any config. The cap was removed with the 64 MiB limit; 1 GiB keeps large configs working while a broken answer can't exhaust memory |
