@@ -17,13 +17,6 @@ import (
 // with checked, ready-to-use values (a parsed URL, a time.Duration) instead
 // of raw JSON. Unknown JSON fields are ignored, so the control plane can add
 // fields (target health checks, CORS) without breaking older gateways.
-type wireAnswer struct {
-	Seq        *int64          `json:"seq"` // a pointer, so a missing seq is nil, not 0
-	Full       bool            `json:"full"`
-	Workspaces []wireWorkspace `json:"workspaces"`
-	Deleted    []string        `json:"deleted"`
-}
-
 type wireWorkspace struct {
 	ID       string        `json:"id"`
 	Slug     string        `json:"slug"`
@@ -77,43 +70,115 @@ type answer struct {
 	Full       bool
 	Workspaces []*Workspace
 	Deleted    []string
+	Dropped    []string // workspaces that couldn't be read: not served, not kept stale
 }
 
 // parseAnswer turns a /internal/config body into an answer.
 //
-// A body that can't be read at all is an error, and the caller keeps its old
-// snapshot. A single bad workspace, route or key is only skipped and
-// reported in skipped: rejecting the whole answer would also block every
-// other change, including key revocations, which is worse. The control plane
-// validates everything already, so this is a safety net.
+// Decode one workspace at a time, so a full answer doesn't need a second
+// copy of every workspace in memory. A workspace that can't be read is
+// dropped (Dropped): keeping its previous config would leave stale keys in
+// service, and rejecting the whole answer would freeze every other
+// workspace too. One without an id can't be dropped alone, so it fails the
+// answer. A bad route or key is left out of the workspace that replaces it.
 func parseAnswer(body io.Reader) (a answer, skipped []error, err error) {
-	var w wireAnswer
-	if err := json.NewDecoder(body).Decode(&w); err != nil {
-		return answer{}, nil, fmt.Errorf("invalid JSON: %w", err)
+	decoder := json.NewDecoder(body)
+	if err := expectToken(decoder, '{'); err != nil {
+		return answer{}, nil, err
 	}
-	if w.Seq == nil {
+	var seq *int64
+	var full *bool
+	seen := make(map[string]bool)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return answer{}, nil, fmt.Errorf("invalid JSON: %w", err)
+		}
+		name := token.(string) // JSON object keys are always strings
+		if seen[name] {
+			return answer{}, nil, fmt.Errorf("duplicate config field %q", name)
+		}
+		seen[name] = true
+		switch name {
+		case "seq":
+			err = decoder.Decode(&seq)
+		case "full":
+			err = decoder.Decode(&full)
+		case "workspaces":
+			a.Workspaces, a.Dropped, skipped, err = decodeWorkspaces(decoder)
+		case "deleted":
+			err = decoder.Decode(&a.Deleted)
+		default:
+			var ignored json.RawMessage
+			err = decoder.Decode(&ignored)
+		}
+		if err != nil {
+			return answer{}, nil, fmt.Errorf("invalid JSON config field %q: %w", name, err)
+		}
+	}
+	if err := expectToken(decoder, '}'); err != nil {
+		return answer{}, nil, err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return answer{}, nil, errors.New("invalid JSON: data after config answer")
+	}
+	if seq == nil {
 		return answer{}, nil, errors.New(`missing "seq"`)
 	}
-	a = answer{Seq: *w.Seq, Full: w.Full, Deleted: w.Deleted}
-	for _, ww := range w.Workspaces {
-		ws, wsSkipped, err := ww.toWorkspace()
-		skipped = append(skipped, wsSkipped...)
-		if err != nil {
-			skipped = append(skipped, fmt.Errorf("workspace %s: %w", ww.ID, err))
-			continue
-		}
-		a.Workspaces = append(a.Workspaces, ws)
+	if *seq <= 0 || full == nil || !seen["workspaces"] || a.Deleted == nil {
+		return answer{}, nil, errors.New("incomplete config answer")
 	}
+	a.Seq, a.Full = *seq, *full
 	return a, skipped, nil
 }
 
+func expectToken(decoder *json.Decoder, want json.Delim) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return fmt.Errorf("invalid JSON: %w", err)
+	}
+	if token != want {
+		return fmt.Errorf("invalid JSON: expected %q", want)
+	}
+	return nil
+}
+
+func decodeWorkspaces(decoder *json.Decoder) (workspaces []*Workspace, dropped []string, skipped []error, err error) {
+	if err := expectToken(decoder, '['); err != nil {
+		return nil, nil, nil, err
+	}
+	seen := make(map[string]bool)
+	for decoder.More() {
+		var ww wireWorkspace
+		if err := decoder.Decode(&ww); err != nil {
+			return nil, nil, nil, err
+		}
+		if ww.ID == "" {
+			return nil, nil, nil, errors.New("a workspace without an id")
+		}
+		if seen[ww.ID] {
+			return nil, nil, nil, fmt.Errorf("duplicate workspace %s", ww.ID)
+		}
+		seen[ww.ID] = true
+		ws, wsSkipped, err := ww.toWorkspace()
+		if err != nil {
+			dropped = append(dropped, ww.ID)
+			skipped = append(skipped, fmt.Errorf("workspace %s not served: %w", ww.ID, err))
+			continue
+		}
+		skipped = append(skipped, wsSkipped...)
+		workspaces = append(workspaces, ws)
+	}
+	return workspaces, dropped, skipped, expectToken(decoder, ']')
+}
+
 func (w wireWorkspace) toWorkspace() (ws *Workspace, skipped []error, err error) {
-	if w.ID == "" || w.Slug == "" {
-		return nil, nil, errors.New("no id or slug")
+	if w.Slug == "" {
+		return nil, nil, errors.New("no slug")
 	}
 	status := WorkspaceStatus(w.Status)
 	if status != WorkspaceActive && status != WorkspaceSuspended {
-		// Unknown means "not served": leaving it out answers 404 (MT.7).
+		// Unknown means "not served": it is dropped, and answers 404 (MT.7).
 		return nil, nil, fmt.Errorf("unknown status %q", w.Status)
 	}
 	ws = &Workspace{

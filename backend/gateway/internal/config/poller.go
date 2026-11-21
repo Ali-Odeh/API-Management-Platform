@@ -18,8 +18,10 @@ const (
 	// Extra time on top of CONFIG_WAIT before a held request counts as lost.
 	// The control plane answers by CONFIG_WAIT at the latest.
 	clientTimeoutMargin = 10 * time.Second
-	// Upper bound for an answer's body, so a broken answer can't eat memory.
-	maxAnswerBytes = 64 << 20 // 64 MiB
+	generationHeader    = "X-Config-Generation"
+	// Upper bound for an answer's body: big enough for a full config of many
+	// workspaces, small enough that a broken answer can't exhaust memory.
+	defaultMaxAnswerBytes = 1 << 30 // 1 GiB
 	// Never ask more often than this, even if the control plane answers
 	// instantly every time (a bug or a proxy that ignores ?wait=). Without it
 	// such a bug would turn the loop into a busy loop.
@@ -40,7 +42,9 @@ type Poller struct {
 	log         *slog.Logger
 	backoff     backoff
 	minInterval time.Duration
+	maxBytes    int64
 	resync      bool // the next request asks for everything (since=0)
+	generation  string
 }
 
 // NewPoller builds a poller that writes into store. Call Run to start it.
@@ -54,6 +58,7 @@ func NewPoller(cfg settings.Settings, store *Store, log *slog.Logger) *Poller {
 		log:         log,
 		backoff:     backoff{min: time.Second, max: 30 * time.Second},
 		minInterval: defaultMinInterval,
+		maxBytes:    defaultMaxAnswerBytes,
 	}
 }
 
@@ -95,6 +100,9 @@ func (p *Poller) poll(ctx context.Context) error {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("X-Internal-Token", p.token.Reveal())
+	if p.generation != "" {
+		req.Header.Set(generationHeader, p.generation)
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -104,8 +112,11 @@ func (p *Poller) poll(ctx context.Context) error {
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return p.apply(resp.Body)
+		return p.apply(resp.Body, resp.Header.Get(generationHeader))
 	case http.StatusNotModified:
+		if p.since() == 0 {
+			return fmt.Errorf("%w: 304 when a full answer was requested", errProtocol)
+		}
 		return nil
 	case http.StatusUnauthorized:
 		return errors.New("control plane answered 401: INTERNAL_TOKEN does not match the control plane's")
@@ -127,10 +138,15 @@ func (p *Poller) since() int64 {
 
 // apply parses a 200 body, merges it into the current snapshot and makes
 // the result current.
-func (p *Poller) apply(body io.Reader) error {
-	a, skipped, err := parseAnswer(io.LimitReader(body, maxAnswerBytes))
+func (p *Poller) apply(body io.Reader, generation string) error {
+	a, skipped, err := parseAnswer(&cappedReader{r: body, left: p.maxBytes})
 	if err != nil {
+		p.resync = true
 		return fmt.Errorf("read config: %w", err)
+	}
+	if !a.Full && (p.resync || generation != p.generation) {
+		p.resync = true
+		return fmt.Errorf("%w: expected a full answer", errProtocol)
 	}
 	for _, reason := range skipped {
 		p.log.Warn("config entry skipped", "reason", reason.Error())
@@ -142,7 +158,11 @@ func (p *Poller) apply(body io.Reader) error {
 		p.resync = true // ask for everything next time
 		return err
 	}
-	p.resync = false
+	// A workspace dropped from a partial answer may have been a one-off: a
+	// full answer brings it back if it reads fine now. (From a full answer
+	// it comes back with its next change; asking again would only loop.)
+	p.resync = len(a.Dropped) > 0 && !a.Full
+	p.generation = generation
 	p.store.swap(next)
 	p.log.Info("config updated",
 		"seq", next.Seq, "previous_seq", seqOf(current), "full", a.Full,
@@ -176,4 +196,31 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
+}
+
+// errAnswerTooLarge: the body went past the poller's maxBytes.
+var errAnswerTooLarge = errors.New("config answer too large")
+
+// cappedReader reads at most left bytes, then fails with errAnswerTooLarge
+// if anything follows. A body of exactly the limit still reads to its EOF.
+type cappedReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		var probe [1]byte
+		n, err := c.r.Read(probe[:])
+		if n > 0 {
+			return 0, errAnswerTooLarge
+		}
+		return 0, err
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
 }

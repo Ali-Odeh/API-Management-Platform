@@ -70,6 +70,22 @@ func TestMergeDropsDeletedWorkspaces(t *testing.T) {
 	}
 }
 
+func TestMergeDropsUnreadableWorkspaces(t *testing.T) {
+	current := NewSnapshot(10, workspace("w1", "acme", 1), workspace("w2", "globex", 1))
+
+	next, err := merge(current, answer{Seq: 11, Dropped: []string{"w1"}})
+	if err != nil {
+		t.Fatalf("merge() error: %v", err)
+	}
+
+	if _, ok := next.Workspaces["w1"]; ok || next.ByHost["acme"] != nil {
+		t.Error("the dropped workspace is still served")
+	}
+	if next.Workspaces["w2"] == nil {
+		t.Error("the other workspace went too")
+	}
+}
+
 func TestMergeFullReplacesEverything(t *testing.T) {
 	current := NewSnapshot(50, workspace("w1", "acme", 9), workspace("w2", "globex", 9))
 	fresh := workspace("w1", "acme", 1)

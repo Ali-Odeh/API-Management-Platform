@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 )
 
 // errProtocol marks an answer that doesn't fit the snapshot it would be
@@ -36,7 +37,7 @@ func merge(current *Snapshot, a answer) (*Snapshot, error) {
 		Workspaces: maps.Clone(current.Workspaces), // a new map holding the same pointers
 		ByHost:     make(map[string]*Workspace, len(current.Workspaces)),
 	}
-	for _, id := range a.Deleted {
+	for _, id := range slices.Concat(a.Deleted, a.Dropped) {
 		delete(next.Workspaces, id)
 	}
 	for _, ws := range a.Workspaces {

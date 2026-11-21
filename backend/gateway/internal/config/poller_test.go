@@ -2,10 +2,12 @@ package config
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -225,15 +227,128 @@ func TestPollerKeepsConfigOnFailures(t *testing.T) {
 		}
 	}
 
-	// Still polling from the same sequence, and a new change is applied.
+	// A malformed answer requests a full resync and the last good config stays.
 	r := cp.next(t)
-	if since(r) != "43" {
-		t.Errorf("since = %q, want 43", since(r))
+	if since(r) != "0" {
+		t.Errorf("since = %q, want 0", since(r))
 	}
-	cp.respond(http.StatusOK, strings.Replace(validBody, `"seq": 43`, `"seq": 44`, 1))
+	cp.respond(http.StatusOK, fullBody("44"))
 	cp.next(t)
 	if seq := store.Current().Seq; seq != 44 {
 		t.Errorf("store seq = %d, want 44", seq)
+	}
+}
+
+func TestPollerReplacesConfigOnGenerationChange(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	store, _ := startPoller(t, cp)
+	cp.next(t)
+	cp.answers <- func(w http.ResponseWriter) {
+		w.Header().Set(generationHeader, "before")
+		_, _ = io.WriteString(w, fullBody("43"))
+	}
+	r := cp.next(t)
+	if since(r) != "43" || r.Header.Get(generationHeader) != "before" {
+		t.Fatalf("poll = %s, generation %q", r.URL, r.Header.Get(generationHeader))
+	}
+	cp.answers <- func(w http.ResponseWriter) {
+		w.Header().Set(generationHeader, "after")
+		_, _ = io.WriteString(w, `{"seq":43,"full":true,"workspaces":[],"deleted":[]}`)
+	}
+	r = cp.next(t)
+	if since(r) != "43" || r.Header.Get(generationHeader) != "after" {
+		t.Fatalf("poll = %s, generation %q", r.URL, r.Header.Get(generationHeader))
+	}
+	if len(store.Current().Workspaces) != 0 {
+		t.Fatal("the full answer must replace the old generation at the same sequence")
+	}
+}
+
+// A workspace that can't be read in a partial answer stops being served
+// (its old keys must not stay valid), the rest applies, and the next
+// request asks for everything in case it was a one-off.
+func TestPollerDropsAnUnreadableWorkspaceAndResyncs(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	store, _ := startPoller(t, cp)
+	cp.next(t)
+	cp.respond(http.StatusOK, fullBody("43"))
+	cp.next(t)
+	cp.respond(http.StatusOK, `{"seq":44,"full":false,"deleted":[],"workspaces":[
+	  {"id":"ws1","slug":"acme"},
+	  {"id":"ws2","slug":"globex","status":"active","hosts":["globex"]}]}`)
+
+	if r := cp.next(t); since(r) != "0" {
+		t.Errorf("since = %s, want 0 (a full answer to recover the dropped workspace)", since(r))
+	}
+	snap := store.Current()
+	if _, served := snap.Workspaces["ws1"]; served || snap.ByHost["acme"] != nil {
+		t.Error("the unreadable workspace is still served with its old config")
+	}
+	if snap.Seq != 44 || snap.ByHost["globex"] == nil {
+		t.Errorf("snapshot = %+v, want globex applied at seq 44", snap)
+	}
+}
+
+// From a full answer the unreadable workspace is just left out; asking for
+// everything again would get the same answer, in a loop.
+func TestPollerDropsAnUnreadableWorkspaceFromAFullAnswer(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	store, _ := startPoller(t, cp)
+	cp.next(t)
+	cp.respond(http.StatusOK, `{"seq":5,"full":true,"deleted":[],"workspaces":[
+	  {"id":"ws1","slug":"acme","status":"archived"},
+	  {"id":"ws2","slug":"globex","status":"active","hosts":["globex"]}]}`)
+
+	if r := cp.next(t); since(r) != "5" {
+		t.Errorf("since = %s, want 5", since(r))
+	}
+	if snap := store.Current(); len(snap.Workspaces) != 1 || snap.ByHost["globex"] == nil {
+		t.Errorf("snapshot = %+v, want only globex", snap)
+	}
+}
+
+func TestApplyRefusesAnAnswerOverTheCap(t *testing.T) {
+	store := &Store{}
+	p := NewPoller(settings.Settings{}, store, slog.New(slog.DiscardHandler))
+	body := `{"seq":1,"full":true,"workspaces":[],"deleted":[]}`
+
+	p.maxBytes = int64(len(body)) // exactly the limit still reads
+	if err := p.apply(strings.NewReader(body), "g"); err != nil {
+		t.Fatalf("an answer of exactly the limit: %v", err)
+	}
+	p.maxBytes = int64(len(body)) - 1
+	err := p.apply(strings.NewReader(body), "g")
+	if !errors.Is(err, errAnswerTooLarge) {
+		t.Fatalf("apply() error = %v, want errAnswerTooLarge", err)
+	}
+	if !p.resync || store.Current().Seq != 1 {
+		t.Error("an oversized answer must keep the snapshot and ask for everything again")
+	}
+	if NewPoller(settings.Settings{}, store, slog.New(slog.DiscardHandler)).maxBytes != 1<<30 {
+		t.Error("the default cap is not 1 GiB")
+	}
+}
+
+func TestApplyStreamsAnAnswerLargerThan64MiB(t *testing.T) {
+	store := &Store{}
+	p := NewPoller(settings.Settings{}, store, slog.New(slog.DiscardHandler))
+	parts := []io.Reader{strings.NewReader(`{"seq":4,"full":true,"deleted":[],"workspaces":[`)}
+	padding := strings.Repeat("x", 1<<20)
+	for i := range 65 {
+		if i > 0 {
+			parts = append(parts, strings.NewReader(","))
+		}
+		id := strconv.Itoa(i)
+		parts = append(parts,
+			strings.NewReader(`{"id":"`+id+`","slug":"`+id+`","status":"active","future_field":"`),
+			strings.NewReader(padding), strings.NewReader(`"}`))
+	}
+	parts = append(parts, strings.NewReader("]}"))
+	if err := p.apply(io.MultiReader(parts...), "generation"); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(store.Current().Workspaces); got != 65 {
+		t.Fatalf("got %d workspaces, want 65", got)
 	}
 }
 
@@ -298,7 +413,9 @@ func TestPollerRespectsMinimumInterval(t *testing.T) {
 	defer srv.Close()
 
 	cfg := settings.Settings{ControlPlaneURL: srv.URL, InternalToken: "t", ConfigWait: time.Second}
-	p := NewPoller(cfg, &Store{}, slog.New(slog.DiscardHandler))
+	store := &Store{}
+	store.swap(NewSnapshot(43))
+	p := NewPoller(cfg, store, slog.New(slog.DiscardHandler))
 	p.minInterval = 50 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
@@ -319,8 +436,8 @@ func TestApplyLogsSkippedEntries(t *testing.T) {
 	p := NewPoller(cfg, store, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	body := `{"seq": 5, "full": true, "workspaces": [{"id": "w", "slug": "default", "status": "active",
-		"services": [], "routes": [{"id": "bad", "service_id": "nope", "path_prefix": "/x", "methods": ["GET"]}]}]}`
-	if err := p.apply(strings.NewReader(body)); err != nil {
+		"services": [], "routes": [{"id": "bad", "service_id": "nope", "path_prefix": "/x", "methods": ["GET"]}]}], "deleted": []}`
+	if err := p.apply(strings.NewReader(body), ""); err != nil {
 		t.Fatalf("apply() error: %v", err)
 	}
 

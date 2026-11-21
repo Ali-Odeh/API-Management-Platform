@@ -111,6 +111,8 @@ func TestParseAnswerRejectsUnreadableBodies(t *testing.T) {
 		{name: "no seq", body: `{"full": true, "workspaces": []}`, wantErr: `missing "seq"`},
 		// The MVP's answer: a gateway newer than its control plane says so clearly.
 		{name: "old protocol", body: `{"version": 4, "routes": [], "keys": []}`, wantErr: `missing "seq"`},
+		{name: "missing workspaces", body: `{"seq": 4, "full": false, "deleted": []}`, wantErr: "incomplete"},
+		{name: "extra data", body: validBody + " {}", wantErr: "data after config answer"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -158,8 +160,8 @@ func TestParseAnswerSkipsOnlyBadEntries(t *testing.T) {
 			if tt.badKey != "" {
 				keys += "," + tt.badKey
 			}
-			body := `{"seq": 9, "workspaces": [{"id": "w", "slug": "acme", "status": "active",
-			  "services": [` + services + `], "routes": [` + routes + `], "keys": [` + keys + `]}]}`
+			body := `{"seq": 9, "full": false, "workspaces": [{"id": "w", "slug": "acme", "status": "active",
+			  "services": [` + services + `], "routes": [` + routes + `], "keys": [` + keys + `]}], "deleted": []}`
 
 			a, skipped, err := parseAnswer(strings.NewReader(body))
 			if err != nil {
@@ -177,29 +179,53 @@ func TestParseAnswerSkipsOnlyBadEntries(t *testing.T) {
 	}
 }
 
-func TestParseAnswerSkipsBadWorkspaces(t *testing.T) {
+// A workspace that can't be read is dropped (not served), and only it:
+// the others in the answer still apply.
+func TestParseAnswerDropsOnlyBadWorkspaces(t *testing.T) {
 	tests := []struct {
 		name, workspace, wantSkipped string
 	}{
-		{name: "no id", workspace: `{"slug": "x", "status": "active"}`, wantSkipped: "no id or slug"},
-		{name: "no slug", workspace: `{"id": "x", "status": "active"}`, wantSkipped: "no id or slug"},
-		// Unknown means not served: left out, it answers 404 (MT.7).
+		{name: "no slug", workspace: `{"id": "x", "status": "active"}`, wantSkipped: "no slug"},
 		{name: "unknown status", workspace: `{"id": "x", "slug": "x", "status": "archived"}`, wantSkipped: "unknown status"},
+		{name: "no status", workspace: `{"id": "x", "slug": "x"}`, wantSkipped: "unknown status"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			body := `{"seq": 2, "full": true, "workspaces": [` + tt.workspace +
-				`, {"id": "ok", "slug": "ok", "status": "active"}]}`
+			body := `{"seq": 2, "full": false, "workspaces": [` + tt.workspace +
+				`, {"id": "ok", "slug": "ok", "status": "active"}], "deleted": ["gone"]}`
 			a, skipped, err := parseAnswer(strings.NewReader(body))
 			if err != nil {
 				t.Fatalf("parseAnswer() error: %v", err)
 			}
-			if len(skipped) != 1 || !strings.Contains(skipped[0].Error(), tt.wantSkipped) {
-				t.Fatalf("skipped = %v, want one entry mentioning %q", skipped, tt.wantSkipped)
+			if len(a.Dropped) != 1 || a.Dropped[0] != "x" {
+				t.Errorf("Dropped = %v, want [x]", a.Dropped)
 			}
-			if len(a.Workspaces) != 1 || a.Workspaces[0].ID != "ok" {
-				t.Errorf("workspaces = %+v, want only the good one", a.Workspaces)
+			if len(a.Workspaces) != 1 || a.Workspaces[0].ID != "ok" || len(a.Deleted) != 1 {
+				t.Errorf("answer = %+v, want the good workspace and the deleted one", a)
+			}
+			if len(skipped) != 1 || !strings.Contains(skipped[0].Error(), tt.wantSkipped) {
+				t.Errorf("skipped = %v, want one mentioning %q", skipped, tt.wantSkipped)
 			}
 		})
 	}
+}
+
+// One without an id can't be dropped alone: the whole answer is refused.
+func TestParseAnswerRejectsAWorkspaceWithoutAnID(t *testing.T) {
+	body := `{"seq": 2, "full": false, "workspaces": [{"slug": "x", "status": "active"}], "deleted": []}`
+	if _, _, err := parseAnswer(strings.NewReader(body)); err == nil || !strings.Contains(err.Error(), "without an id") {
+		t.Errorf("parseAnswer() error: %v, want one about the missing id", err)
+	}
+}
+
+func FuzzParseAnswer(f *testing.F) {
+	f.Add(validBody)
+	f.Add(`{"seq":1,"full":true,"workspaces":[],"deleted":[]}`)
+	f.Add(`{"seq":1,"full":true,"workspaces":[`)
+	f.Fuzz(func(t *testing.T, body string) {
+		answer, _, err := parseAnswer(strings.NewReader(body))
+		if err == nil && answer.Seq <= 0 {
+			t.Fatalf("parsed a non-positive sequence %d", answer.Seq)
+		}
+	})
 }
