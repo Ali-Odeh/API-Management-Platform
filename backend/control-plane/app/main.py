@@ -5,12 +5,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.audit import crud as audit
+from app.audit.context import AuditContext
+from app.audit.router import router as audit_router
 from app.consumers.router import router as consumers_router
 from app.core.config import Settings, get_settings
 from app.core.db import SessionLocal, driver_dsn, engine
 from app.core.errors import register_error_handlers
 from app.core.openapi import error_responses
 from app.core.permissions import Role
+from app.core.request_id import RequestIdMiddleware
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
 from app.gateway_config.router import router as gateway_config_router
@@ -44,8 +48,18 @@ async def _bootstrap(gotrue: GoTrueAdmin, settings: Settings) -> None:
             password=settings.platform_admin_password,
         )
         if admin.is_platform_admin and not await members_crud.has_owner(db, workspace.id):
-            members_crud.add_member(
+            member = members_crud.add_member(
                 db, workspace.id, user_id=admin.id, role=Role.OWNER, added_by=None
+            )
+            audit.record(
+                db,
+                AuditContext.system(),
+                workspace_id=workspace.id,
+                action="member.add",
+                target_type="member",
+                target_id=member.id,
+                target_name=admin.email,
+                changes={"role": [None, Role.OWNER.value]},
             )
             await db.commit()
 
@@ -76,6 +90,7 @@ app = FastAPI(
 )
 
 register_error_handlers(app)
+app.add_middleware(RequestIdMiddleware)
 
 # Every signed-in endpoint can answer these; document them once for all in Swagger.
 _SIGNED_IN = error_responses(
@@ -96,6 +111,7 @@ app.include_router(services_router, responses=_IN_WORKSPACE)
 app.include_router(routes_router, responses=_IN_WORKSPACE)
 app.include_router(consumers_router, responses=_IN_WORKSPACE)
 app.include_router(keys_router, responses=_IN_WORKSPACE)
+app.include_router(audit_router, responses=_IN_WORKSPACE)
 app.include_router(gateway_config_router)  # documents its own 401 (internal token)
 
 

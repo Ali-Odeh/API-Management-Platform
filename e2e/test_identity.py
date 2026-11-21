@@ -69,8 +69,14 @@ def person_id(admin: httpx.Client, person: Session) -> Iterator[str]:
 def test_disabled_person_is_refused_at_once_and_cannot_refresh(
     admin: httpx.Client, gotrue: GoTrue, person: Session, person_id: str
 ) -> None:
-    r = admin.patch(f"/users/{person_id}", json={"is_active": False})
+    r = admin.patch(
+        f"/users/{person_id}", json={"is_active": False}, headers={"X-Request-ID": "e2e-disable"}
+    )
     assert r.status_code == 200, r.text
+    # The platform's audit log names who did it (decision 12: disabling is recorded).
+    log = admin.get("/audit-events", params={"action": "user.disable"}).json()["items"]
+    event = next(e for e in log if e["request_id"] == r.headers["X-Request-ID"])
+    assert (event["target_id"], event["actor_type"]) == (person_id, "platform_admin")
 
     # The token they already hold is still unexpired, yet the next request fails...
     refused = _me(person)

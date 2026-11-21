@@ -22,6 +22,8 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.context import AuditContext
+from app.audit.models import ActorType
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import ForbiddenError, NotFoundError
@@ -57,7 +59,20 @@ class Caller:
     claims: TokenClaims
 
 
+def request_audit(request: Request, actor_type: ActorType, user: User | None) -> AuditContext:
+    """What an audit event records about this request and who made it."""
+    return AuditContext(
+        actor_type=actor_type,
+        actor_user_id=user.id if user is not None else None,
+        actor_email=user.email if user is not None else None,
+        request_id=getattr(request.state, "request_id", None),
+        ip=request.client.host if request.client else None,
+        user_agent=AuditContext.clip_user_agent(request.headers.get("user-agent")),
+    )
+
+
 async def get_caller(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     db: DbSession,
 ) -> Caller:
@@ -71,7 +86,10 @@ async def get_caller(
     claims = verify_access_token(credentials.credentials)
     if claims is None:
         raise _unauthorized()
-    user = await users_crud.get_or_create_from_token(db, claims)
+    # A first request creates the person's row; that write is audited too.
+    user = await users_crud.get_or_create_from_token(
+        db, claims, audit=request_audit(request, ActorType.USER, None)
+    )
     if not user.is_active:
         raise ForbiddenError("user_disabled")
     return Caller(user=user, claims=claims)
@@ -103,6 +121,14 @@ async def require_platform_admin(caller: CurrentCaller) -> User:
 PlatformAdmin = Annotated[User, Depends(require_platform_admin)]
 
 
+async def get_platform_audit(request: Request, admin: PlatformAdmin) -> AuditContext:
+    """Who did it, for a platform endpoint's audit event: always the Platform Admin."""
+    return request_audit(request, ActorType.PLATFORM_ADMIN, admin)
+
+
+PlatformAudit = Annotated[AuditContext, Depends(get_platform_audit)]
+
+
 @dataclass(frozen=True)
 class WorkspaceAccess:
     """The workspace a request acts on, and why the caller may act there."""
@@ -111,6 +137,8 @@ class WorkspaceAccess:
     slug: str
     user: User
     role: Role | None  # None: a Platform Admin who isn't a member
+    # For the audit event: `platform_admin` when only platform power allowed it.
+    audit: AuditContext
 
 
 class PermissionCheck:
@@ -130,21 +158,31 @@ class PermissionCheck:
     def __init__(self, permission: Permission) -> None:
         self.permission = permission
 
-    async def __call__(self, slug: str, caller: CurrentCaller, db: DbSession) -> WorkspaceAccess:
+    async def __call__(
+        self, slug: str, request: Request, caller: CurrentCaller, db: DbSession
+    ) -> WorkspaceAccess:
         found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=caller.user.id)
         if found is None:
             raise NotFoundError(WORKSPACE_NOT_FOUND)
         workspace_id, role = found
+        actor_type = ActorType.USER
         if role is not None and role_allows(role, self.permission):
             pass
         elif caller.user.is_platform_admin:
+            actor_type = ActorType.PLATFORM_ADMIN
             if not caller.claims.has_mfa:
                 raise ForbiddenError("mfa_required")
         elif role is None:
             raise NotFoundError(WORKSPACE_NOT_FOUND)
         else:
             raise ForbiddenError("permission_denied")
-        return WorkspaceAccess(workspace_id=workspace_id, slug=slug, user=caller.user, role=role)
+        return WorkspaceAccess(
+            workspace_id=workspace_id,
+            slug=slug,
+            user=caller.user,
+            role=role,
+            audit=request_audit(request, actor_type, caller.user),
+        )
 
 
 def require_permission(permission: Permission) -> Any:

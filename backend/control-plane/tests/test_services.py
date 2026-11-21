@@ -9,6 +9,7 @@ from httpx import AsyncClient, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.context import AuditContext
 from app.services import crud
 from app.services.models import Service
 from app.services.schemas import ServiceCreate
@@ -61,6 +62,8 @@ async def test_create_duplicate_name_is_409(client: AsyncClient, auth_headers: H
         {"upstream_url": "ftp://files:21"},
         {"upstream_url": "not a url"},
         {"upstream_url": "http://x:9000/?debug=1"},  # query string
+        {"upstream_url": "http://user:s3cret@x:9000"},  # credentials
+        {"upstream_url": "http://user@x:9000"},  # a username alone
         {"timeout_ms": 99},
         {"timeout_ms": 60_001},
     ],
@@ -70,6 +73,19 @@ async def test_create_invalid_input_is_422(
 ) -> None:
     r = await create(client, auth_headers, **overrides)
     assert r.status_code == 422
+
+
+async def test_credentials_in_the_upstream_url_are_refused_on_update(
+    client: AsyncClient, auth_headers: Headers
+) -> None:
+    created = (await create(client, auth_headers)).json()
+    r = await client.patch(
+        f"{URL}/{created['id']}",
+        json={"upstream_url": "http://user:s3cret@x:9000"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 422
+    assert "must not contain a username or password" in r.text
 
 
 # ---- List
@@ -249,4 +265,6 @@ async def test_other_integrity_errors_are_not_reported_as_409(db: AsyncSession) 
     # bug, so it must surface as an error instead of a misleading "name taken".
     data = ServiceCreate(name="orders", upstream_url="http://x:1")
     with pytest.raises(IntegrityError):
-        await crud.create_service(db, workspace_id=uuid.uuid4(), data=data)
+        await crud.create_service(
+            db, workspace_id=uuid.uuid4(), data=data, audit=AuditContext.system()
+        )

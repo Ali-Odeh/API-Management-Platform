@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 21, 2026 · **Current step:** MT.2 done (workspaces, roles, permission checks, URLs under `/workspaces/{slug}`); next: MT.3
+**Last updated:** Nov 21, 2026 · **Current step:** MT.3 done (audit log, least-privilege database logins, retention job); next: MT.4
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 2/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅⬜⬜⬜⬜⬜⬜⬜⬜⬜ 3/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 681 passing (about 110 s), including permission and isolation guards over every endpoint and every role, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 794 passing (about 3 min), including permission, isolation and audit guards over every endpoint and every role, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **24 stories pass in about 6 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **26 stories pass in about 7 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -130,7 +130,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- | --- |
 | MT.1 | Identity: GoTrue, `users`, JWT verification, Platform Admin with MFA | ✅ |
 | MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ✅ |
-| MT.3 | Audit log | ⬜ |
+| MT.3 | Audit log | ✅ |
 | MT.4 | Members and owners | ⬜ |
 | MT.5 | Workspace lifecycle and quotas | ⬜ |
 | MT.6 | Incremental config protocol | ⬜ |
@@ -191,6 +191,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Retention job (default 365 days) running as a separate database user
 
 **Done when:** the guard test covers every mutating endpoint; a rolled-back change leaves no event; Platform Admin actions in a workspace appear in that workspace's log with `actor_type = platform_admin`.
+
+**Status:** ✅ Done (Nov 21). Commits `4948c41` (the API on its own least-privilege database login), `40aacae` (audit events for every write, request ids, the audit guard), `7c68e46` (workspace and platform audit endpoints), `4d04860` (retention job as its own login and container), then e2e and docs. The rollback test was checked to fail on purpose (an event committed on its own survives a refused change). Retention was tested against the real database as `apim_retention`, not end to end (it would need year-old events).
 
 ### MT.4 Members and owners [8, 9]
 
@@ -442,3 +444,13 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.2 | Workspace creation share-locks the owner's row (`FOR SHARE`) from the "is active?" check to the commit (after review) | A parallel disable (which locks it `FOR UPDATE`) could otherwise commit in between and leave a new workspace with only a disabled Owner; now it finishes first (creation answers 422) or waits. Disabling an Owner afterwards stays allowed: the last-owner rules (MT.4) cover demoting, removing and leaving |
 | Nov 21 | MT.2 | The permission guard's expectations are a matrix copied by hand from PLAN.md, the production map must equal it, and allowed cases send valid requests that must succeed (after review) | Expectations taken from the map under test would expect a wrong grant instead of catching it |
 | Nov 21 | MT.2 | A list filter naming an object not in this workspace (`?service_id=`) answers 422, for another workspace's object and for an unknown one alike; the isolation guard also discovers `..._id` query parameters (after review) | The same answer as for a body reference; it was an empty 200 before, which leaked nothing but broke the "422 when referencing B's objects" rule |
+| Nov 21 | MT.3 | The API runs as `apim_app`, migrations and setup as the owner (`MIGRATION_DATABASE_URL`), retention as `apim_retention`; `scripts/prepare_database.py` makes the logins on every start, migrations grant the privileges | The owner is a superuser and ignores grants, so "the API may only INSERT and SELECT audit events" can't hold otherwise. Roles are server-wide with passwords, so they live outside migrations; privileges are schema, so they live in them. Never dropped on downgrade: `apim_test` shares the server |
+| Nov 21 | MT.3 | Tests run as `apim_app` too, and clean up and backdate events as the owner | The privileges are tested the way production uses them |
+| Nov 21 | MT.3 | One event per change, none when nothing changed; actions are `<target>.<verb>`, lifecycle events as PLAN.md names them (`workspace.created`); user changes, workspace creation and startup's changes are platform-level (`workspace_id` NULL) except startup's `member.add` in `default` | An event per request that changed nothing would bury the real ones; PLAN.md's own names kept |
+| Nov 21 | MT.3 | Also audited: a person's first sign-in (`user.create`, by themself), startup's changes and `relink_user` (`system`) | "Every write records its audit event" (AGENTS.md) |
+| Nov 21 | MT.3 | `X-Request-ID` on every control-plane response (the client's when safe, gateway rules), stored with each event; a pure ASGI middleware | One change can be followed from the client to its entry; pure ASGI leaves the held `/internal/config` requests untouched |
+| Nov 21 | MT.3 | `audit_events` has no `updated_at` and no foreign keys; the `?actor=` filter takes an email | Events never change and must outlive their actor, target and workspace; people search by email |
+| Nov 21 | MT.3 | The retention job is its own Compose service (`audit-retention`) with only its login and the period, deleting in batches of 5000 once a day; a failed round is retried the next day | It never holds the API's secrets, and the API never holds a login that can delete events |
+| Nov 21 | MT.3 | The audit guard's rollback test makes Postgres refuse the change itself (a temporary trigger), not every commit | Refusing every commit would also pass with an event committed on its own; this way only one shared transaction passes |
+| Nov 21 | MT.3 | Run migrations and test setup separately from the API container. Strip upstream URL credentials from audit events, lock key rows during revocation and preserve the request ID on unhandled 500 responses | The running API has no privileged database credentials. Concurrent revocations produce one event, and clients can correlate unexpected errors |
+| Nov 21 | MT.3 | `upstream_url` with a username or password is refused (422); audit events still strip credentials from services saved before | A password there was stored, returned by `GET` (to Viewers too) and sent to the gateway, which never uses it. Secrets never appear in API answers (AGENTS.md) |

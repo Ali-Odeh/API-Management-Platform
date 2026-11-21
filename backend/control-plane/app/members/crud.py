@@ -20,7 +20,7 @@ def add_member(
 ) -> WorkspaceMember:
     """Stage a membership; the caller commits it with the rest of its change."""
     member = WorkspaceMember(
-        workspace_id=workspace_id, user_id=user_id, role=role, added_by=added_by
+        id=uuid.uuid4(), workspace_id=workspace_id, user_id=user_id, role=role, added_by=added_by
     )
     db.add(member)
     return member

@@ -4,36 +4,16 @@ The tests' own workspace `e2e-tenant` is reused by every run: workspaces can
 only be deleted from MT.5 on. Everything created inside it is deleted.
 """
 
-from collections.abc import Iterator
-
 import httpx
-import pytest
 
 from conftest import (
     CONTROL_PLANE_URL,
     MOCK_BACKEND_URL,
-    PERSON_EMAIL,
+    TENANT,
     Session,
     World,
     wait_for,
 )
-
-TENANT = "e2e-tenant"
-
-
-@pytest.fixture
-def owner(admin: httpx.Client, person: Session) -> Iterator[httpx.Client]:
-    """The test person, as Owner of `e2e-tenant` (made by the Platform Admin)."""
-    with httpx.Client(
-        base_url=f"{CONTROL_PLANE_URL}/api/v1", headers=person.headers, timeout=10
-    ) as client:
-        assert client.get("/me").status_code == 200  # signed in once: now a user
-        r = admin.post(
-            "/workspaces",
-            json={"name": "E2E tenant", "slug": TENANT, "owner_email": PERSON_EMAIL},
-        )
-        assert r.status_code in (201, 409), r.text  # 409: made by an earlier run
-        yield client
 
 
 def test_the_owner_sees_their_workspace_and_role(owner: httpx.Client) -> None:

@@ -23,6 +23,7 @@ docker compose ps
 | `control-plane` | `control-plane:8000` | `localhost:8000` | Admin API, Swagger at `/docs` |
 | `mock-backend` | `mock-backend:9000` | `localhost:9000` | Echo service to proxy to (`?delay_ms=` answers late) |
 | `auth` | `auth:9999` | `localhost:9999` | GoTrue: login, MFA, refresh, invitations |
+| `audit-retention` | — | — | Deletes audit events older than `AUDIT_RETENTION_DAYS` (default 365), at start and daily |
 | `mailpit` | `mailpit:1025` (SMTP) | `localhost:8025` | Catches every email GoTrue sends (web UI) |
 | `postgres` | `postgres:5432` | `localhost:5434` | Databases `apim` (config) and `auth` (GoTrue's own), for pgAdmin / DBeaver |
 | `redis` | `redis:6379` | `localhost:6379` | Rate-limit buckets |
@@ -118,18 +119,57 @@ For a disabled user, the command confirms the GoTrue ban on the replacement
 account before saving the new binding. If GoTrue cannot confirm the ban, the
 old binding stays in place and the command can be retried.
 
+### Upgrading an MT.2 install: the database logins (MT.3)
+
+Since MT.3 the API connects as its own login, `apim_app`, which may only add
+and read audit events. In an existing `.env`, the old `DATABASE_URL` (the
+owner) becomes `MIGRATION_DATABASE_URL`, and two logins with new passwords
+are added by the `control-plane-db-init` job.
+
+```powershell
+Copy-Item .env .env.mt2                  # a backup until the stack is healthy again
+function New-Password {
+    $bytes = New-Object byte[] 16
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    -join ($bytes | ForEach-Object { $_.ToString("x2") })
+}
+$old   = (Select-String -Path .env -Pattern '^DATABASE_URL=(.*)').Matches.Groups[1].Value
+$db    = $old.Split('/')[-1]
+$lines = Get-Content .env | ForEach-Object {
+    if ($_ -match '^DATABASE_URL=') {
+        "MIGRATION_DATABASE_URL=$old"
+        "DATABASE_URL=postgresql+asyncpg://apim_app:$(New-Password)@postgres:5432/$db"
+        "AUDIT_RETENTION_DATABASE_URL=postgresql+asyncpg://apim_retention:$(New-Password)@postgres:5432/$db"
+        "AUDIT_RETENTION_DAYS=365"
+    } else { $_ }
+}
+[IO.File]::WriteAllText("$PWD\.env", ($lines -join "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+docker compose up -d --build --wait      # then: Remove-Item .env.mt2
+```
+
 ## Control plane (FastAPI)
 
+Three database logins (PLAN.md section 5): the API uses `apim_app`
+(`DATABASE_URL`), which can't change or delete audit events; migrations and
+the startup setup (`scripts/prepare_database.py`) run in the one-shot
+`control-plane-db-init` job with `MIGRATION_DATABASE_URL`. The API container
+gets neither the owner nor the retention credentials. The `audit-retention`
+container uses `apim_retention`. Run a retention round by hand with:
+
+```powershell
+docker compose exec audit-retention python -m scripts.audit_retention --once
+```
+
 The code is mounted into the container and uvicorn runs with `--reload`, so
-saving a `.py` file restarts the app. At start the container applies
-migrations and makes sure the `default` workspace and the first Platform
+saving a `.py` file restarts the app. The database setup job applies
+migrations before the API starts. The API makes sure the `default` workspace and the first Platform
 Admin exist (in GoTrue too, from `PLATFORM_ADMIN_EMAIL` /
 `PLATFORM_ADMIN_PASSWORD`; an existing account keeps its password).
 
 ```powershell
 .\backend\control-plane\scripts\check.ps1        # ruff, mypy strict, pytest (coverage >= 90%)
 .\backend\control-plane\scripts\check.ps1 -Fix   # let ruff fix and format first
-docker compose exec control-plane pytest -v      # tests only
+docker compose run --rm control-plane-db-init pytest -v   # tests only
 ```
 
 Tests use their own database, `apim_test`, recreated on every run; the real
@@ -141,8 +181,8 @@ diff after any API change.
 Migrations after changing a model (review the generated file before applying):
 
 ```powershell
-docker compose exec control-plane alembic revision --autogenerate -m "describe the change"
-docker compose exec control-plane alembic upgrade head
+docker compose run --rm control-plane-db-init alembic revision --autogenerate -m "describe the change"
+docker compose run --rm control-plane-db-init alembic upgrade head
 ```
 
 Log in from PowerShell. People log in with GoTrue (`localhost:9999`), never
@@ -235,9 +275,9 @@ go test -run=^$ -bench=. -benchmem ./internal/proxy ./internal/middleware ./cmd/
 
 ## End-to-end tests
 
-The MVP and MT stories against the real stack (24 checks, about 6 s): GoTrue
+The MVP and MT stories against the real stack (26 checks, about 7 s): GoTrue
 login with password and TOTP, a disabled person locked out, workspaces and
-their isolation, then requests through the gateway. They run in their own container, create their own
+their isolation, the audit log, then requests through the gateway. They run in their own container, create their own
 objects and always delete them. For MFA they enroll their own factor named
 `e2e` on the Platform Admin and remove it again, so a factor you enrolled is
 left alone; their test person `e2e-person@example.test` and their workspace

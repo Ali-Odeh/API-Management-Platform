@@ -7,7 +7,9 @@ errors the same way.
 """
 
 from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
+
+from app.core.request_id import HEADER
 
 
 class AppError(Exception):
@@ -55,5 +57,15 @@ async def _handle_app_error(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
+async def _handle_unexpected_error(request: Request, exc: Exception) -> PlainTextResponse:
+    # Starlette sends this response outside the request ID middleware.
+    return PlainTextResponse(
+        "Internal Server Error",
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        headers={HEADER: request.state.request_id},
+    )
+
+
 def register_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, _handle_app_error)
+    app.add_exception_handler(Exception, _handle_unexpected_error)

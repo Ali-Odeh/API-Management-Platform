@@ -5,8 +5,7 @@ pydantic-settings maps each field to an env var with the same name
 missing, creating Settings() raises a ValidationError, so the app fails
 at startup with a clear message instead of failing later on first use.
 
-In Docker the variables come from the root .env via `env_file` in
-docker-compose.yml.
+In Docker Compose the API receives only the settings it needs from .env.
 """
 
 from functools import lru_cache
@@ -18,6 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # The API's own login (apim_app): no UPDATE or DELETE on audit events.
     database_url: str
     internal_token: str
 

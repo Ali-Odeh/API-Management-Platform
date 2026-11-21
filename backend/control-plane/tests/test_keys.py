@@ -9,6 +9,7 @@ from httpx import AsyncClient, Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.context import AuditContext
 from app.consumers.models import Consumer
 from app.core.security import hash_api_key
 from app.keys import crud as keys_crud
@@ -220,6 +221,7 @@ async def test_gives_up_after_repeated_collisions(
             workspace_id=consumer.workspace_id,
             consumer_id=consumer.id,
             data=KeyCreate(name="x"),
+            audit=AuditContext.system(),
         )
 
 

@@ -5,6 +5,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import crud as audit
+from app.audit.changes import Changes, created, deleted, snapshot, updated
+from app.audit.context import AuditContext
 from app.core.db import commit_or_raise
 from app.core.errors import AppError, ConflictError, NotFoundError, UnprocessableError
 from app.core.pagination import PageParams, paginate
@@ -13,6 +16,17 @@ from app.routes.schemas import RouteCreate, RouteUpdate
 from app.services import crud as services_crud
 
 _SERVICE_NOT_FOUND = "Service not found in this workspace"
+
+
+# What a route's audit events record (its whole configuration).
+AUDIT_FIELDS = (
+    "service_id",
+    "path_prefix",
+    "methods",
+    "strip_prefix",
+    "auth_required",
+    "is_active",
+)
 
 
 def _errors(path_prefix: str) -> dict[str, AppError]:
@@ -52,33 +66,45 @@ async def get_route(db: AsyncSession, workspace_id: uuid.UUID, *, route_id: uuid
     return route
 
 
-async def create_route(db: AsyncSession, workspace_id: uuid.UUID, *, data: RouteCreate) -> Route:
+async def create_route(
+    db: AsyncSession, workspace_id: uuid.UUID, *, data: RouteCreate, audit: AuditContext
+) -> Route:
     await _ensure_service_exists(db, workspace_id=workspace_id, service_id=data.service_id)
-    route = Route(workspace_id=workspace_id, **data.model_dump())
+    route = Route(id=uuid.uuid4(), workspace_id=workspace_id, **data.model_dump())
     db.add(route)
+    _record(db, audit, route, "route.create", created(snapshot(route, AUDIT_FIELDS)))
     await commit_or_raise(db, _errors(data.path_prefix))
     await db.refresh(route)
     return route
 
 
 async def update_route(
-    db: AsyncSession, workspace_id: uuid.UUID, *, route_id: uuid.UUID, data: RouteUpdate
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    route_id: uuid.UUID,
+    data: RouteUpdate,
+    audit: AuditContext,
 ) -> Route:
     route = await get_route(db, workspace_id=workspace_id, route_id=route_id)
-    changes = data.model_dump(exclude_unset=True)
-    if "service_id" in changes:
-        await _ensure_service_exists(
-            db, workspace_id=workspace_id, service_id=changes["service_id"]
-        )
-    for field, value in changes.items():
+    sent = data.model_dump(exclude_unset=True)
+    if "service_id" in sent:
+        await _ensure_service_exists(db, workspace_id=workspace_id, service_id=sent["service_id"])
+    before = snapshot(route, AUDIT_FIELDS)
+    for field, value in sent.items():
         setattr(route, field, value)
+    if changes := updated(before, snapshot(route, AUDIT_FIELDS)):
+        _record(db, audit, route, "route.update", changes)
     await commit_or_raise(db, _errors(route.path_prefix))
     await db.refresh(route)
     return route
 
 
-async def delete_route(db: AsyncSession, workspace_id: uuid.UUID, *, route_id: uuid.UUID) -> None:
+async def delete_route(
+    db: AsyncSession, workspace_id: uuid.UUID, *, route_id: uuid.UUID, audit: AuditContext
+) -> None:
     route = await get_route(db, workspace_id=workspace_id, route_id=route_id)
+    _record(db, audit, route, "route.delete", deleted(snapshot(route, AUDIT_FIELDS)))
     await db.delete(route)
     await db.commit()
 
@@ -91,3 +117,18 @@ async def _ensure_service_exists(
         await services_crud.get_service(db, workspace_id=workspace_id, service_id=service_id)
     except NotFoundError:
         raise UnprocessableError(_SERVICE_NOT_FOUND) from None
+
+
+def _record(
+    db: AsyncSession, audit_ctx: AuditContext, route: Route, action: str, changes: Changes
+) -> None:
+    audit.record(
+        db,
+        audit_ctx,
+        workspace_id=route.workspace_id,
+        action=action,
+        target_type="route",
+        target_id=route.id,
+        target_name=route.path_prefix,
+        changes=changes,
+    )

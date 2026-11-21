@@ -50,7 +50,7 @@ async def create_key(
 ) -> KeyCreated:
     """Generate a key. **The `key` field is shown only in this response.**"""
     key, raw_key = await crud.create_key(
-        db, workspace_id=access.workspace_id, consumer_id=consumer_id, data=body
+        db, workspace_id=access.workspace_id, audit=access.audit, consumer_id=consumer_id, data=body
     )
     # A secret must never be stored by a browser or proxy cache.
     response.headers["Cache-Control"] = "no-store"
@@ -60,4 +60,4 @@ async def create_key(
 @router.delete("/keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_KEY_NOT_FOUND)
 async def revoke_key(key_id: uuid.UUID, access: CanWrite, db: DbSession) -> None:
     """Revoke a key. It stays in the list as revoked; revoking again changes nothing."""
-    await crud.revoke_key(db, workspace_id=access.workspace_id, key_id=key_id)
+    await crud.revoke_key(db, workspace_id=access.workspace_id, audit=access.audit, key_id=key_id)

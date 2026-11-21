@@ -40,7 +40,9 @@ async def list_consumers(
 
 @router.post("", status_code=status.HTTP_201_CREATED, responses=_CONFLICT)
 async def create_consumer(body: ConsumerCreate, access: CanWrite, db: DbSession) -> ConsumerOut:
-    consumer = await crud.create_consumer(db, workspace_id=access.workspace_id, data=body)
+    consumer = await crud.create_consumer(
+        db, workspace_id=access.workspace_id, audit=access.audit, data=body
+    )
     return ConsumerOut.model_validate(consumer)
 
 
@@ -58,7 +60,7 @@ async def update_consumer(
 ) -> ConsumerOut:
     """Change any field. To block a consumer: `{"status": "blocked"}`."""
     consumer = await crud.update_consumer(
-        db, workspace_id=access.workspace_id, consumer_id=consumer_id, data=body
+        db, workspace_id=access.workspace_id, audit=access.audit, consumer_id=consumer_id, data=body
     )
     return ConsumerOut.model_validate(consumer)
 
@@ -66,4 +68,6 @@ async def update_consumer(
 @router.delete("/{consumer_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_NOT_FOUND)
 async def delete_consumer(consumer_id: uuid.UUID, access: CanWrite, db: DbSession) -> None:
     """Delete a consumer **and all of its API keys**. This can't be undone."""
-    await crud.delete_consumer(db, workspace_id=access.workspace_id, consumer_id=consumer_id)
+    await crud.delete_consumer(
+        db, workspace_id=access.workspace_id, audit=access.audit, consumer_id=consumer_id
+    )

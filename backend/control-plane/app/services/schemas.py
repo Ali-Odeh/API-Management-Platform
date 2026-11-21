@@ -29,6 +29,10 @@ def _normalize_upstream_url(value: str) -> str:
     url = _http_url.validate_python(value)  # rejects ftp://, "abc", ...
     if url.query or url.fragment:
         raise ValueError("upstream_url must not contain a query string or fragment")
+    # A password here would be stored, returned by the API and sent to the
+    # gateway, which ignores it anyway: refuse it rather than leak it.
+    if url.username or url.password:
+        raise ValueError("upstream_url must not contain a username or password")
     return str(url).rstrip("/")
 
 

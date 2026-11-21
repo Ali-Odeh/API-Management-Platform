@@ -136,7 +136,7 @@ The owner is a backend engineer (FastAPI, Spring Boot, Node) and **new to Go**; 
 
 - The owner works on **Windows with PowerShell**; give commands in PowerShell form. Python is run with `py` (plain `python` is the Windows Store alias).
 - Apps run **only in Docker** (one set of addresses). Host ports: Postgres `5434`, gateway `8081`, control plane `8000`, Mailpit UI `8025`.
-  - The control plane always uses `DATABASE_URL=...@postgres:5432/...`. Run its pytest and Alembic inside the container (`docker compose exec control-plane pytest`, `docker compose exec control-plane alembic ...`). The code is bind-mounted and uvicorn runs with `--reload`. The local `.venv` only serves editor autocomplete.
+  - The control plane always uses `DATABASE_URL=...@postgres:5432/...`. Run pytest and Alembic in the database setup container (`docker compose run --rm control-plane-db-init pytest`, `docker compose run --rm control-plane-db-init alembic ...`). The code is bind-mounted and uvicorn runs with `--reload`. The local `.venv` only serves editor autocomplete.
   - Go tests run locally with `go test ./...` (the gateway has no database); the gateway itself runs in Docker, rebuilt after a change with `docker compose up -d --build gateway` (Go has no reload).
   - The owner has local Windows Postgres on 5432 and 5433, so Docker's Postgres is on host port 5434 (only for tools like pgAdmin). Another Windows app holds 127.0.0.1:8080, so the gateway is on host port 8081; containers still use `gateway:8080`.
 - Line endings: LF everywhere, CRLF for `.ps1` (`.gitattributes`).

@@ -38,7 +38,9 @@ async def list_routes(
 
 @router.post("", status_code=status.HTTP_201_CREATED, responses=_WRITE_ERRORS)
 async def create_route(body: RouteCreate, access: CanWrite, db: DbSession) -> RouteOut:
-    route = await crud.create_route(db, workspace_id=access.workspace_id, data=body)
+    route = await crud.create_route(
+        db, workspace_id=access.workspace_id, audit=access.audit, data=body
+    )
     return RouteOut.model_validate(route)
 
 
@@ -53,11 +55,13 @@ async def update_route(
     route_id: uuid.UUID, body: RouteUpdate, access: CanWrite, db: DbSession
 ) -> RouteOut:
     route = await crud.update_route(
-        db, workspace_id=access.workspace_id, route_id=route_id, data=body
+        db, workspace_id=access.workspace_id, audit=access.audit, route_id=route_id, data=body
     )
     return RouteOut.model_validate(route)
 
 
 @router.delete("/{route_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_NOT_FOUND)
 async def delete_route(route_id: uuid.UUID, access: CanWrite, db: DbSession) -> None:
-    await crud.delete_route(db, workspace_id=access.workspace_id, route_id=route_id)
+    await crud.delete_route(
+        db, workspace_id=access.workspace_id, audit=access.audit, route_id=route_id
+    )

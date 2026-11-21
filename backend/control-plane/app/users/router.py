@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter
 
-from app.core.deps import CurrentUser, DbSession, GoTrue, PlatformAdmin
+from app.core.deps import CurrentUser, DbSession, GoTrue, PlatformAdmin, PlatformAudit
 from app.core.openapi import error_responses
 from app.users import crud
 from app.users.schemas import UserOut, UserUpdate
@@ -31,8 +31,13 @@ async def me(user: CurrentUser) -> UserOut:
     ),
 )
 async def update_user(
-    user_id: uuid.UUID, body: UserUpdate, admin: PlatformAdmin, db: DbSession, gotrue: GoTrue
+    user_id: uuid.UUID,
+    body: UserUpdate,
+    admin: PlatformAdmin,
+    audit: PlatformAudit,
+    db: DbSession,
+    gotrue: GoTrue,
 ) -> UserOut:
     """Disable or enable a person: `{"is_active": false}` locks them out at once."""
-    user = await crud.update_user(db, gotrue, actor=admin, user_id=user_id, data=body)
+    user = await crud.update_user(db, gotrue, actor=admin, user_id=user_id, data=body, audit=audit)
     return UserOut.model_validate(user)

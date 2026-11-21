@@ -4,7 +4,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, status
 
-from app.core.deps import CurrentUser, DbSession, PlatformAdmin, WorkspaceAccess, require_permission
+from app.core.deps import (
+    CurrentUser,
+    DbSession,
+    PlatformAdmin,
+    PlatformAudit,
+    WorkspaceAccess,
+    require_permission,
+)
 from app.core.openapi import error_responses
 from app.core.pagination import Page, Pagination
 from app.core.permissions import Permission
@@ -36,10 +43,10 @@ async def list_workspaces(
     ),
 )
 async def create_workspace(
-    body: WorkspaceCreate, admin: PlatformAdmin, db: DbSession
+    body: WorkspaceCreate, admin: PlatformAdmin, audit: PlatformAudit, db: DbSession
 ) -> WorkspaceOut:
     """A new workspace and its first Owner (Platform Admin, with MFA)."""
-    workspace = await crud.create_workspace(db, data=body, created_by=admin.id)
+    workspace = await crud.create_workspace(db, data=body, created_by=admin.id, audit_ctx=audit)
     return WorkspaceOut.model_validate(workspace)
 
 

@@ -30,7 +30,9 @@ async def list_services(access: CanRead, db: DbSession, page: Pagination) -> Pag
 
 @router.post("", status_code=status.HTTP_201_CREATED, responses=_CONFLICT)
 async def create_service(body: ServiceCreate, access: CanWrite, db: DbSession) -> ServiceOut:
-    service = await crud.create_service(db, workspace_id=access.workspace_id, data=body)
+    service = await crud.create_service(
+        db, workspace_id=access.workspace_id, audit=access.audit, data=body
+    )
     return ServiceOut.model_validate(service)
 
 
@@ -45,7 +47,7 @@ async def update_service(
     service_id: uuid.UUID, body: ServiceUpdate, access: CanWrite, db: DbSession
 ) -> ServiceOut:
     service = await crud.update_service(
-        db, workspace_id=access.workspace_id, service_id=service_id, data=body
+        db, workspace_id=access.workspace_id, audit=access.audit, service_id=service_id, data=body
     )
     return ServiceOut.model_validate(service)
 
@@ -54,4 +56,6 @@ async def update_service(
     "/{service_id}", status_code=status.HTTP_204_NO_CONTENT, responses=_NOT_FOUND | _HAS_ROUTES
 )
 async def delete_service(service_id: uuid.UUID, access: CanWrite, db: DbSession) -> None:
-    await crud.delete_service(db, workspace_id=access.workspace_id, service_id=service_id)
+    await crud.delete_service(
+        db, workspace_id=access.workspace_id, audit=access.audit, service_id=service_id
+    )

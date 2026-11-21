@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.context import AuditContext
 from app.core.config import Settings, get_settings
 from app.core.errors import ConflictError, NotFoundError, UpstreamError
 from app.core.permissions import Role
@@ -206,7 +207,9 @@ async def test_relink_binds_the_account_gotrue_holds_now(
     previous = admin.auth_user_id
     new = gotrue.add_account("boss@example.com")
 
-    old, bound = await users_crud.relink_user(db, gotrue, email="Boss@Example.com")
+    old, bound = await users_crud.relink_user(
+        db, gotrue, email="Boss@Example.com", audit=AuditContext.system()
+    )
 
     assert (old, bound) == (previous, new)
     await db.refresh(admin)
@@ -227,7 +230,7 @@ async def test_relink_keeps_the_old_binding_if_gotrue_cannot_confirm_the_ban(
     gotrue.fail_after_ban = not account_missing
 
     with pytest.raises(NotFoundError if account_missing else UpstreamError):
-        await users_crud.relink_user(db, gotrue, email=person.email)
+        await users_crud.relink_user(db, gotrue, email=person.email, audit=AuditContext.system())
 
     assert person.auth_user_id == previous
     await db.rollback()
@@ -240,11 +243,15 @@ async def test_relink_unknown_user_or_account_changes_nothing(
     db: AsyncSession, gotrue: FakeGoTrue
 ) -> None:
     with pytest.raises(NotFoundError, match="User not found"):
-        await users_crud.relink_user(db, gotrue, email="nobody@example.com")
+        await users_crud.relink_user(
+            db, gotrue, email="nobody@example.com", audit=AuditContext.system()
+        )
 
     admin = await make_user(db, email="boss@example.com")
     with pytest.raises(NotFoundError, match="no account"):
-        await users_crud.relink_user(db, gotrue, email="boss@example.com")
+        await users_crud.relink_user(
+            db, gotrue, email="boss@example.com", audit=AuditContext.system()
+        )
     await db.refresh(admin)
     assert admin.auth_user_id is not None
 
@@ -258,7 +265,9 @@ async def test_relink_never_takes_another_persons_account(
     gotrue.accounts["boss@example.com"] = other.auth_user_id  # a broken GoTrue answer
 
     with pytest.raises(ConflictError, match="other@example.com"):
-        await users_crud.relink_user(db, gotrue, email="boss@example.com")
+        await users_crud.relink_user(
+            db, gotrue, email="boss@example.com", audit=AuditContext.system()
+        )
 
 
 async def test_relink_script(

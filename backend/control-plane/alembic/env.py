@@ -6,6 +6,7 @@ of it with `connection.run_sync(...)`.
 """
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -13,12 +14,12 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.core.config import get_settings
 from app.core.db import Base
 
 # isort: split
 # Import every feature's models here so Base.metadata knows their tables
 # and `alembic revision --autogenerate` can see them.
+from app.audit import models as audit_models  # noqa: F401
 from app.consumers import models as consumer_models  # noqa: F401
 from app.gateway_config import models as gateway_config_models  # noqa: F401
 from app.keys import models as key_models  # noqa: F401
@@ -36,7 +37,8 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
-DATABASE_URL = get_settings().database_url
+# The owner, not the API's login: migrations create tables and grant privileges.
+DATABASE_URL = os.environ["MIGRATION_DATABASE_URL"]
 
 
 def run_migrations_offline() -> None:

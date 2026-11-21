@@ -1,5 +1,6 @@
 """All database work for users, plus the GoTrue calls that go with it."""
 
+import dataclasses
 import logging
 import uuid
 
@@ -7,6 +8,9 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import crud as audit
+from app.audit.changes import Changes, created, snapshot, updated
+from app.audit.context import AuditContext
 from app.core.errors import ConflictError, ForbiddenError, NotFoundError, UpstreamError
 from app.core.identity import TokenClaims
 from app.gotrue.client import GoTrueAdmin
@@ -14,6 +18,10 @@ from app.users.models import User
 from app.users.schemas import UserUpdate
 
 logger = logging.getLogger(__name__)
+
+# What a person's audit events record. User changes are platform-level
+# events (workspace_id NULL).
+AUDIT_FIELDS = ("email", "auth_user_id", "is_platform_admin", "is_active")
 
 # The token's GoTrue account isn't the one this email belongs to here.
 ACCOUNT_CONFLICT = "account_conflict"
@@ -56,7 +64,9 @@ async def get_by_email_locked(db: AsyncSession, email: str) -> User | None:
     return (await db.scalars(query)).one_or_none()
 
 
-async def get_or_create_from_token(db: AsyncSession, claims: TokenClaims) -> User:
+async def get_or_create_from_token(
+    db: AsyncSession, claims: TokenClaims, *, audit: AuditContext
+) -> User:
     """The person behind a verified GoTrue token; their row is created just in time.
 
     A row belongs to exactly one GoTrue account, found by its id (`sub`),
@@ -65,6 +75,7 @@ async def get_or_create_from_token(db: AsyncSession, claims: TokenClaims) -> Use
     Rows made before their first login (the migrated admin, the first
     Platform Admin) are linked at startup through GoTrue's admin API instead.
     A new account whose email a row already holds gets 403 account_conflict.
+    The new row is audited as `user.create`, by the person themself.
     """
     user = await _by_auth_user_id(db, claims.auth_user_id)
     if user is not None:
@@ -75,8 +86,16 @@ async def get_or_create_from_token(db: AsyncSession, claims: TokenClaims) -> Use
             return same_email
         raise ForbiddenError(ACCOUNT_CONFLICT)
 
-    user = User(email=normalize_email(claims.email), auth_user_id=claims.auth_user_id)
+    user = User(
+        id=uuid.uuid4(),
+        email=normalize_email(claims.email),
+        auth_user_id=claims.auth_user_id,
+        is_platform_admin=False,
+        is_active=True,
+    )
     db.add(user)
+    by_themself = dataclasses.replace(audit, actor_user_id=user.id, actor_email=user.email)
+    _record(db, by_themself, user, "user.create", created(snapshot(user, AUDIT_FIELDS)))
     try:
         await db.commit()
     except IntegrityError:
@@ -125,11 +144,13 @@ async def ensure_platform_admin(
     """
     email = normalize_email(email)
     user = await _by_email(db, email)
+    is_new = user is None
     if user is None:
-        user = User(email=email)
+        user = User(id=uuid.uuid4(), email=email, is_platform_admin=False, is_active=True)
         db.add(user)
     else:
         user = await get_user(db, user.id, lock=True)
+    before = snapshot(user, AUDIT_FIELDS)
 
     found: uuid.UUID | None
     if user.auth_user_id is None:
@@ -150,13 +171,18 @@ async def ensure_platform_admin(
             found or "no account",
             email,
         )
+    after = snapshot(user, AUDIT_FIELDS)
+    if is_new:
+        _record(db, AuditContext.system(), user, "user.create", created(after))
+    elif changes := updated(before, after):
+        _record(db, AuditContext.system(), user, "user.update", changes)
     await db.commit()
     await db.refresh(user)
     return user
 
 
 async def relink_user(
-    db: AsyncSession, gotrue: GoTrueAdmin, *, email: str
+    db: AsyncSession, gotrue: GoTrueAdmin, *, email: str, audit: AuditContext
 ) -> tuple[uuid.UUID | None, uuid.UUID]:
     """Bind a person's row to the GoTrue account that holds their email now.
 
@@ -180,12 +206,20 @@ async def relink_user(
     if old != found and not user.is_active and not await gotrue.set_banned(found, banned=True):
         raise NotFoundError(f"GoTrue has no account for {user.email}")
     user.auth_user_id = found
+    if old != found:
+        _record(db, audit, user, "user.relink", {"auth_user_id": [_str(old), str(found)]})
     await db.commit()
     return old, found
 
 
 async def update_user(
-    db: AsyncSession, gotrue: GoTrueAdmin, *, actor: User, user_id: uuid.UUID, data: UserUpdate
+    db: AsyncSession,
+    gotrue: GoTrueAdmin,
+    *,
+    actor: User,
+    user_id: uuid.UUID,
+    data: UserUpdate,
+    audit: AuditContext,
 ) -> User:
     """Disable or enable a person (Platform Admin).
 
@@ -206,6 +240,8 @@ async def update_user(
     if user.id == actor.id and not data.is_active:
         raise ConflictError("You can't disable yourself")
 
+    before = snapshot(user, AUDIT_FIELDS)
+    action = "user.enable" if data.is_active else "user.disable"
     if not data.is_active:
         user.is_active = False
     try:
@@ -216,9 +252,11 @@ async def update_user(
     except UpstreamError:
         if data.is_active:
             raise  # not enabled; the row rolls back
-        await db.commit()  # keep the disable: the API is closed already
+        _record_if_changed(db, audit, user, action, before)
+        await db.commit()  # keep the disable (and its event): the API is closed already
         raise UpstreamError(DISABLED_NOT_BANNED) from None
     user.is_active = data.is_active
+    _record_if_changed(db, audit, user, action, before)
     await db.commit()
     await db.refresh(user)
     return user
@@ -230,3 +268,30 @@ async def _linked_account(gotrue: GoTrueAdmin, user: User) -> uuid.UUID | None:
     if user.auth_user_id is None:
         user.auth_user_id = await gotrue.find_user_by_email(user.email)
     return user.auth_user_id
+
+
+def _record(
+    db: AsyncSession, audit_ctx: AuditContext, user: User, action: str, changes: Changes
+) -> None:
+    audit.record(
+        db,
+        audit_ctx,
+        workspace_id=None,
+        action=action,
+        target_type="user",
+        target_id=user.id,
+        target_name=user.email,
+        changes=changes,
+    )
+
+
+def _record_if_changed(
+    db: AsyncSession, audit_ctx: AuditContext, user: User, action: str, before: dict[str, object]
+) -> None:
+    """A repeated disable or enable changes nothing, so it writes no event."""
+    if changes := updated(before, snapshot(user, AUDIT_FIELDS)):
+        _record(db, audit_ctx, user, action, changes)
+
+
+def _str(value: uuid.UUID | None) -> str | None:
+    return str(value) if value is not None else None

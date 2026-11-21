@@ -309,6 +309,26 @@ def person(gotrue: GoTrue) -> Session:
     return gotrue.sign_in(PERSON_EMAIL, password)
 
 
+# The tests' own workspace, reused by every run (workspaces can be deleted only
+# from MT.5); everything made inside it is deleted.
+TENANT = "e2e-tenant"
+
+
+@pytest.fixture
+def owner(admin: httpx.Client, person: Session) -> Iterator[httpx.Client]:
+    """The test person, as Owner of `e2e-tenant` (made by the Platform Admin)."""
+    with httpx.Client(
+        base_url=f"{CONTROL_PLANE_URL}/api/v1", headers=person.headers, timeout=10
+    ) as client:
+        assert client.get("/me").status_code == 200  # signed in once: now a user
+        r = admin.post(
+            "/workspaces",
+            json={"name": "E2E tenant", "slug": TENANT, "owner_email": PERSON_EMAIL},
+        )
+        assert r.status_code in (201, 409), r.text  # 409: made by an earlier run
+        yield client
+
+
 @pytest.fixture(scope="session")
 def admin(platform_admin_session: Session) -> Iterator[httpx.Client]:
     """The control plane's admin API, called with the Platform Admin's GoTrue token."""

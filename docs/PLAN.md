@@ -206,7 +206,7 @@ Two databases live on the same Postgres server: **`apim`** (ours, migrated by Al
 
 **Delete rules:** a service that still has routes can't be deleted (409). Deleting a service deletes its targets. Deleting a consumer deletes its API keys. `status` and `role` columns are text with a CHECK rather than Postgres ENUMs, so new values are easy to add. Workspaces are never hard-deleted (see `workspaces.status`).
 
-Every table also has `created_at` and `updated_at` (not repeated below). GoTrue's `auth` database is not shown: our only link to it is `users.auth_user_id`.
+Every table also has `created_at` and `updated_at` (not repeated below), except `audit_events`: events never change, so it has `created_at` only. GoTrue's `auth` database is not shown: our only link to it is `users.auth_user_id`.
 
 ```mermaid
 erDiagram
@@ -394,7 +394,17 @@ Postgres rules this design must follow (checked against the Postgres 16 docs):
 
 **Audit rows are append-only**
 
-The application's database user has only `INSERT` and `SELECT` on `audit_events`. A retention job (default 1 year), running as a separate database user, is the only thing that deletes rows. Each change and its audit row are written in the same transaction. No secrets are ever recorded: a key appears only as its prefix; `key_hash` and tokens never.
+The application's database user has only `INSERT` and `SELECT` on `audit_events`. A retention job (default 1 year), running as a separate database user, is the only thing that deletes rows. Each change and its audit row are written in the same transaction. Audit events must exclude secrets. The log records keys by prefix and strips userinfo from upstream URLs before recording old and new values.
+
+**Database logins (MT.3).** The API can't connect as the owner, a superuser that ignores every grant. Three logins:
+
+| Login | Setting | May |
+| --- | --- | --- |
+| the owner (`POSTGRES_USER`) | `MIGRATION_DATABASE_URL` | everything: migrations and setup only |
+| `apim_app` | `DATABASE_URL` | read and write every table, but only `INSERT` and `SELECT` on `audit_events`; never `alembic_version` |
+| `apim_retention` | `AUDIT_RETENTION_DATABASE_URL` | `SELECT` and `DELETE` on `audit_events`, nothing else |
+
+The one-shot `control-plane-db-init` service creates or updates the two logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
 
 **v2 tables**
 
@@ -482,8 +492,10 @@ There is no login endpoint: the dashboard logs in with GoTrue directly. The MVP'
 - Errors return `{ "detail": "..." }` with the right status code: 401 not signed in, 403 not allowed, 404 unknown id or workspace (or another workspace's), 409 duplicate, still in use, `last_owner` or `quota_exceeded`, 422 invalid input or a reference to something not in this workspace
 - `PATCH` changes only the fields sent; sending `null` is rejected
 - A route `path_prefix` of `/health` or below it (`/health/db`) is reserved by the gateway and rejected with 422. `/healthy` and `/api/health` are fine. v2 adds `/metrics`
-- Target URLs: only `http` and `https`; an internal IP literal or a known internal name (`localhost`, `*.internal`) not covered by `UPSTREAM_ALLOW` → 422. The gateway enforces the real check at connect time (section 7)
-- Every write records an audit event in the same transaction (section 5)
+- Upstream and target URLs: only `http` and `https`, without a query string, a fragment, a username or a password (each → 422: a password would be stored, returned by the API and sent to the gateway, which ignores it); an internal IP literal or a known internal name (`localhost`, `*.internal`) not covered by `UPSTREAM_ALLOW` → 422. The gateway enforces the real check at connect time (section 7)
+- Every write records an audit event in the same transaction (section 5): exactly one per change; a request that changes nothing (a PATCH with the same values, revoking a revoked key) records none. Actions are `<target>.<verb>` (`service.create`, `route.update`, `consumer.delete`, `key.create`, `key.revoke`, `user.create`, `user.disable`, `user.enable`, `user.relink`, `member.add`), lifecycle events as listed below (`workspace.created`). `actor_type` is `platform_admin` when only platform power allowed the change (and on platform endpoints), `user` within the person's own role, `system` for startup and scripts
+- Every response carries `X-Request-ID`: the client's when it is 1–128 characters of `A-Z a-z 0-9 . _ -`, else a new one; audit events store it with the IP and user agent
+- Audit lists filter by `?actor=` (an email, any case), `?action=`, `?target_type=`, `?from=` (at or after) and `?to=` (before); the platform list also by `?workspace_id=`
 - FastAPI generates the OpenAPI spec, committed as `openapi.json`; the frontend generates its TypeScript types from it
 
 **Members and owners**
@@ -879,6 +891,8 @@ The control plane is organized by feature: everything about one feature (endpoin
 | `postgres` | 5432 (host 5434) | Databases `apim` (ours) and `auth` (GoTrue's). Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
 | `auth-db-init` | — | One-shot job before GoTrue starts (MT): creates GoTrue's login (`gotrue`), the `auth` database and schema, and the `postgres` role GoTrue's migrations expect; safe to repeat |
 | `auth` | 9999 | GoTrue (MT, pinned `v2.197.0`): login, MFA, refresh, invitations, recovery |
+| `control-plane-db-init` | — | One-shot job that prepares the Postgres logins and runs migrations before the API starts |
+| `audit-retention` | — | Deletes audit events older than `AUDIT_RETENTION_DAYS`, at start and once a day, as `apim_retention` (MT.3); gets only that login and the period |
 | `mailpit` | 1025 (SMTP), 8025 (UI, bound to 127.0.0.1) | Catches every email locally and in CI (MT); its inbox holds invitation and reset links, so it isn't reachable from the network |
 | `redis` | 6379 | Rate-limit state |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
@@ -890,7 +904,9 @@ The control plane is organized by feature: everything about one feature (endpoin
 
 | Service | Variable | Example |
 | --- | --- | --- |
-| Control plane | `DATABASE_URL` | `postgresql+asyncpg://app:app@postgres:5432/apim` |
+| Control plane | `DATABASE_URL` | `postgresql+asyncpg://apim_app:<password>@postgres:5432/apim` (the API's own login, MT.3) |
+| control-plane-db-init | `MIGRATION_DATABASE_URL` | `postgresql+asyncpg://app:app@postgres:5432/apim` (the owner for migrations and setup) |
+| control-plane-db-init, audit-retention | `AUDIT_RETENTION_DATABASE_URL` | `postgresql+asyncpg://apim_retention:<password>@postgres:5432/apim` |
 | Control plane | `INTERNAL_TOKEN` | shared secret with the gateway |
 | Control plane | `GOTRUE_URL` | `http://auth:9999` |
 | Control plane | `GOTRUE_JWT_SECRET` | the secret GoTrue signs with, to verify its tokens (same value as GoTrue's) |
@@ -986,7 +1002,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 
 - [x] MT.1 Identity: GoTrue and Mailpit, `users` replaces `admins`, JWT verification, Platform Admin with MFA, disabling users [4, 12, 13]
 - [x] MT.2 Workspaces and roles: memberships, permissions, URLs under `/workspaces/{slug}`, isolation tests [0, 2, 5, 13]
-- [ ] MT.3 Audit log: same-transaction records for every write, guard test, audit endpoints, retention [11]
+- [x] MT.3 Audit log: same-transaction records for every write, guard test, audit endpoints, retention [11]
 - [ ] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]
 - [ ] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]
 - [ ] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
