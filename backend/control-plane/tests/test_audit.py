@@ -174,26 +174,29 @@ async def test_an_unexpected_error_echoes_the_request_id() -> None:
     assert r.headers["X-Request-ID"] == "trace-500"
 
 
-async def test_upstream_credentials_are_omitted_from_every_audit_change(
-    client: AsyncClient, db: AsyncSession, auth_headers: Headers
+async def test_upstream_credentials_of_older_services_stay_out_of_audit_events(
+    client: AsyncClient, db: AsyncSession, auth_headers: Headers, workspace: Workspace
 ) -> None:
+    # The API refuses such URLs now, but services saved before that may hold
+    # one: an update or delete must not copy the password into the log.
+    old_url = "http://fixture-user:fixture-password@mock-backend:9000/v1"
+    updated_one = await make_service(db, workspace.id, name="updated", upstream_url=old_url)
+    deleted_one = await make_service(db, workspace.id, name="deleted", upstream_url=old_url)
     seen = await _ids(db)
-    original = "http://fixture-user:fixture-password@mock-backend:9000/v1"
-    replacement = "https://next-user:next-password@[::1]:8000/v2"
-    service = await client.post(
-        SERVICES, json={"name": "orders", "upstream_url": original}, headers=auth_headers
+
+    r = await client.patch(
+        f"{SERVICES}/{updated_one.id}",
+        json={"upstream_url": "https://[::1]:8000/v2"},
+        headers=auth_headers,
     )
-    assert service.status_code == 201
-    path = f"{SERVICES}/{service.json()['id']}"
-    r = await client.patch(path, json={"upstream_url": replacement}, headers=auth_headers)
     assert r.status_code == 200
-    assert (await client.delete(path, headers=auth_headers)).status_code == 204
+    r = await client.delete(f"{SERVICES}/{deleted_one.id}", headers=auth_headers)
+    assert r.status_code == 204
 
     events = {e.action: e.changes["upstream_url"] for e in await _events(db, seen)}
     assert events == {
-        "service.create": [None, "http://mock-backend:9000/v1"],
         "service.update": ["http://mock-backend:9000/v1", "https://[::1]:8000/v2"],
-        "service.delete": ["https://[::1]:8000/v2", None],
+        "service.delete": ["http://mock-backend:9000/v1", None],
     }
 
 
