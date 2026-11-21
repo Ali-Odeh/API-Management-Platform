@@ -500,10 +500,11 @@ There is no login endpoint: the dashboard logs in with GoTrue directly. The MVP'
 
 **Members and owners**
 
-- `POST /members {email, role}` (Owner): an existing user is added at once; a new person gets a GoTrue invitation email, sets a password, and is a member from their first login. Adding an existing member → 409.
-- Several owners are allowed. An owner can change anyone's role except their own.
-- A workspace always keeps at least one **active, human** owner: demoting, removing or the leaving of the last one → `409 last_owner`. Owner rows are locked (`SELECT ... FOR UPDATE`) before any role change or removal.
-- The Platform Admin can assign an owner in any workspace (audited, visible to the workspace's owners) and follows the same rule.
+- `POST /members {email, role}` (Owner): an existing user is added at once; a new person gets a GoTrue invitation email, sets a password, and is a member from their first login. Their `users` row and membership are made right away, bound to the GoTrue account (found, or invited, through the admin API), so no invitations table is needed; an account GoTrue already has gets no second email. The answer says `invited: true|false`. Adding an existing member → 409; a disabled person → 422.
+- `POST /api/v1/workspaces` invites a new `owner_email` the same way.
+- Several owners are allowed. An owner can change anyone's role except their own (`409`).
+- A workspace always keeps at least one **active, human** owner: demoting, removing or the leaving of the last one → `409 last_owner`. Owner rows are locked (`SELECT ... FOR UPDATE`, in id order) before any role change, removal or leave. Disabling a user (`PATCH /users`) is not blocked by this rule: a compromised account must be stoppable at once; the Platform Admin then assigns a new owner.
+- The Platform Admin can assign an owner in any workspace, by adding or promoting someone (audited as `member.owner_assigned_by_platform`, visible to the workspace's owners), and follows the same rule.
 
 **Workspace lifecycle**
 
@@ -1003,7 +1004,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.1 Identity: GoTrue and Mailpit, `users` replaces `admins`, JWT verification, Platform Admin with MFA, disabling users [4, 12, 13]
 - [x] MT.2 Workspaces and roles: memberships, permissions, URLs under `/workspaces/{slug}`, isolation tests [0, 2, 5, 13]
 - [x] MT.3 Audit log: same-transaction records for every write, guard test, audit endpoints, retention [11]
-- [ ] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]
+- [x] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]
 - [ ] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]
 - [ ] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
 - [ ] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]

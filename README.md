@@ -64,8 +64,8 @@ flowchart LR
 | **Config propagation** | An admin change reaches the gateway in about **70 ms** |
 | **Route matching** | 0.4 µs for 100 routes, no memory allocations (Go benchmark) |
 | **Gateway tests** | 362 tests and table cases, **98% coverage**, the race detector, 5 fuzz tests |
-| **Control plane tests** | 794 tests, **100% coverage**, mypy strict; permission, isolation and audit guards over every endpoint |
-| **End to end** | 26 stories on the real stack (GoTrue login with MFA, workspace isolation, audit log), in CI on every push |
+| **Control plane tests** | 904 tests, **100% coverage**, mypy strict; permission, isolation and audit guards over every endpoint |
+| **End to end** | 29 stories on the real stack (GoTrue login with MFA, workspace isolation, audit log, invitations), in CI on every push |
 
 The load test ran on one laptop with Docker Desktop; the differences between runs (with and without the gateway) are the meaningful part.
 
@@ -184,8 +184,8 @@ docker compose run --rm loadtest            # k6 load test
 
 ## Status and what's next
 
-The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2) and an append-only audit log (MT.3) are in. Next on the [roadmap](docs/ROADMAP.md):
+The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4) are in. Next on the [roadmap](docs/ROADMAP.md):
 
-- **Members and invitations, workspace lifecycle and quotas.**
+- **Workspace lifecycle and quotas.**
 - **Gateway tenancy:** each workspace on its own subdomain, per-workspace limits, SSRF protection, load balancing with health checks, CORS.
 - Later: plans and monthly quotas, usage analytics, Prometheus metrics, a developer portal, and finally the React app.
