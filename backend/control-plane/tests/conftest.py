@@ -20,7 +20,12 @@ from sqlalchemy.engine import make_url
 # ---- 1. Point the app at the test database (must happen before app imports)
 _real_owner_url = make_url(os.environ["MIGRATION_DATABASE_URL"])
 TEST_DATABASE = f"{_real_owner_url.database}_test"
-for _name in ("DATABASE_URL", "MIGRATION_DATABASE_URL", "AUDIT_RETENTION_DATABASE_URL"):
+for _name in (
+    "DATABASE_URL",
+    "MIGRATION_DATABASE_URL",
+    "AUDIT_RETENTION_DATABASE_URL",
+    "PURGE_DATABASE_URL",
+):
     os.environ[_name] = (
         make_url(os.environ[_name])
         .set(database=TEST_DATABASE)
@@ -65,6 +70,7 @@ async def _recreate_test_database() -> None:
         owner_url=OWNER_URL,
         app_url=os.environ["DATABASE_URL"],
         retention_url=os.environ["AUDIT_RETENTION_DATABASE_URL"],
+        purge_url=os.environ["PURGE_DATABASE_URL"],
     )
 
 

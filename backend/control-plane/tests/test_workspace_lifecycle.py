@@ -13,10 +13,13 @@ from httpx import AsyncClient
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.context import AuditContext
 from app.audit.models import AuditEvent
 from app.core.db import SessionLocal
+from app.core.errors import NotFoundError
 from app.core.permissions import Role
 from app.users.models import User
+from app.workspaces import lifecycle
 from app.workspaces.models import Workspace, WorkspaceStatus
 from tests.factories import (
     make_consumer,
@@ -224,6 +227,14 @@ async def test_deleting_needs_the_slug_typed_again(
     assert r.status_code == 422
     assert (await _workspace()).status == WorkspaceStatus.ACTIVE
     assert await _events("workspace.deleted") == []
+
+
+async def test_a_delete_that_lost_the_race_finds_nothing(db: AsyncSession, acme: Workspace) -> None:
+    # Two deletes pass the permission check together; the row lock makes the
+    # second see the first's result: gone, so 404 (not a second event).
+    await set_status(acme.id, WorkspaceStatus.DELETED)
+    with pytest.raises(NotFoundError):
+        await lifecycle.delete(db, acme.id, confirm="acme", audit_ctx=AuditContext.system())
 
 
 async def test_a_platform_admin_deletes_a_suspended_workspace(
