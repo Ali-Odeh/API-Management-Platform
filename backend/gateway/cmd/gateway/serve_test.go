@@ -14,6 +14,7 @@ import (
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
+	"github.com/redis/go-redis/v9"
 )
 
 // freeAddr returns a local address nothing listens on right now.
@@ -165,6 +166,22 @@ func TestServeFailsWhenThePortIsTaken(t *testing.T) {
 	}
 }
 
+// clearBucket deletes a rate-limit key before a test. The client has the
+// gateway's 50 ms timeouts, and on a busy machine the first connection to
+// Docker's Redis can take longer, so setup retries for up to about 2 s
+// instead of failing the test before it starts.
+func clearBucket(t *testing.T, rdb *redis.Client, key string) {
+	t.Helper()
+	var err error
+	for range 40 {
+		if err = rdb.Del(t.Context(), key).Err(); err == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("Redis not reachable: %v", err)
+}
+
 // The real program with a real Redis: a consumer allowed 3 requests per
 // minute gets 3 answers, then 429. Skipped without REDIS_TEST_URL.
 func TestServeRateLimitsWithRealRedis(t *testing.T) {
@@ -176,12 +193,10 @@ func TestServeRateLimitsWithRealRedis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rdb.Close()
 	// A fresh bucket for this consumer only: other packages' tests may use
 	// the same Redis database at the same time.
-	if err := rdb.Del(t.Context(), "rl:"+servedConsumer).Err(); err != nil {
-		t.Fatalf("Redis not reachable: %v", err)
-	}
-	defer rdb.Close()
+	clearBucket(t, rdb, "rl:"+servedConsumer)
 
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok")

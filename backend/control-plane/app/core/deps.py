@@ -34,6 +34,7 @@ from app.users import crud as users_crud
 from app.users.models import User
 from app.workspaces import crud as workspaces_crud
 from app.workspaces.crud import WORKSPACE_NOT_FOUND
+from app.workspaces.models import WorkspaceStatus
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -135,6 +136,7 @@ class WorkspaceAccess:
 
     workspace_id: uuid.UUID
     slug: str
+    status: WorkspaceStatus
     user: User
     role: Role | None  # None: a Platform Admin who isn't a member
     # For the audit event: `platform_admin` when only platform power allowed it.
@@ -144,12 +146,19 @@ class WorkspaceAccess:
 class PermissionCheck:
     """Steps 2 and 3 of every workspace request (PLAN.md section 6).
 
-    One query resolves the slug in the URL and the caller's membership. An
-    unknown workspace, or one the caller isn't a member of, answers 404, so
+    Resolves the slug in the URL and the caller's membership. An unknown
+    workspace, or one the caller isn't a member of, answers 404, so
     it doesn't reveal that the workspace exists. A role without the
     permission answers 403 permission_denied. A Platform Admin may act in
     every workspace; where their own role doesn't cover it, that power
     reaches every tenant, so it needs MFA, as on the platform endpoints.
+
+    A suspended workspace is read-only for its members: any write answers
+    403 workspace_suspended (decision 10). Only platform power still writes
+    there (with MFA, audited as such), e.g. to delete an abusive workspace.
+    A deleted one is not found at all. A write locks the workspace row
+    before its final check (workspaces_crud.lock_membership), so a
+    suspension or a role change that commits first is always seen.
 
     A class (not a closure) so the guard tests can read `.permission` from
     every endpoint's dependencies.
@@ -161,12 +170,19 @@ class PermissionCheck:
     async def __call__(
         self, slug: str, request: Request, caller: CurrentCaller, db: DbSession
     ) -> WorkspaceAccess:
-        found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=caller.user.id)
+        if self.permission.is_read:
+            found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=caller.user.id)
+        else:
+            found = await workspaces_crud.lock_membership(
+                db, slug, user_id=caller.user.id, is_platform_admin=caller.user.is_platform_admin
+            )
         if found is None:
             raise NotFoundError(WORKSPACE_NOT_FOUND)
-        workspace_id, role = found
+        workspace_id, status, role = found
+        role_allowed = role is not None and role_allows(role, self.permission)
+        read_only = status == WorkspaceStatus.SUSPENDED and not self.permission.is_read
         actor_type = ActorType.USER
-        if role is not None and role_allows(role, self.permission):
+        if role_allowed and not read_only:
             pass
         elif caller.user.is_platform_admin:
             actor_type = ActorType.PLATFORM_ADMIN
@@ -174,11 +190,14 @@ class PermissionCheck:
                 raise ForbiddenError("mfa_required")
         elif role is None:
             raise NotFoundError(WORKSPACE_NOT_FOUND)
-        else:
+        elif not role_allowed:
             raise ForbiddenError("permission_denied")
+        else:
+            raise ForbiddenError("workspace_suspended")
         return WorkspaceAccess(
             workspace_id=workspace_id,
             slug=slug,
+            status=status,
             user=caller.user,
             role=role,
             audit=request_audit(request, actor_type, caller.user),

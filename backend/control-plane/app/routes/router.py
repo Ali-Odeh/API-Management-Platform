@@ -21,6 +21,9 @@ _NOT_FOUND = error_responses({404: "Route not found"})
 _WRITE_ERRORS = error_responses(
     {409: "Path prefix already in use", 422: "Invalid input, or service not in this workspace"}
 )
+_CREATE_ERRORS = _WRITE_ERRORS | error_responses(
+    {409: "Path prefix already in use, or quota_exceeded (the workspace's quota)"}
+)
 
 
 @router.get("", responses=error_responses({422: "Service not in this workspace"}))
@@ -36,7 +39,7 @@ async def list_routes(
     return Page[RouteOut](items=[RouteOut.model_validate(r) for r in routes], total=total)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, responses=_WRITE_ERRORS)
+@router.post("", status_code=status.HTTP_201_CREATED, responses=_CREATE_ERRORS)
 async def create_route(body: RouteCreate, access: CanWrite, db: DbSession) -> RouteOut:
     route = await crud.create_route(
         db, workspace_id=access.workspace_id, audit=access.audit, data=body

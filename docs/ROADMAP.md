@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 21, 2026 · **Current step:** MT.4 done (members, invitations, owner rules); next: MT.5
+**Last updated:** Nov 21, 2026 · **Current step:** MT.5 done (workspace lifecycle, quotas, purge job); next: MT.6
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅⬜⬜⬜⬜⬜⬜⬜⬜ 4/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅✅⬜⬜⬜⬜⬜⬜⬜ 5/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 904 passing (about 3.5 min), including permission, isolation and audit guards over every endpoint and every role, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 1152 passing (about 4.5 min), including permission, isolation and audit guards over every endpoint and every role, every endpoint in a suspended and in a deleted workspace, run as the API's own database login, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **29 stories pass in about 9 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **32 stories pass in about 10 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -132,7 +132,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ✅ |
 | MT.3 | Audit log | ✅ |
 | MT.4 | Members and owners | ✅ |
-| MT.5 | Workspace lifecycle and quotas | ⬜ |
+| MT.5 | Workspace lifecycle and quotas | ✅ |
 | MT.6 | Incremental config protocol | ⬜ |
 | MT.7 | Gateway tenancy | ⬜ |
 | MT.8 | Workspace limits in the gateway | ⬜ |
@@ -221,6 +221,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Lifecycle audit events as platform-level events (`workspace_id` NULL)
 
 **Done when:** every transition and its refusals are tested; a purged workspace's slug can't be taken again; quotas are enforced under parallel creation (no overshoot).
+
+**Status:** ✅ Done (Nov 21). Commits `96dab16` (status, deletion times and limit columns with their CHECKs), `608eece` (lifecycle API: suspend, unsuspend, delete with `confirm`, restore, rename; suspended workspaces read-only, deleted ones 404), `d606631` (quotas and `PATCH /limits`), `71e8e15` (purge job with its own login `apim_purge` and container `workspace-purge`), `fa0a2ab` (e2e stories), then the docs. The parallel-creation test (10 at once against a quota of 3) was checked to fail without the workspace-row lock, 3 runs out of 3. Also `c25700f`: the gateway's real-Redis test failed once more (`TestServeRateLimitsWithRealRedis`, "Redis not reachable: i/o timeout" in its setup, on a busy machine); its setup now retries for ~2 s instead of using the 50 ms production timeouts. The purge job was run against the real stack (`--once`), not end to end on a 30-day-old workspace. Choices made while building are in the decisions log (MT.5 rows).
 
 ### MT.6 Incremental config protocol [7]
 
@@ -461,3 +463,18 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.4 | Changing your own role is `409`; removing yourself through `DELETE /members/{user_id}` is allowed (as `member.remove`), under the last-owner rule like leaving | Decision 9 forbids only your own role change; the last-owner rule protects the rest |
 | Nov 21 | MT.4 | Disabling a user is not refused when they are a workspace's last active Owner | A compromised account must be stoppable at once; the Platform Admin is the safety net and can assign a new Owner |
 | Nov 21 | MT.4 | e2e invites a new address every run and deletes its membership, GoTrue account and email afterwards; its `users` row stays | The invitation is only really sent to someone new; people are never deleted, only disabled |
+| Nov 21 | MT.5 | A transition from the wrong status answers `409 workspace_<status>` naming the current one; `default` answers `409 default_workspace`; a restore past `purge_after` `409 restore_period_over` | One shape for every refused transition, and the dashboard learns where the workspace is without another call |
+| Nov 21 | MT.5 | A suspended workspace is read-only for members, but platform power (Platform Admin with MFA, audited as such) still writes there, deleting it included | Decision 10 says "read-only for members"; the Platform Admin must be able to clean up or delete an abusive workspace without first letting its traffic flow again |
+| Nov 21 | MT.5 | A deleted or purged workspace answers 404 on every workspace endpoint for everyone, the Platform Admin included; leaving one is 404 too | Its data is frozen until restore or purge; the platform list (`?status=`) and restore are the Platform Admin's way in |
+| Nov 21 | MT.5 | Restore always returns to `active`, also when the workspace was suspended at deletion | Only the Platform Admin can delete a suspended workspace and only they restore; remembering the old status would need another column for a rare case |
+| Nov 21 | MT.5 | Restore is refused after `purge_after` even if the purge job hasn't run yet | "Within 30 days" as promised, and no race with a purge that may be running; both lock the row (the job skips locked rows) |
+| Nov 21 | MT.5 | `PATCH /limits` takes `null` to put a limit back to the platform default (other PATCHes refuse null); bounds 1–1,000,000 requests/min, 1–10,000 in flight, 1–10,000 services, 1–100,000 routes, 1–1,000,000 consumers | NULL is the column's meaning (decision 6); the bounds stop a typo meaning "no limit" |
+| Nov 21 | MT.5 | Quotas lock the workspace row `FOR NO KEY UPDATE` before counting; lowering a quota below current use only refuses new objects | Parallel creations count one after the other (tested with 10 at once); the lock doesn't block other writes' foreign-key checks (`KEY SHARE`) |
+| Nov 21 | MT.5 | Workspace answers carry `limits` (effective) and `limit_overrides` (own); `GET /workspaces/{slug}` adds `usage` | The Settings and Platform pages show both the value in force and whether it is a default, and how full each quota is |
+| Nov 21 | MT.5 | `PATCH /api/v1/workspaces/{slug}` (rename, `workspace:write`, `workspace.update`) built in MT.5 | PLAN.md lists it, no step had it, and `workspace:write` had no endpoint |
+| Nov 21 | MT.5 | Renames and limit changes are recorded in the workspace's own log; lifecycle events stay platform-level | Owners should see why their quota moved; lifecycle events must survive the purge of that log |
+| Nov 21 | MT.5 | The purge job has its own login (`apim_purge`) and container (`workspace-purge`), like retention; it deletes children first, keeps the row as `purged`, and records `workspace.purged` (actor `system`) with how many rows of each table went | The API's login can't delete audit events, and must not; a guard test checks the job's table list against every model with a `workspace_id` |
+| Nov 21 | MT.5 | The two database jobs share `app/core/jobs.py` (asyncpg URL, the daily loop) | One loop, one failure rule for both |
+| Nov 21 | MT.5 | e2e makes a new workspace per lifecycle story (`e2e-lc-<random>`) and leaves it deleted | Slugs are never reused, so a story that deletes must use a new one; the purge job removes it after 30 days |
+| Nov 21 | MT.5 | Workspace writes lock the row (`FOR NO KEY UPDATE`) and check status and membership again, after a first unlocked check that answers non-members `404` without the lock. Writes in one workspace therefore run one at a time, including a member add's GoTrue call. Leaving a suspended workspace returns `403 workspace_suspended`. `PATCH /limits` returns `404` for deleted or purged workspaces (after review) | A member write and a lifecycle transition or role change run in order. Strangers can't stall a workspace or learn from timing that it exists. Admin writes are rare, so one at a time per workspace costs nothing noticeable. Both endpoints honor the workspace state rules |
+| Nov 21 | MT.5 | Adding a new person whose GoTrue id our `users` already holds (a parallel add, or an account whose email changed in GoTrue) is `409`, not `500` (after review) | Postgres may report the GoTrue-id index before the email index; the parallel-add test hit it once the timing changed |

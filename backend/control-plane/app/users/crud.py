@@ -21,7 +21,7 @@ from app.core.errors import (
 )
 from app.core.identity import TokenClaims
 from app.gotrue.client import GoTrueAdmin
-from app.users.models import UQ_USER_EMAIL, User
+from app.users.models import UQ_USER_AUTH_USER_ID, UQ_USER_EMAIL, User
 from app.users.schemas import UserUpdate
 
 logger = logging.getLogger(__name__)
@@ -95,9 +95,19 @@ async def get_or_invite(db: AsyncSession, gotrue: GoTrueAdmin, email: str) -> tu
         is_active=True,
     )
     db.add(user)
-    # Two parallel adds of the same new person: the second waits, then sees it taken.
+    # Two parallel adds of the same new person: the second waits, then sees it
+    # taken (Postgres may report the email or the GoTrue id first). The GoTrue
+    # id alone is also taken when that account's email changed and our row
+    # still holds the old one.
     await flush_or_raise(
-        db, {UQ_USER_EMAIL: ConflictError("This person is being added right now; try again")}
+        db,
+        {
+            UQ_USER_EMAIL: ConflictError("This person is being added right now; try again"),
+            UQ_USER_AUTH_USER_ID: ConflictError(
+                "This person's account is already linked to a user (being added right now, "
+                "or under another email)"
+            ),
+        },
     )
     return user, invited
 

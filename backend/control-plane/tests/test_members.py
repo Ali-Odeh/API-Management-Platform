@@ -230,6 +230,24 @@ async def test_the_same_new_person_added_twice_at_once(
     assert count == 1
 
 
+async def test_an_account_linked_under_another_email_is_409(
+    client: AsyncClient, db: AsyncSession, acme: Workspace, owner: User, gotrue: FakeGoTrue
+) -> None:
+    # The person changed their email in GoTrue; our row still has the old one.
+    # GoTrue's id is taken, so they can't become a second user: 409, not 500.
+    account = gotrue.add_account("renamed@example.com")
+    await make_user(db, email="old-name@example.com", auth_user_id=account)
+
+    r = await client.post(
+        MEMBERS, json={"email": "renamed@example.com", "role": "viewer"}, headers=_headers(owner)
+    )
+
+    assert r.status_code == 409
+    assert "already linked" in r.json()["detail"]
+    count = await db.scalar(select(func.count()).where(WorkspaceMember.workspace_id == acme.id))
+    assert count == 1  # only the Owner
+
+
 # ---- Change role (decision 9)
 
 
@@ -426,7 +444,10 @@ async def test_two_owners_demoting_each_other_leave_one_owner(
         client.patch(f"{MEMBERS}/{ann.id}", json=demote, headers=_headers(bob)),
     )
 
-    assert sorted(r.status_code for r in results) == [200, 409]
+    # The second request checks the caller's role after the first commits.
+    assert sorted(r.status_code for r in results) == [200, 403]
+    refused = next(r for r in results if r.status_code == 403)
+    assert refused.json() == {"detail": "permission_denied"}
     assert list((await _roles(db, acme)).values()).count("owner") == 1
 
 

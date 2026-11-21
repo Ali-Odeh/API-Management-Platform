@@ -13,6 +13,7 @@ from app.consumers.schemas import ConsumerCreate, ConsumerUpdate
 from app.core.db import commit_or_raise
 from app.core.errors import AppError, ConflictError, NotFoundError
 from app.core.pagination import PageParams, paginate
+from app.workspaces.limits import check_quota
 
 # What a consumer's audit events record (blocking is a `status` change).
 AUDIT_FIELDS = ("name", "email", "status", "rate_limit_per_min")
@@ -57,6 +58,7 @@ async def get_consumer(
 async def create_consumer(
     db: AsyncSession, workspace_id: uuid.UUID, *, data: ConsumerCreate, audit: AuditContext
 ) -> Consumer:
+    await check_quota(db, workspace_id, "max_consumers")
     consumer = Consumer(id=uuid.uuid4(), workspace_id=workspace_id, **data.model_dump())
     db.add(consumer)
     _record(db, audit, consumer, "consumer.create", created(snapshot(consumer, AUDIT_FIELDS)))

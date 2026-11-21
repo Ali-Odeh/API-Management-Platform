@@ -1,21 +1,27 @@
 import uuid
+from typing import NamedTuple
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import crud as audit
-from app.audit.changes import created
+from app.audit.changes import Changes, created, snapshot, updated
 from app.audit.context import AuditContext
 from app.core.db import flush_or_raise
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, NotFoundError
 from app.core.pagination import PageParams, paginate
 from app.core.permissions import Role
 from app.gotrue.client import GoTrueAdmin
 from app.members import crud as members_crud
 from app.members.models import WorkspaceMember
 from app.users import crud as users_crud
-from app.workspaces.models import DEFAULT_WORKSPACE_SLUG, Workspace
-from app.workspaces.schemas import WorkspaceCreate
+from app.workspaces.models import (
+    DEFAULT_WORKSPACE_SLUG,
+    LIMIT_COLUMNS,
+    Workspace,
+    WorkspaceStatus,
+)
+from app.workspaces.schemas import LimitsUpdate, WorkspaceCreate, WorkspaceUpdate
 
 WORKSPACE_NOT_FOUND = "Workspace not found"
 UQ_WORKSPACE_SLUG = "uq_workspaces_slug"
@@ -26,16 +32,31 @@ async def get_workspace_by_slug(db: AsyncSession, slug: str) -> Workspace | None
     return result.one_or_none()
 
 
-async def get_workspace_and_role(
-    db: AsyncSession, slug: str, *, user_id: uuid.UUID
-) -> tuple[uuid.UUID, Role | None] | None:
-    """The workspace's id and the user's role in it (None: not a member), in one query.
+class Membership(NamedTuple):
+    """A workspace as the permission check needs it, and the caller's role there."""
 
-    None when no workspace has this slug.
+    workspace_id: uuid.UUID
+    status: WorkspaceStatus
+    role: Role | None  # None: not a member
+
+
+async def get_workspace_and_role(
+    db: AsyncSession, slug: str, *, user_id: uuid.UUID, lock: bool = False
+) -> Membership | None:
+    """The workspace, its status and the user's role in it.
+
+    None when no workspace has this slug, or it was deleted (or purged):
+    a deleted workspace is gone for everyone acting in it (decision 10).
+    With `lock`, the workspace row is locked first; see lock_membership.
     """
+    if lock:  # workspace rows are never deleted, so the row is there to lock
+        await db.execute(
+            select(Workspace.id).where(Workspace.slug == slug).with_for_update(key_share=True)
+        )
+
     row = (
         await db.execute(
-            select(Workspace.id, WorkspaceMember.role)
+            select(Workspace.id, Workspace.status, WorkspaceMember.role)
             .outerjoin(
                 WorkspaceMember,
                 (WorkspaceMember.workspace_id == Workspace.id)
@@ -44,9 +65,28 @@ async def get_workspace_and_role(
             .where(Workspace.slug == slug)
         )
     ).one_or_none()
-    if row is None:
+    if row is None or row.status.is_gone:
         return None
-    return row.id, Role(row.role) if row.role is not None else None
+    return Membership(row.id, row.status, Role(row.role) if row.role is not None else None)
+
+
+async def lock_membership(
+    db: AsyncSession, slug: str, *, user_id: uuid.UUID, is_platform_admin: bool
+) -> Membership | None:
+    """For a write: the membership, read again after locking the workspace row.
+
+    The lock (FOR NO KEY UPDATE, the quota checks' lock, held until the
+    caller's transaction ends) puts a member's write and a lifecycle
+    transition or role change in one order: the write sees the status and
+    role in force once the other commits. Someone with no business in the
+    workspace (not a member, not the Platform Admin) gets None without
+    touching the lock, so they can't stall its writers, and how long they
+    wait can't reveal that the workspace exists.
+    """
+    found = await get_workspace_and_role(db, slug, user_id=user_id)
+    if found is None or (found.role is None and not is_platform_admin):
+        return None
+    return await get_workspace_and_role(db, slug, user_id=user_id, lock=True)
 
 
 async def get_or_create_default_workspace(db: AsyncSession) -> Workspace:
@@ -61,24 +101,34 @@ async def get_or_create_default_workspace(db: AsyncSession) -> Workspace:
 
 
 async def get_workspace(db: AsyncSession, workspace_id: uuid.UUID) -> Workspace:
-    """A workspace the permission check has just found (workspaces are never deleted)."""
+    """A workspace the permission check has just found (rows are never deleted)."""
     return (await db.scalars(select(Workspace).where(Workspace.id == workspace_id))).one()
 
 
-async def list_workspaces(db: AsyncSession, *, page: PageParams) -> tuple[list[Workspace], int]:
-    """Every workspace, newest first (Platform Admin)."""
+async def list_workspaces(
+    db: AsyncSession, *, page: PageParams, status: WorkspaceStatus | None = None
+) -> tuple[list[Workspace], int]:
+    """Every workspace, deleted and purged ones too, newest first (Platform Admin)."""
     query = select(Workspace).order_by(Workspace.created_at.desc(), Workspace.id)
+    if status is not None:
+        query = query.where(Workspace.status == status)
     return await paginate(db, query, page)
 
 
 async def list_my_workspaces(
     db: AsyncSession, *, user_id: uuid.UUID, page: PageParams
 ) -> tuple[list[tuple[Workspace, Role]], int]:
-    """The workspaces a person belongs to, with their role in each, newest first."""
+    """The workspaces a person belongs to, with their role in each, newest first.
+
+    Suspended ones included (members may still read them); deleted ones are gone.
+    """
     query = (
         select(Workspace, WorkspaceMember.role)
         .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-        .where(WorkspaceMember.user_id == user_id)
+        .where(
+            WorkspaceMember.user_id == user_id,
+            Workspace.status.in_([WorkspaceStatus.ACTIVE, WorkspaceStatus.SUSPENDED]),
+        )
         .order_by(Workspace.created_at.desc(), Workspace.id)
     )
     total = await db.scalar(select(func.count()).select_from(query.subquery())) or 0
@@ -118,6 +168,65 @@ async def create_workspace(
     await db.commit()
     await db.refresh(workspace)
     return workspace
+
+
+async def rename_workspace(
+    db: AsyncSession, workspace_id: uuid.UUID, *, data: WorkspaceUpdate, audit_ctx: AuditContext
+) -> Workspace:
+    """A new name (Owner); the slug never changes. A workspace-level event:
+    unlike the lifecycle, the workspace's own members see it in their log."""
+    workspace = await get_workspace(db, workspace_id)
+    before = snapshot(workspace, ("name",))
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(workspace, field, value)
+    if changes := updated(before, snapshot(workspace, ("name",))):
+        record_in_workspace(db, audit_ctx, workspace, "workspace.update", changes)
+        await db.commit()
+        await db.refresh(workspace)
+    return workspace
+
+
+async def change_limits(
+    db: AsyncSession, slug: str, *, data: LimitsUpdate, audit_ctx: AuditContext
+) -> Workspace:
+    """Set the workspace's own limits (Platform Admin); null = the platform default.
+
+    In the workspace's own log, so its Owners see why a quota moved. The row
+    is locked, so a quota check at the same moment counts against the old
+    limit or the new one. A deleted or purged workspace is not found.
+    """
+    workspace = await db.scalar(
+        select(Workspace)
+        .where(Workspace.slug == slug)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if workspace is None or workspace.status.is_gone:
+        raise NotFoundError(WORKSPACE_NOT_FOUND)
+    before = snapshot(workspace, LIMIT_COLUMNS)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(workspace, field, value)
+    if changes := updated(before, snapshot(workspace, LIMIT_COLUMNS)):
+        record_in_workspace(db, audit_ctx, workspace, "workspace.limits_change", changes)
+        await db.commit()
+        await db.refresh(workspace)
+    return workspace
+
+
+def record_in_workspace(
+    db: AsyncSession, audit_ctx: AuditContext, workspace: Workspace, action: str, changes: Changes
+) -> None:
+    """An event about the workspace in its own log, seen by its members."""
+    audit.record(
+        db,
+        audit_ctx,
+        workspace_id=workspace.id,
+        action=action,
+        target_type="workspace",
+        target_id=workspace.id,
+        target_name=workspace.slug,
+        changes=changes,
+    )
 
 
 def _record_created(

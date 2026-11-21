@@ -15,13 +15,14 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 from fastapi.dependencies.models import Dependant
 from fastapi.routing import APIRoute
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import func, pool, select, text
+from sqlalchemy import func, pool, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.audit.models import AuditEvent
@@ -33,6 +34,7 @@ from app.keys.models import ApiKey
 from app.main import app
 from app.users.models import User
 from app.workspaces.crud import WORKSPACE_NOT_FOUND
+from app.workspaces.models import Workspace, WorkspaceStatus
 from tests.conftest import OWNER_URL
 from tests.factories import (
     make_api_key,
@@ -55,6 +57,8 @@ SELF: set[Endpoint] = {
     ("DELETE", "/api/v1/me/workspaces/{slug}"),  # leave a workspace I belong to
 }
 LEAVE: Endpoint = ("DELETE", "/api/v1/me/workspaces/{slug}")
+DELETE_WORKSPACE: Endpoint = ("DELETE", "/api/v1/workspaces/{slug}")
+LIMITS: Endpoint = ("PATCH", "/api/v1/workspaces/{slug}/limits")
 WORKSPACE_PREFIX = "/api/v1/workspaces/{slug}"
 
 
@@ -129,9 +133,11 @@ def test_every_signed_in_endpoint_declares_who_may_call_it() -> None:
 
 def test_workspace_endpoints_live_under_their_workspace() -> None:
     # A permission only means something inside the workspace named in the URL,
-    # and everything under /workspaces/{slug} must check one.
+    # and everything under /workspaces/{slug} must check one, unless it is a
+    # platform endpoint acting on the workspace itself (its lifecycle).
     under_slug = {e for e in SIGNED_IN if e[1].startswith(WORKSPACE_PREFIX)}
-    assert under_slug == set(WORKSPACE)
+    assert under_slug - set(PLATFORM) == set(WORKSPACE)
+    assert not set(PLATFORM) & set(WORKSPACE)
 
 
 @pytest.mark.parametrize(("method", "path"), WORKSPACE_ENDPOINTS)
@@ -281,6 +287,8 @@ _VALID_BODIES: dict[Endpoint, Callable[[dict[str, uuid.UUID]], dict[str, Any]]] 
         "email": "candidate@acme.test", "role": "viewer",
     },
     ("PATCH", "/api/v1/workspaces/{slug}/members/{user_id}"): lambda ids: {"role": "api_admin"},
+    ("PATCH", "/api/v1/workspaces/{slug}"): lambda ids: {"name": "Acme Renamed"},
+    ("DELETE", "/api/v1/workspaces/{slug}"): lambda ids: {"confirm": "acme"},
 }  # fmt: skip
 
 
@@ -521,15 +529,34 @@ _ACTIONS: dict[Endpoint, str] = {
     ("PATCH", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.role_change",
     ("DELETE", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.remove",
     LEAVE: "member.leave",
+    ("PATCH", "/api/v1/workspaces/{slug}"): "workspace.update",
+    DELETE_WORKSPACE: "workspace.deleted",
+    ("POST", "/api/v1/workspaces/{slug}/suspend"): "workspace.suspended",
+    ("POST", "/api/v1/workspaces/{slug}/unsuspend"): "workspace.unsuspended",
+    ("POST", "/api/v1/workspaces/{slug}/restore"): "workspace.restored",
+    LIMITS: "workspace.limits_change",
 }
+# Changes recorded in the workspace's own log. Lifecycle events (deleting it
+# too) are platform-level (decision 10): they must survive the purge of that log.
+# A limits change is a platform endpoint, but the workspace's Owners see it.
+IN_WORKSPACE_LOG = (set(WORKSPACE) | {LEAVE, LIMITS}) - {DELETE_WORKSPACE}
 
 # Valid requests for the platform endpoints (the workspace ones use _VALID_BODIES).
-_PLATFORM_BODIES: dict[Endpoint, Callable[[User], dict[str, Any]]] = {
+_PLATFORM_BODIES: dict[Endpoint, Callable[[User], dict[str, Any] | None]] = {
     ("POST", "/api/v1/workspaces"): lambda person: {
         "name": "Newco", "slug": "newco", "owner_email": person.email,
     },
     ("PATCH", "/api/v1/users/{user_id}"): lambda person: {"is_active": False},
+    ("POST", "/api/v1/workspaces/{slug}/suspend"): lambda person: {"reason": "abuse"},
+    ("POST", "/api/v1/workspaces/{slug}/unsuspend"): lambda person: None,
+    ("POST", "/api/v1/workspaces/{slug}/restore"): lambda person: None,
+    LIMITS: lambda person: {"max_services": 50},
 }  # fmt: skip
+# Where `acme` must be in its life for the change to be valid.
+_STATUS_BEFORE: dict[Endpoint, WorkspaceStatus] = {
+    ("POST", "/api/v1/workspaces/{slug}/unsuspend"): WorkspaceStatus.SUSPENDED,
+    ("POST", "/api/v1/workspaces/{slug}/restore"): WorkspaceStatus.DELETED,
+}
 
 
 def test_every_mutating_endpoint_names_its_audit_event() -> None:
@@ -573,10 +600,16 @@ async def _mutate(
     if endpoint == LEAVE:
         return await client.request(method, _url(path, "acme"), headers=_headers(actors.leaver))
     body = _PLATFORM_BODIES[endpoint](actors.person)
-    url = _url(path, ids={"user_id": actors.person.id})
+    url = _url(path, "acme", ids={"user_id": actors.person.id})
     return await client.request(
         method, url, json=body, headers=_headers(actors.platform_admin, mfa=True)
     )
+
+
+async def _prepare(endpoint: Endpoint, acme: dict[str, uuid.UUID]) -> None:
+    """Put `acme` where the change needs it (say, deleted, to restore it)."""
+    if endpoint in _STATUS_BEFORE:
+        await set_status(acme["workspace_id"], _STATUS_BEFORE[endpoint])
 
 
 async def _event_ids() -> set[uuid.UUID]:
@@ -599,6 +632,7 @@ async def test_every_change_writes_exactly_one_event(
     method: str,
     path: str,
 ) -> None:
+    await _prepare((method, path), acme)
     seen = await _event_ids()
 
     r = await _mutate(client, (method, path), acme, actors)
@@ -606,6 +640,7 @@ async def test_every_change_writes_exactly_one_event(
     assert 200 <= r.status_code < 300, r.text
     [event] = await _events_since(seen)
     in_workspace = (method, path) in WORKSPACE or (method, path) == LEAVE
+    in_log = (method, path) in IN_WORKSPACE_LOG
     actor = (
         actors.leaver
         if (method, path) == LEAVE
@@ -614,7 +649,7 @@ async def test_every_change_writes_exactly_one_event(
         else actors.platform_admin
     )
     assert event.action == _ACTIONS[(method, path)]
-    assert event.workspace_id == (acme["workspace_id"] if in_workspace else None)
+    assert event.workspace_id == (acme["workspace_id"] if in_log else None)
     assert (event.actor_user_id, event.actor_email) == (actor.id, actor.email)
     assert event.actor_type == ("user" if in_workspace else "platform_admin")
     assert event.request_id == r.headers["X-Request-ID"]
@@ -673,6 +708,7 @@ async def test_a_change_that_fails_leaves_no_event(
     # transaction, so it must be gone too; an event written on its own (say,
     # committed before the change) would survive and fail this test.
     table = _TABLES[_ACTIONS[(method, path)].split(".")[0]]
+    await _prepare((method, path), acme)
     seen = await _event_ids()
     transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with (
@@ -685,7 +721,7 @@ async def test_a_change_that_fails_leaves_no_event(
     assert await _events_since(seen) == []
 
 
-@pytest.mark.parametrize(("method", "path"), sorted(set(MUTATING) & set(WORKSPACE)))
+@pytest.mark.parametrize(("method", "path"), sorted(set(MUTATING) & IN_WORKSPACE_LOG - {LEAVE}))
 async def test_platform_admin_changes_show_in_the_workspace_log(
     client: AsyncClient, acme: dict[str, uuid.UUID], actors: Actors, method: str, path: str
 ) -> None:
@@ -713,6 +749,77 @@ async def test_reading_writes_no_event(
         r = await client.get(_url(path), headers=_headers(actors.platform_admin, mfa=True))
     assert r.status_code == 200, r.text
     assert await _events_since(seen) == []
+
+
+# ---- Lifecycle: a suspended workspace is read-only, a deleted one is gone (decision 10)
+
+
+async def set_status(workspace_id: uuid.UUID, status: WorkspaceStatus) -> None:
+    """Put a workspace in a status directly, with the fields that status needs."""
+    now = datetime.now(UTC)
+    values: dict[str, Any] = {"status": status}
+    if status == WorkspaceStatus.SUSPENDED:
+        values["status_reason"] = "set by a test"
+    if status.is_gone:
+        values |= {"deleted_at": now, "purge_after": now + timedelta(days=30)}
+    async with SessionLocal() as session:
+        await session.execute(update(Workspace).where(Workspace.id == workspace_id).values(values))
+        await session.commit()
+
+
+@pytest.mark.parametrize(("method", "path"), [*WORKSPACE_ENDPOINTS, LEAVE])
+async def test_a_suspended_workspace_is_read_only_for_its_members(
+    client: AsyncClient, acme: dict[str, uuid.UUID], actors: Actors, method: str, path: str
+) -> None:
+    await set_status(acme["workspace_id"], WorkspaceStatus.SUSPENDED)
+
+    endpoint = (method, path)
+    member = actors.leaver if endpoint == LEAVE else actors.owner
+    r = await _valid_request(client, method, path, acme, member, mfa=False)
+
+    if endpoint != LEAVE and WORKSPACE[endpoint].is_read:
+        assert r.status_code == 200, r.text
+    else:
+        assert r.status_code == 403
+        assert r.json() == {"detail": "workspace_suspended"}
+
+
+@pytest.mark.parametrize(("method", "path"), [e for e in WORKSPACE_ENDPOINTS if e[0] != "GET"])
+async def test_only_platform_power_writes_in_a_suspended_workspace(
+    client: AsyncClient, acme: dict[str, uuid.UUID], actors: Actors, method: str, path: str
+) -> None:
+    # The Platform Admin can still clean up (or delete) a suspended workspace,
+    # with MFA, and it is recorded as platform power.
+    await set_status(acme["workspace_id"], WorkspaceStatus.SUSPENDED)
+    seen = await _event_ids()
+
+    r = await _valid_request(client, method, path, acme, actors.platform_admin, mfa=False)
+    assert r.status_code == 403
+    assert r.json() == {"detail": "mfa_required"}
+
+    r = await _valid_request(client, method, path, acme, actors.platform_admin, mfa=True)
+    assert 200 <= r.status_code < 300, r.text
+    [event] = await _events_since(seen)
+    assert event.actor_type == "platform_admin"
+
+
+@pytest.mark.parametrize("status", [WorkspaceStatus.DELETED, WorkspaceStatus.PURGED])
+@pytest.mark.parametrize(("method", "path"), [*WORKSPACE_ENDPOINTS, LEAVE])
+async def test_a_deleted_workspace_is_gone_for_everyone(
+    client: AsyncClient,
+    acme: dict[str, uuid.UUID],
+    actors: Actors,
+    method: str,
+    path: str,
+    status: WorkspaceStatus,
+) -> None:
+    # Its members and the Platform Admin alike: only the platform endpoints
+    # (restore, the list) still see it.
+    await set_status(acme["workspace_id"], status)
+    for user, mfa in ((actors.owner, False), (actors.platform_admin, True)):
+        r = await _valid_request(client, method, path, acme, user, mfa=mfa)
+        assert r.status_code == 404, r.text
+        assert r.json() == {"detail": WORKSPACE_NOT_FOUND}
 
 
 # ---- Internal endpoints need the internal token

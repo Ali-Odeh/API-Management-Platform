@@ -35,8 +35,8 @@ async def _save(db: AsyncSession, obj: T) -> T:
     return obj
 
 
-async def make_workspace(db: AsyncSession, slug: str = "other") -> Workspace:
-    return await _save(db, Workspace(name=slug.title(), slug=slug))
+async def make_workspace(db: AsyncSession, slug: str = "other", **fields: Any) -> Workspace:
+    return await _save(db, Workspace(name=slug.title(), slug=slug, **fields))
 
 
 async def make_user(

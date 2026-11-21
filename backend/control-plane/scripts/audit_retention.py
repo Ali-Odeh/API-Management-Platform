@@ -13,7 +13,8 @@ import os
 import signal
 import sys
 
-from app.audit.retention import DAY_SECONDS, DEFAULT_DAYS, delete_expired, run
+from app.audit.retention import DEFAULT_DAYS, delete_expired, run
+from app.core.jobs import DAY_SECONDS
 
 
 async def main(argv: list[str]) -> None:

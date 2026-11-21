@@ -20,6 +20,7 @@ from app.core.pagination import PageParams, paginate
 from app.routes.models import FK_ROUTE_SERVICE
 from app.services.models import UQ_SERVICE_NAME, Service
 from app.services.schemas import ServiceCreate, ServiceUpdate
+from app.workspaces.limits import check_quota
 
 # What a service's audit events record (its whole configuration).
 AUDIT_FIELDS = ("name", "upstream_url", "timeout_ms", "is_active")
@@ -55,6 +56,7 @@ async def get_service(
 async def create_service(
     db: AsyncSession, workspace_id: uuid.UUID, *, data: ServiceCreate, audit: AuditContext
 ) -> Service:
+    await check_quota(db, workspace_id, "max_services")
     # The id is set here so the audit event can name it before the commit.
     service = Service(id=uuid.uuid4(), workspace_id=workspace_id, **data.model_dump())
     db.add(service)

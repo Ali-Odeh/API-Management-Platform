@@ -34,6 +34,11 @@ from tests.fakes import FakeGoTrue, bearer, make_token
 
 MVP_HEAD = "db8a66008fec"
 CONFIG_TABLES = ("workspaces", "services", "routes", "consumers", "api_keys", "config_version")
+# Workspace columns added after the MVP that are NULL on an upgraded row (MT.5).
+NEW_WORKSPACE_COLUMNS = (
+    "status_reason", "deleted_at", "purge_after",
+    "rate_limit_per_min", "max_concurrent", "max_services", "max_routes", "max_consumers",
+)  # fmt: skip
 
 ADMIN_ID = uuid.UUID("087ab0d5-9592-4f88-8ab0-240ead00642f")
 ADMIN_EMAIL = "admin@example.com"
@@ -103,6 +108,16 @@ async def _snapshot(engine: AsyncEngine) -> dict[str, list[dict[str, Any]]]:
         }
 
 
+def _columns_of(
+    snapshot: dict[str, list[dict[str, Any]]], like: dict[str, list[dict[str, Any]]]
+) -> dict[str, list[dict[str, Any]]]:
+    """`snapshot` with only the columns each table of `like` has (the MVP's)."""
+    return {
+        table: [{c: row[c] for c in like[table][0]} if like[table] else row for row in rows]
+        for table, rows in snapshot.items()
+    }
+
+
 async def _seed_mvp() -> dict[str, list[dict[str, Any]]]:
     engine = _engine()
     async with engine.begin() as conn:
@@ -118,7 +133,16 @@ async def _check_upgraded(before: dict[str, list[dict[str, Any]]], gotrue: FakeG
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
         # The config is exactly as it was: no row added, changed or bumped.
-        assert await _snapshot(engine) == before
+        after = await _snapshot(engine)
+        assert _columns_of(after, before) == before
+        # Columns added since the MVP start at their defaults (MT.5: active,
+        # the platform's limits).
+        [workspace] = after["workspaces"]
+        assert workspace["status"] == "active"
+        assert set(workspace.items()) - set(before["workspaces"][0].items()) == {
+            ("status", "active"),
+            *((column, None) for column in NEW_WORKSPACE_COLUMNS),
+        }
 
         # The admin is the same person, now a Platform Admin waiting to be linked.
         async with engine.connect() as conn:

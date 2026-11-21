@@ -3,7 +3,8 @@
 # `docker compose up` (macOS / Linux; on Windows use scripts/init-env.ps1).
 #
 # Fills every empty value of .env.example: the Postgres user, password and
-# database, the three database URLs (owner, API, audit retention) with their
+# database, the four database URLs (owner, API, audit retention, workspace
+# purge) with their
 # passwords, the internal token, GoTrue's database
 # password, JWT secret and service-role key, and the first Platform Admin
 # (admin@example.com with a random password, printed once at the end).
@@ -53,6 +54,7 @@ sed \
   -e "s|^MIGRATION_DATABASE_URL=\$|MIGRATION_DATABASE_URL=postgresql+asyncpg://$pg_user:$pg_password@postgres:5432/$pg_db|" \
   -e "s|^DATABASE_URL=\$|DATABASE_URL=postgresql+asyncpg://apim_app:$(secret 16)@postgres:5432/$pg_db|" \
   -e "s|^AUDIT_RETENTION_DATABASE_URL=\$|AUDIT_RETENTION_DATABASE_URL=postgresql+asyncpg://apim_retention:$(secret 16)@postgres:5432/$pg_db|" \
+  -e "s|^PURGE_DATABASE_URL=\$|PURGE_DATABASE_URL=postgresql+asyncpg://apim_purge:$(secret 16)@postgres:5432/$pg_db|" \
   -e "s|^INTERNAL_TOKEN=\$|INTERNAL_TOKEN=$(secret 24)|" \
   -e "s|^PLATFORM_ADMIN_EMAIL=\$|PLATFORM_ADMIN_EMAIL=admin@example.com|" \
   -e "s|^PLATFORM_ADMIN_PASSWORD=\$|PLATFORM_ADMIN_PASSWORD=$admin_password|" \

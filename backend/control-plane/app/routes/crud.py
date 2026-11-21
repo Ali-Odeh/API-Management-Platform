@@ -14,6 +14,7 @@ from app.core.pagination import PageParams, paginate
 from app.routes.models import FK_ROUTE_SERVICE, UQ_ROUTE_PATH_PREFIX, Route
 from app.routes.schemas import RouteCreate, RouteUpdate
 from app.services import crud as services_crud
+from app.workspaces.limits import check_quota
 
 _SERVICE_NOT_FOUND = "Service not found in this workspace"
 
@@ -70,6 +71,7 @@ async def create_route(
     db: AsyncSession, workspace_id: uuid.UUID, *, data: RouteCreate, audit: AuditContext
 ) -> Route:
     await _ensure_service_exists(db, workspace_id=workspace_id, service_id=data.service_id)
+    await check_quota(db, workspace_id, "max_routes")
     route = Route(id=uuid.uuid4(), workspace_id=workspace_id, **data.model_dump())
     db.add(route)
     _record(db, audit, route, "route.create", created(snapshot(route, AUDIT_FIELDS)))

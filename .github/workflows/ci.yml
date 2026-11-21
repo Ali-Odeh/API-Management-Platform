@@ -42,11 +42,12 @@ jobs:
 
     # Throwaway values for this run only. Real secrets never belong in a repo.
     env:
-      # The owner (migrations, test setup) and the two least-privilege logins,
+      # The owner (migrations, test setup) and the three least-privilege logins,
       # which the tests create with these passwords (MT.3).
       MIGRATION_DATABASE_URL: postgresql+asyncpg://app:app@localhost:5432/apim
       DATABASE_URL: postgresql+asyncpg://apim_app:ci-only-app-password@localhost:5432/apim
       AUDIT_RETENTION_DATABASE_URL: postgresql+asyncpg://apim_retention:ci-only-retention-password@localhost:5432/apim
+      PURGE_DATABASE_URL: postgresql+asyncpg://apim_purge:ci-only-purge-password@localhost:5432/apim
       INTERNAL_TOKEN: ci-only-internal-token
       # Unit tests sign their own GoTrue-shaped tokens with this secret and use
       # a fake GoTrue, so no GoTrue process runs here (the e2e job has one).
@@ -176,7 +177,7 @@ jobs:
       - name: Check that the API has no privileged database credentials
         run: >-
           docker compose exec -T control-plane python -c
-          'import os; assert not {"MIGRATION_DATABASE_URL", "AUDIT_RETENTION_DATABASE_URL",
+          'import os; assert not {"MIGRATION_DATABASE_URL", "AUDIT_RETENTION_DATABASE_URL", "PURGE_DATABASE_URL",
           "POSTGRES_PASSWORD", "PGPASSWORD", "GOTRUE_DB_PASSWORD"}.intersection(os.environ)'
 
       - name: End-to-end tests

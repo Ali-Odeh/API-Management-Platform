@@ -6,16 +6,15 @@ nothing from the API (no settings, no engine): it needs one URL and a number.
 """
 
 import asyncio
-import contextlib
 import logging
 
 import asyncpg
-from sqlalchemy import make_url
+
+from app.core.jobs import asyncpg_dsn, repeat
 
 logger = logging.getLogger("audit_retention")
 
 DEFAULT_DAYS = 365
-DAY_SECONDS = 24 * 60 * 60
 # Deleting a year's worth at once would hold locks for long; batches don't.
 _BATCH = 5000
 _DELETE_BATCH = """
@@ -28,16 +27,11 @@ _DELETE_BATCH = """
 """
 
 
-def _dsn(database_url: str) -> str:
-    """'postgresql+asyncpg://...' -> 'postgresql://...', the form asyncpg takes."""
-    return make_url(database_url).set(drivername="postgresql").render_as_string(hide_password=False)
-
-
 async def delete_expired(database_url: str, *, days: int, batch: int = _BATCH) -> int:
     """Delete every event older than `days`; returns how many."""
     if days < 1:
         raise ValueError("The retention period must be at least one day")
-    conn = await asyncpg.connect(_dsn(database_url))
+    conn = await asyncpg.connect(asyncpg_dsn(database_url))
     try:
         deleted = 0
         while True:
@@ -51,16 +45,10 @@ async def delete_expired(database_url: str, *, days: int, batch: int = _BATCH) -
 
 
 async def run(database_url: str, *, days: int, every: float, stop: asyncio.Event) -> None:
-    """Delete expired events now and then every `every` seconds, until `stop` is set.
+    """Delete expired events now and then every `every` seconds, until `stop` is set."""
 
-    A failed round (e.g. the database restarting) is logged and retried at
-    the next one: old events can wait a day, the job must not die.
-    """
-    while not stop.is_set():
-        try:
-            deleted = await delete_expired(database_url, days=days)
-            logger.info("deleted %d audit events older than %d days", deleted, days)
-        except (OSError, asyncpg.PostgresError):
-            logger.exception("audit retention failed; trying again at the next round")
-        with contextlib.suppress(TimeoutError):  # the wait ends early when stopped
-            await asyncio.wait_for(stop.wait(), timeout=every)
+    async def job_round() -> None:
+        deleted = await delete_expired(database_url, days=days)
+        logger.info("deleted %d audit events older than %d days", deleted, days)
+
+    await repeat(job_round, every=every, stop=stop, logger=logger, name="audit retention")

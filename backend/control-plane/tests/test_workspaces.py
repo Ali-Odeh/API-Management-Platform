@@ -2,6 +2,7 @@
 
 import inspect
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -21,7 +22,7 @@ from app.routes import crud as routes_crud
 from app.services import crud as services_crud
 from app.users.models import User
 from app.workspaces import crud as workspaces_crud
-from app.workspaces.models import Workspace
+from app.workspaces.models import LIMIT_COLUMNS, Workspace, WorkspaceStatus
 from tests.factories import expect_violation, make_member, make_user, make_workspace
 from tests.fakes import FakeGoTrue, bearer, make_token
 
@@ -92,6 +93,42 @@ async def test_invalid_slug_is_422(
 
 async def test_the_database_refuses_a_bad_slug_too(db: AsyncSession) -> None:
     await expect_violation(db, "ck_workspaces_slug_dns_label", make_workspace(db, slug="Bad_Slug"))
+
+
+_NOW = datetime(2026, 11, 21, tzinfo=UTC)
+_GONE = {"deleted_at": _NOW, "purge_after": _NOW + timedelta(days=30)}
+
+
+@pytest.mark.parametrize(
+    ("constraint", "slug", "fields"),
+    [
+        ("ck_workspaces_status", "acme", {"status": "archived"}),
+        # Requests without a subdomain go to `default`: it always serves them.
+        ("ck_workspaces_default_stays_active", "default", {"status": "suspended"}),
+        ("ck_workspaces_default_stays_active", "default", {"status": "deleted", **_GONE}),
+        ("ck_workspaces_reason_if_suspended", "acme", {"status_reason": "abuse"}),
+        ("ck_workspaces_deletion_times", "acme", {"status": "deleted"}),
+        ("ck_workspaces_deletion_times", "acme", {"status": "purged", "deleted_at": _NOW}),
+        ("ck_workspaces_deletion_times", "acme", _GONE),
+        ("ck_workspaces_deletion_times", "acme", {"status": "deleted", "deleted_at": _NOW,
+                                                  "purge_after": _NOW}),
+        *(
+            (f"ck_workspaces_{column}_positive", "acme", {column: 0})
+            for column in LIMIT_COLUMNS
+        ),
+    ],
+)  # fmt: skip
+async def test_the_database_refuses_an_inconsistent_status_or_limit(
+    db: AsyncSession, constraint: str, slug: str, fields: dict[str, Any]
+) -> None:
+    await expect_violation(db, constraint, make_workspace(db, slug=slug, **fields))
+
+
+async def test_a_new_workspace_is_active_with_the_default_limits(db: AsyncSession) -> None:
+    workspace = await make_workspace(db, slug="acme")
+    await db.refresh(workspace)
+    assert workspace.status == WorkspaceStatus.ACTIVE
+    assert all(getattr(workspace, column) is None for column in LIMIT_COLUMNS)
 
 
 async def test_taken_slug_is_409(

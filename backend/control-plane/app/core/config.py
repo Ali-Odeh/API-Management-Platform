@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     platform_admin_email: str
     platform_admin_password: str = ""
 
+    # Workspace defaults (decision 6), for every workspace without its own
+    # value; the Platform Admin sets one per workspace (PATCH .../limits).
+    # The gateway enforces the first two (MT.8), the control plane the quotas.
+    workspace_rate_limit_per_min: int = Field(default=6000, gt=0)
+    workspace_max_concurrent: int = Field(default=200, gt=0)
+    workspace_max_services: int = Field(default=100, gt=0)
+    workspace_max_routes: int = Field(default=500, gt=0)
+    workspace_max_consumers: int = Field(default=5000, gt=0)
+
+    # A deleted workspace can be restored this long; then the purge job
+    # deletes its data (decision 10).
+    purge_after_days: int = Field(default=30, ge=1)
+
 
 @lru_cache
 def get_settings() -> Settings:
