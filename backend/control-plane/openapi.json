@@ -678,6 +678,80 @@
         "title": "Limits",
         "type": "object"
       },
+      "LimitsUpdate": {
+        "description": "Only the limits sent change. Unlike other PATCHes, null is allowed: it\nputs the limit back to the platform default. Lowering a quota below what\nthe workspace has refuses new objects, never removes existing ones.",
+        "properties": {
+          "max_concurrent": {
+            "anyOf": [
+              {
+                "description": "Requests in flight per gateway",
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Concurrent"
+          },
+          "max_consumers": {
+            "anyOf": [
+              {
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Consumers"
+          },
+          "max_routes": {
+            "anyOf": [
+              {
+                "maximum": 100000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Routes"
+          },
+          "max_services": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Services"
+          },
+          "rate_limit_per_min": {
+            "anyOf": [
+              {
+                "description": "Requests per minute",
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate Limit Per Min"
+          }
+        },
+        "title": "LimitsUpdate",
+        "type": "object"
+      },
       "MemberAdded": {
         "properties": {
           "added_by": {
@@ -3246,7 +3320,7 @@
                 }
               }
             },
-            "description": "Name already used in this workspace"
+            "description": "Name already used in this workspace, or quota_exceeded (the workspace's quota)"
           },
           "422": {
             "content": {
@@ -3840,6 +3914,104 @@
         "summary": "Revoke Key",
         "tags": [
           "keys"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/limits": {
+      "patch": {
+        "description": "Set a workspace's own limits; null puts one back to the platform default.",
+        "operationId": "change_limits_api_v1_workspaces__slug__limits_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LimitsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "workspace_deleted or workspace_purged: its limits are frozen"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Change Limits",
+        "tags": [
+          "platform"
         ]
       }
     },
@@ -4520,7 +4692,7 @@
                 }
               }
             },
-            "description": "Path prefix already in use"
+            "description": "Path prefix already in use, or quota_exceeded (the workspace's quota)"
           },
           "422": {
             "content": {
@@ -4989,7 +5161,7 @@
                 }
               }
             },
-            "description": "Name already used in this workspace"
+            "description": "Name already used in this workspace, or quota_exceeded (the workspace's quota)"
           },
           "422": {
             "content": {

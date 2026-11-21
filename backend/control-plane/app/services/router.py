@@ -19,6 +19,9 @@ CanWrite = Annotated[WorkspaceAccess, require_permission(Permission.SERVICES_WRI
 
 _NOT_FOUND = error_responses({404: "Service not found"})
 _CONFLICT = error_responses({409: "Name already used in this workspace"})
+_CREATE_CONFLICT = error_responses(
+    {409: "Name already used in this workspace, or quota_exceeded (the workspace's quota)"}
+)
 _HAS_ROUTES = error_responses({409: "Service still has routes"})
 
 
@@ -28,7 +31,7 @@ async def list_services(access: CanRead, db: DbSession, page: Pagination) -> Pag
     return Page[ServiceOut](items=[ServiceOut.model_validate(s) for s in services], total=total)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, responses=_CONFLICT)
+@router.post("", status_code=status.HTTP_201_CREATED, responses=_CREATE_CONFLICT)
 async def create_service(body: ServiceCreate, access: CanWrite, db: DbSession) -> ServiceOut:
     service = await crud.create_service(
         db, workspace_id=access.workspace_id, audit=access.audit, data=body

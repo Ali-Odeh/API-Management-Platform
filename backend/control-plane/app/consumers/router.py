@@ -20,6 +20,9 @@ CanWrite = Annotated[WorkspaceAccess, require_permission(Permission.CONSUMERS_WR
 
 _NOT_FOUND = error_responses({404: "Consumer not found"})
 _CONFLICT = error_responses({409: "Name already used in this workspace"})
+_CREATE_CONFLICT = error_responses(
+    {409: "Name already used in this workspace, or quota_exceeded (the workspace's quota)"}
+)
 
 
 @router.get("")
@@ -38,7 +41,7 @@ async def list_consumers(
     return Page[ConsumerOut](items=[ConsumerOut.model_validate(c) for c in consumers], total=total)
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, responses=_CONFLICT)
+@router.post("", status_code=status.HTTP_201_CREATED, responses=_CREATE_CONFLICT)
 async def create_consumer(body: ConsumerCreate, access: CanWrite, db: DbSession) -> ConsumerOut:
     consumer = await crud.create_consumer(
         db, workspace_id=access.workspace_id, audit=access.audit, data=body

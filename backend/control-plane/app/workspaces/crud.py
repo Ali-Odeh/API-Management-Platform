@@ -8,15 +8,20 @@ from app.audit import crud as audit
 from app.audit.changes import Changes, created, snapshot, updated
 from app.audit.context import AuditContext
 from app.core.db import flush_or_raise
-from app.core.errors import ConflictError
+from app.core.errors import ConflictError, NotFoundError
 from app.core.pagination import PageParams, paginate
 from app.core.permissions import Role
 from app.gotrue.client import GoTrueAdmin
 from app.members import crud as members_crud
 from app.members.models import WorkspaceMember
 from app.users import crud as users_crud
-from app.workspaces.models import DEFAULT_WORKSPACE_SLUG, Workspace, WorkspaceStatus
-from app.workspaces.schemas import WorkspaceCreate, WorkspaceUpdate
+from app.workspaces.models import (
+    DEFAULT_WORKSPACE_SLUG,
+    LIMIT_COLUMNS,
+    Workspace,
+    WorkspaceStatus,
+)
+from app.workspaces.schemas import LimitsUpdate, WorkspaceCreate, WorkspaceUpdate
 
 WORKSPACE_NOT_FOUND = "Workspace not found"
 UQ_WORKSPACE_SLUG = "uq_workspaces_slug"
@@ -151,6 +156,35 @@ async def rename_workspace(
         setattr(workspace, field, value)
     if changes := updated(before, snapshot(workspace, ("name",))):
         record_in_workspace(db, audit_ctx, workspace, "workspace.update", changes)
+        await db.commit()
+        await db.refresh(workspace)
+    return workspace
+
+
+async def change_limits(
+    db: AsyncSession, slug: str, *, data: LimitsUpdate, audit_ctx: AuditContext
+) -> Workspace:
+    """Set the workspace's own limits (Platform Admin); null = the platform default.
+
+    In the workspace's own log, so its Owners see why a quota moved. The row
+    is locked, so a quota check at the same moment counts against the old
+    limit or the new one. A deleted workspace's limits are frozen (409).
+    """
+    workspace = await db.scalar(
+        select(Workspace)
+        .where(Workspace.slug == slug)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if workspace is None:
+        raise NotFoundError(WORKSPACE_NOT_FOUND)
+    if workspace.status.is_gone:
+        raise ConflictError(f"workspace_{workspace.status}")
+    before = snapshot(workspace, LIMIT_COLUMNS)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(workspace, field, value)
+    if changes := updated(before, snapshot(workspace, LIMIT_COLUMNS)):
+        record_in_workspace(db, audit_ctx, workspace, "workspace.limits_change", changes)
         await db.commit()
         await db.refresh(workspace)
     return workspace

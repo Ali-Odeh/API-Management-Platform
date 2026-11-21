@@ -13,9 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.consumers.models import Consumer
 from app.core.config import get_settings
+from app.core.errors import ConflictError
 from app.routes.models import Route
 from app.services.models import Service
 from app.workspaces.models import LIMIT_COLUMNS, Workspace
+
+QUOTA_EXCEEDED = "quota_exceeded"
 
 # The objects each quota counts, by its limit column.
 COUNTED: dict[str, type[Service] | type[Route] | type[Consumer]] = {
@@ -43,6 +46,24 @@ async def count(db: AsyncSession, workspace_id: uuid.UUID, column: str) -> int:
     """How many objects of a quota's kind the workspace has."""
     model = COUNTED[column]
     return await db.scalar(select(func.count()).where(model.workspace_id == workspace_id)) or 0
+
+
+async def check_quota(db: AsyncSession, workspace_id: uuid.UUID, column: str) -> None:
+    """Refuse (409 quota_exceeded) when the workspace already has as many as it may.
+
+    Locks the workspace row first (FOR NO KEY UPDATE, until the caller's
+    commit), so parallel creations count one after the other: two requests
+    can't both see "99 of 100" and both add one. The lock doesn't block the
+    workspace's other writes: their foreign keys only take KEY SHARE.
+    """
+    own = await db.scalar(
+        select(getattr(Workspace, column))
+        .where(Workspace.id == workspace_id)
+        .with_for_update(key_share=True)
+    )
+    allowed = own if own is not None else default_limit(column)
+    if await count(db, workspace_id, column) >= allowed:
+        raise ConflictError(QUOTA_EXCEEDED)  # the session's rollback releases the lock
 
 
 async def usage(db: AsyncSession, workspace_id: uuid.UUID) -> dict[str, int]:

@@ -58,6 +58,7 @@ SELF: set[Endpoint] = {
 }
 LEAVE: Endpoint = ("DELETE", "/api/v1/me/workspaces/{slug}")
 DELETE_WORKSPACE: Endpoint = ("DELETE", "/api/v1/workspaces/{slug}")
+LIMITS: Endpoint = ("PATCH", "/api/v1/workspaces/{slug}/limits")
 WORKSPACE_PREFIX = "/api/v1/workspaces/{slug}"
 
 
@@ -533,10 +534,12 @@ _ACTIONS: dict[Endpoint, str] = {
     ("POST", "/api/v1/workspaces/{slug}/suspend"): "workspace.suspended",
     ("POST", "/api/v1/workspaces/{slug}/unsuspend"): "workspace.unsuspended",
     ("POST", "/api/v1/workspaces/{slug}/restore"): "workspace.restored",
+    LIMITS: "workspace.limits_change",
 }
 # Changes recorded in the workspace's own log. Lifecycle events (deleting it
 # too) are platform-level (decision 10): they must survive the purge of that log.
-IN_WORKSPACE_LOG = (set(WORKSPACE) | {LEAVE}) - {DELETE_WORKSPACE}
+# A limits change is a platform endpoint, but the workspace's Owners see it.
+IN_WORKSPACE_LOG = (set(WORKSPACE) | {LEAVE, LIMITS}) - {DELETE_WORKSPACE}
 
 # Valid requests for the platform endpoints (the workspace ones use _VALID_BODIES).
 _PLATFORM_BODIES: dict[Endpoint, Callable[[User], dict[str, Any] | None]] = {
@@ -547,6 +550,7 @@ _PLATFORM_BODIES: dict[Endpoint, Callable[[User], dict[str, Any] | None]] = {
     ("POST", "/api/v1/workspaces/{slug}/suspend"): lambda person: {"reason": "abuse"},
     ("POST", "/api/v1/workspaces/{slug}/unsuspend"): lambda person: None,
     ("POST", "/api/v1/workspaces/{slug}/restore"): lambda person: None,
+    LIMITS: lambda person: {"max_services": 50},
 }  # fmt: skip
 # Where `acme` must be in its life for the change to be valid.
 _STATUS_BEFORE: dict[Endpoint, WorkspaceStatus] = {

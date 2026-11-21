@@ -22,6 +22,7 @@ from app.workspaces.models import LIMIT_COLUMNS, Workspace, WorkspaceStatus
 from app.workspaces.schemas import (
     LimitOverrides,
     Limits,
+    LimitsUpdate,
     MyWorkspaceOut,
     Suspension,
     Usage,
@@ -135,6 +136,19 @@ async def restore_workspace(
 ) -> WorkspaceOut:
     """Bring a deleted workspace back (active) before it is purged."""
     workspace = await lifecycle.restore(db, slug, audit_ctx=audit)
+    return workspace_out(workspace)
+
+
+@router.patch(
+    "/workspaces/{slug}/limits",
+    tags=["platform"],
+    responses=_transition("workspace_deleted or workspace_purged: its limits are frozen"),
+)
+async def change_limits(
+    slug: str, body: LimitsUpdate, admin: PlatformAdmin, audit: PlatformAudit, db: DbSession
+) -> WorkspaceOut:
+    """Set a workspace's own limits; null puts one back to the platform default."""
+    workspace = await crud.change_limits(db, slug, data=body, audit_ctx=audit)
     return workspace_out(workspace)
 
 
