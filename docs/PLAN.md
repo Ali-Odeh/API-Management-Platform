@@ -358,7 +358,8 @@ The agent writes the Alembic migrations to match this exactly; column lengths an
 | `admins` (`workspace_id`, `email`, `password_hash`) | `users` + `workspace_members` (Owner of `default`, `is_platform_admin = true`); `password_hash` dropped | MT.1, MT.2 |
 | `updated_at` set only by the ORM | `set_updated_at` trigger on every table | MT.1 |
 | `uq_routes_path_prefix` (global) | unique (`workspace_id`, `path_prefix`) | MT.2 |
-| `workspaces` (`name`, `slug`) | + `status`, lifecycle and limit columns, slug format CHECK and reserved list (`default` already passes) | MT.5 |
+| `workspaces` (`name`, `slug`) | slug format CHECK and reserved list (`default` passes) | MT.2 (moved from MT.5: workspaces can be created from MT.2 on) |
+| `workspaces` | + `status`, lifecycle and limit columns | MT.5 |
 | `config_version` + one statement trigger per table | `config_seq` + `workspace_config` + three transition-table triggers per table (above) | MT.6 |
 | `services.upstream_url` | one row per service in `service_targets` (weight 100); column dropped | MT.10 |
 | — | `audit_events` | MT.3 |
@@ -424,7 +425,7 @@ The admin API lives under `/api/v1`. Every call carries a **GoTrue access token*
 
 1. **Who:** verify the GoTrue JWT (signature, expiry, audience `authenticated`, a UUID `sub` and an email). Missing or invalid → `401`. The `users` row is found by `sub`, or created just in time from the token's claims (`403 account_conflict` if another account's row holds that email). `users.is_active = false` → `403 user_disabled`.
 2. **Which workspace and which role:** one query resolves the slug and the caller's membership. Unknown workspace, a deleted one, or not a member → `404` (it doesn't reveal that the workspace exists). The Platform Admin passes this step for every workspace.
-3. **May they:** the endpoint declares a permission, e.g. `Depends(require_permission("services:write"))`. Not allowed → `403`. A suspended workspace refuses every write with `403 workspace_suspended`.
+3. **May they:** the endpoint declares a permission, e.g. `Annotated[WorkspaceAccess, require_permission(Permission.SERVICES_WRITE)]`. Not allowed → `403 permission_denied`. A Platform Admin may act in every workspace; where their own role there (if any) doesn't hold the permission, that platform power needs MFA (`403 mfa_required` without `aal2`), as on the platform endpoints. A suspended workspace refuses every write with `403 workspace_suspended`.
 
 The role is read from the database on every request, so a removed member or a lowered role takes effect on the very next request.
 
@@ -439,7 +440,7 @@ Roles are ordered `owner > api_admin > viewer`. Each endpoint checks a permissio
 | `audit:read` | | ✅ | ✅ |
 | `members:write`, `workspace:write`, `workspace:delete` | | | ✅ |
 
-The **Platform Admin** (`users.is_platform_admin`) may do everything in every workspace, plus the platform endpoints. Platform endpoints require MFA: a token without `aal: "aal2"` → `403 mfa_required`; anyone else → `403 platform_admin_required`. A 403 caused by the account carries a short code as `detail` (`user_disabled`, `account_conflict`, `mfa_required`, `platform_admin_required`) so the dashboard can act on it.
+The **Platform Admin** (`users.is_platform_admin`) may do everything in every workspace, plus the platform endpoints. Platform endpoints require MFA: a token without `aal: "aal2"` → `403 mfa_required`; anyone else → `403 platform_admin_required`. A 403 carries a short code as `detail` (`user_disabled`, `account_conflict`, `mfa_required`, `platform_admin_required`, `permission_denied`) so the dashboard can act on it.
 
 **Endpoints**
 
@@ -574,6 +575,7 @@ ETag: "1046"
 - `hosts` holds the workspace's host labels (its slug today; custom domains later through `workspace_hosts`).
 - `limits` and `max_body_bytes` are **effective** values: the workspace's or route's own setting, or the platform default. The gateway never needs the defaults itself.
 - Missing or wrong `X-Internal-Token` → `401`. A user's JWT does not work here.
+- Until the gateway tells workspaces apart by Host (MT.6, MT.7), the answer carries only the `default` workspace: path prefixes are unique only per workspace since MT.2, and another workspace's routes and keys would otherwise work on the gateway's bare host.
 - Only active routes on active services with at least one active target, and non-revoked keys. Keys of blocked consumers stay in with `consumer_status: "blocked"`, so the gateway can answer `403`. Lists are sorted (routes by `path_prefix`, keys by `id`).
 - The sequence and the data are read in one `REPEATABLE READ` transaction, so they always match. Each `(workspace_id, version)` is built once and cached for every gateway that asks.
 - Each control-plane process keeps one dedicated Postgres connection for `LISTEN`, reconnecting on its own. After waking or timing out, the sequence is re-read from the database, so a lost notification can delay an update but never hide it.
@@ -983,7 +985,7 @@ The MVP takes about five weeks of part-time work: one week of Go basics, then fo
 Each step is one self-contained piece of work that an AI agent finishes completely (code, tests, docs, logical commits) before handing back. Outcomes and done criteria for each step are in ROADMAP.md; the reasons are in MT_ROLES_DECISIONS.md (decision numbers in brackets).
 
 - [x] MT.1 Identity: GoTrue and Mailpit, `users` replaces `admins`, JWT verification, Platform Admin with MFA, disabling users [4, 12, 13]
-- [ ] MT.2 Workspaces and roles: memberships, permissions, URLs under `/workspaces/{slug}`, isolation tests [0, 2, 5, 13]
+- [x] MT.2 Workspaces and roles: memberships, permissions, URLs under `/workspaces/{slug}`, isolation tests [0, 2, 5, 13]
 - [ ] MT.3 Audit log: same-transaction records for every write, guard test, audit endpoints, retention [11]
 - [ ] MT.4 Members and owners: add (GoTrue invite), change role, remove, leave, last-owner rules [8, 9]
 - [ ] MT.5 Workspace lifecycle and quotas: create, suspend, delete, restore, purge; limit columns [6, 10]

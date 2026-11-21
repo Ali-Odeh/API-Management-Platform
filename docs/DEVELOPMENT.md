@@ -235,12 +235,13 @@ go test -run=^$ -bench=. -benchmem ./internal/proxy ./internal/middleware ./cmd/
 
 ## End-to-end tests
 
-The MVP and MT stories against the real stack (21 checks, about 6 s): GoTrue
-login with password and TOTP, a disabled person locked out, then requests
-through the gateway. They run in their own container, create their own
+The MVP and MT stories against the real stack (24 checks, about 6 s): GoTrue
+login with password and TOTP, a disabled person locked out, workspaces and
+their isolation, then requests through the gateway. They run in their own container, create their own
 objects and always delete them. For MFA they enroll their own factor named
 `e2e` on the Platform Admin and remove it again, so a factor you enrolled is
-left alone; their test person `e2e-person@example.test` is reused by every run.
+left alone; their test person `e2e-person@example.test` and their workspace
+`e2e-tenant` are reused by every run (workspaces can be deleted only from MT.5).
 
 ```powershell
 docker compose run --rm e2e
