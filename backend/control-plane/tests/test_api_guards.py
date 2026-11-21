@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.deps import PermissionCheck, require_platform_admin
-from app.core.permissions import Permission, Role, role_allows
+from app.core.permissions import ROLE_PERMISSIONS, Permission, Role
 from app.keys.models import ApiKey
 from app.main import app
 from app.users.models import User
@@ -186,32 +186,119 @@ async def test_platform_endpoint_refuses_everyone_else(
 
 # ---- Permission guard: every role, every workspace endpoint (decision 2)
 
+# PLAN.md section 6, "Roles and permissions", copied by hand on purpose: the
+# expectations must not come from the map under test, or a mistake there
+# (say, Viewers granted a write) would be expected instead of caught.
+PLAN_MATRIX: dict[Role, set[str]] = {
+    Role.VIEWER: {
+        "services:read", "routes:read", "consumers:read", "keys:read",
+        "members:read", "workspace:read",
+    },
+    Role.API_ADMIN: {
+        "services:read", "routes:read", "consumers:read", "keys:read",
+        "members:read", "workspace:read",
+        "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
+    },
+    Role.OWNER: {
+        "services:read", "routes:read", "consumers:read", "keys:read",
+        "members:read", "workspace:read",
+        "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
+        "members:write", "workspace:write", "workspace:delete",
+    },
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("role", list(Role))
+def test_the_permission_map_is_the_plans(role: Role) -> None:
+    assert {p.value for p in ROLE_PERMISSIONS[role]} == PLAN_MATRIX[role]
+
+
+def test_every_permission_is_in_the_plan() -> None:
+    assert {p.value for p in Permission} == set().union(*PLAN_MATRIX.values())
+
 
 def _headers(user: User, *, mfa: bool = False) -> dict[str, str]:
     assert user.auth_user_id is not None
     return bearer(make_token(user.auth_user_id, user.email, aal="aal2" if mfa else "aal1"))
 
 
-def _passed_the_check(r: Any) -> bool:
-    """The permission check let the request through (what follows may still say
-    404 for an unknown id, or 422 for an empty body)."""
-    detail = r.json().get("detail") if r.headers.get("content-type") == "application/json" else None
-    return r.status_code not in (401, 403) and detail != WORKSPACE_NOT_FOUND
+@pytest.fixture
+async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
+    """Workspace `acme` with one object of each kind: path parameter -> its id.
+
+    The service has no routes (so it can be deleted); the route uses another one.
+    """
+    workspace = await make_workspace(db, slug="acme")
+    service = await make_service(db, workspace.id, name="spare")
+    routed = await make_service(db, workspace.id, name="routed")
+    route = await make_route(db, workspace.id, routed.id)
+    consumer = await make_consumer(db, workspace.id)
+    key = await make_api_key(db, workspace.id, consumer.id)
+    return {
+        "workspace_id": workspace.id,
+        "service_id": service.id,
+        "route_id": route.id,
+        "consumer_id": consumer.id,
+        "key_id": key.id,
+    }
+
+
+# A valid body for every workspace endpoint that takes one, so an allowed
+# request must really succeed (2xx), not just get past the check.
+_VALID_BODIES: dict[Endpoint, Callable[[dict[str, uuid.UUID]], dict[str, Any]]] = {
+    ("POST", "/api/v1/workspaces/{slug}/services"): lambda ids: {
+        "name": "new", "upstream_url": "http://mock-backend:9000",
+    },
+    ("PATCH", "/api/v1/workspaces/{slug}/services/{service_id}"): lambda ids: {"timeout_ms": 3000},
+    ("POST", "/api/v1/workspaces/{slug}/routes"): lambda ids: {
+        "service_id": str(ids["service_id"]), "path_prefix": "/v1/new", "methods": ["GET"],
+    },
+    ("PATCH", "/api/v1/workspaces/{slug}/routes/{route_id}"): lambda ids: {"methods": ["GET"]},
+    ("POST", "/api/v1/workspaces/{slug}/consumers"): lambda ids: {
+        "name": "new-app", "email": "dev@example.com",
+    },
+    ("PATCH", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): lambda ids: {
+        "rate_limit_per_min": 100,
+    },
+    ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): lambda ids: {"name": "k"},
+}  # fmt: skip
+
+
+def test_every_workspace_write_has_a_valid_example() -> None:
+    # A new endpoint that takes a body must show what a valid request looks like.
+    with_body = {e for e in WORKSPACE_ENDPOINTS if _operation(*e).get("requestBody")}
+    assert with_body == set(_VALID_BODIES)
+
+
+async def _valid_request(
+    client: AsyncClient, method: str, path: str, ids: dict[str, uuid.UUID], user: User, mfa: bool
+) -> Any:
+    body = _VALID_BODIES.get((method, path))
+    return await client.request(
+        method,
+        _url(path, "acme", ids),
+        json=body(ids) if body else None,
+        headers=_headers(user, mfa=mfa),
+    )
 
 
 @pytest.mark.parametrize("role", list(Role))
 @pytest.mark.parametrize(("method", "path"), WORKSPACE_ENDPOINTS)
-async def test_each_role_gets_what_the_permission_map_promises(
-    client: AsyncClient, db: AsyncSession, method: str, path: str, role: Role
+async def test_each_role_gets_exactly_what_the_plan_allows(
+    client: AsyncClient,
+    db: AsyncSession,
+    acme: dict[str, uuid.UUID],
+    method: str,
+    path: str,
+    role: Role,
 ) -> None:
-    workspace = await make_workspace(db, slug="acme")
     member = await make_user(db, email=f"{role}@acme.test")
-    await make_member(db, workspace.id, member.id, role)
+    await make_member(db, acme["workspace_id"], member.id, role)
 
-    r = await client.request(method, _url(path, "acme"), json={}, headers=_headers(member))
+    r = await _valid_request(client, method, path, acme, member, mfa=False)
 
-    if role_allows(role, WORKSPACE[(method, path)]):
-        assert _passed_the_check(r), r.text
+    if WORKSPACE[(method, path)].value in PLAN_MATRIX[role]:
+        assert 200 <= r.status_code < 300, r.text
     else:
         assert r.status_code == 403
         assert r.json() == {"detail": "permission_denied"}
@@ -231,18 +318,17 @@ async def test_a_non_member_is_told_the_workspace_does_not_exist(
 
 @pytest.mark.parametrize(("method", "path"), WORKSPACE_ENDPOINTS)
 async def test_platform_admin_outside_their_role_needs_mfa(
-    client: AsyncClient, db: AsyncSession, method: str, path: str
+    client: AsyncClient, db: AsyncSession, acme: dict[str, uuid.UUID], method: str, path: str
 ) -> None:
-    # Platform power reaches every tenant: without MFA it stops; with it, it passes.
-    await make_workspace(db, slug="acme")
+    # Platform power reaches every tenant: without MFA it stops; with it, it works.
     admin = await make_user(db, email="platform@example.com", is_platform_admin=True)
 
-    r = await client.request(method, _url(path, "acme"), json={}, headers=_headers(admin))
+    r = await _valid_request(client, method, path, acme, admin, mfa=False)
     assert r.status_code == 403
     assert r.json() == {"detail": "mfa_required"}
 
-    r = await client.request(method, _url(path, "acme"), json={}, headers=_headers(admin, mfa=True))
-    assert _passed_the_check(r), r.text
+    r = await _valid_request(client, method, path, acme, admin, mfa=True)
+    assert 200 <= r.status_code < 300, r.text
 
 
 # ---- Isolation: workspace A can never reach workspace B's objects (decision 5)
