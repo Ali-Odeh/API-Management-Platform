@@ -27,7 +27,7 @@ class _HashCollisionError(AppError):
 
 
 async def list_keys(
-    db: AsyncSession, *, workspace_id: uuid.UUID, consumer_id: uuid.UUID, page: PageParams
+    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID, page: PageParams
 ) -> tuple[list[ApiKey], int]:
     """One page of a consumer's keys (newest first), revoked ones included."""
     await consumers_crud.get_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)
@@ -40,7 +40,7 @@ async def list_keys(
 
 
 async def create_key(
-    db: AsyncSession, *, workspace_id: uuid.UUID, consumer_id: uuid.UUID, data: KeyCreate
+    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID, data: KeyCreate
 ) -> tuple[ApiKey, str]:
     """Generate a key for a consumer. Returns the stored row and the raw key."""
     await _lock_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)
@@ -75,7 +75,7 @@ async def create_key(
 
 
 async def _lock_consumer(
-    db: AsyncSession, *, workspace_id: uuid.UUID, consumer_id: uuid.UUID
+    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID
 ) -> None:
     """404 if the consumer isn't in the workspace; otherwise lock its row until commit.
 
@@ -89,7 +89,7 @@ async def _lock_consumer(
     )
 
 
-async def revoke_key(db: AsyncSession, *, workspace_id: uuid.UUID, key_id: uuid.UUID) -> None:
+async def revoke_key(db: AsyncSession, workspace_id: uuid.UUID, *, key_id: uuid.UUID) -> None:
     """Mark a key revoked. Idempotent: revoking again keeps the first revoked_at."""
     key = await db.scalar(
         select(ApiKey).where(ApiKey.id == key_id, ApiKey.workspace_id == workspace_id)

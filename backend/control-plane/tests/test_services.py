@@ -15,7 +15,7 @@ from app.services.schemas import ServiceCreate
 from app.workspaces.models import Workspace
 from tests.factories import make_route, make_service
 
-URL = "/api/v1/services"
+URL = "/api/v1/workspaces/default/services"
 Headers = dict[str, str]
 
 

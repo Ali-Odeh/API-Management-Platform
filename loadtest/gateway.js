@@ -66,7 +66,8 @@ export const options = {
 function admin(method, path, body, token) {
   const params = { headers: { 'Content-Type': 'application/json' }, tags: { run: 'setup' } };
   if (token) params.headers.Authorization = `Bearer ${token}`;
-  const res = http.request(method, `${CONTROL_PLANE}/api/v1${path}`, body ? JSON.stringify(body) : null, params);
+  // Everything the load test creates lives in the `default` workspace.
+  const res = http.request(method, `${CONTROL_PLANE}/api/v1/workspaces/default${path}`, body ? JSON.stringify(body) : null, params);
   if (res.status >= 300) {
     throw new Error(`${method} ${path}: ${res.status} ${res.body}`);
   }

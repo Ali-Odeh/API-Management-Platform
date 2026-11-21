@@ -93,7 +93,7 @@ def test_blocked_consumer_gets_403(
     path = shop["route"]["path_prefix"]
     assert wait_for(lambda: get(gateway, path, key), 200).status_code == 200
 
-    r = world.admin.patch(f"/consumers/{consumer['id']}", json={"status": "blocked"})
+    r = world.admin.patch(f"{world.base}/consumers/{consumer['id']}", json={"status": "blocked"})
     assert r.status_code == 200, r.text
 
     r = wait_for(lambda: get(gateway, path, key), 403)
@@ -107,7 +107,7 @@ def test_revoked_key_gets_401(gateway: httpx.Client, world: World, shop: dict[st
     path = shop["route"]["path_prefix"]
     assert wait_for(lambda: get(gateway, path, key), 200).status_code == 200
 
-    assert world.admin.delete(f"/keys/{key.id}").status_code == 204
+    assert world.admin.delete(f"{world.base}/keys/{key.id}").status_code == 204
 
     r = wait_for(lambda: get(gateway, path, key), 401)
     assert r.status_code == 401

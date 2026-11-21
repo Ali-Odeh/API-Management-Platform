@@ -8,7 +8,7 @@
                 and it is closed when the request ends.
 """
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 
 from sqlalchemy import MetaData, make_url
 from sqlalchemy.exc import IntegrityError
@@ -76,8 +76,20 @@ async def commit_or_raise(db: AsyncSession, errors: Mapping[str, AppError]) -> N
     "check, then write" can race with a parallel request. Any other violation
     is a bug, so it is re-raised as is.
     """
+    await _or_raise(db, db.commit, errors)
+
+
+async def flush_or_raise(db: AsyncSession, errors: Mapping[str, AppError]) -> None:
+    """Like commit_or_raise, for a flush in the middle of a change (the
+    transaction goes on when nothing is violated)."""
+    await _or_raise(db, db.flush, errors)
+
+
+async def _or_raise(
+    db: AsyncSession, write: Callable[[], Awaitable[None]], errors: Mapping[str, AppError]
+) -> None:
     try:
-        await db.commit()
+        await write()
     except IntegrityError as exc:
         await db.rollback()
         error = errors.get(violated_constraint(exc) or "")

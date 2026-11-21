@@ -33,7 +33,7 @@ async def test_admin_flow_as_seen_by_the_gateway(
     # 2. Register the backend and route /v1/orders to it.
     service = (
         await gateway.post(
-            f"{API}/services",
+            f"{API}/workspaces/default/services",
             json={
                 "name": "orders",
                 "upstream_url": "http://mock-backend:9000/",
@@ -44,7 +44,7 @@ async def test_admin_flow_as_seen_by_the_gateway(
     ).json()
     route = (
         await gateway.post(
-            f"{API}/routes",
+            f"{API}/workspaces/default/routes",
             json={
                 "service_id": service["id"],
                 "path_prefix": "/v1/orders/",
@@ -71,14 +71,16 @@ async def test_admin_flow_as_seen_by_the_gateway(
     # 3. A consumer app gets a key. The gateway sees only the key's hash.
     consumer = (
         await gateway.post(
-            f"{API}/consumers",
+            f"{API}/workspaces/default/consumers",
             json={"name": "mobile-app", "email": "dev@example.com", "rate_limit_per_min": 120},
             headers=admin,
         )
     ).json()
     key = (
         await gateway.post(
-            f"{API}/consumers/{consumer['id']}/keys", json={"name": "ios"}, headers=admin
+            f"{API}/workspaces/default/consumers/{consumer['id']}/keys",
+            json={"name": "ios"},
+            headers=admin,
         )
     ).json()
 
@@ -92,24 +94,28 @@ async def test_admin_flow_as_seen_by_the_gateway(
 
     # 4. Block the consumer: the key stays, marked blocked (gateway -> 403).
     await gateway.patch(
-        f"{API}/consumers/{consumer['id']}", json={"status": "blocked"}, headers=admin
+        f"{API}/workspaces/default/consumers/{consumer['id']}",
+        json={"status": "blocked"},
+        headers=admin,
     )
     assert (await config())["keys"][0]["consumer_status"] == "blocked"
 
     # 5. Revoke the key: it disappears (gateway -> 401).
-    await gateway.delete(f"{API}/keys/{key['id']}", headers=admin)
+    await gateway.delete(f"{API}/workspaces/default/keys/{key['id']}", headers=admin)
     assert (await config())["keys"] == []
 
     # 6. Switch the route off: it disappears (gateway -> 404).
-    await gateway.patch(f"{API}/routes/{route['id']}", json={"is_active": False}, headers=admin)
+    await gateway.patch(
+        f"{API}/workspaces/default/routes/{route['id']}", json={"is_active": False}, headers=admin
+    )
     assert (await config())["routes"] == []
 
     # 7. Clean up everything: back to an empty config, at a higher version.
-    await gateway.delete(f"{API}/routes/{route['id']}", headers=admin)
+    await gateway.delete(f"{API}/workspaces/default/routes/{route['id']}", headers=admin)
     assert (
-        await gateway.delete(f"{API}/services/{service['id']}", headers=admin)
+        await gateway.delete(f"{API}/workspaces/default/services/{service['id']}", headers=admin)
     ).status_code == 204
-    await gateway.delete(f"{API}/consumers/{consumer['id']}", headers=admin)
+    await gateway.delete(f"{API}/workspaces/default/consumers/{consumer['id']}", headers=admin)
 
     end = await config()
     assert end["routes"] == [] and end["keys"] == []

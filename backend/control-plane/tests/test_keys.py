@@ -83,11 +83,11 @@ async def test_key_cannot_belong_to_another_workspaces_consumer(
 
 
 def keys_url(consumer_id: uuid.UUID | str) -> str:
-    return f"/api/v1/consumers/{consumer_id}/keys"
+    return f"/api/v1/workspaces/default/consumers/{consumer_id}/keys"
 
 
 def key_url(key_id: uuid.UUID | str) -> str:
-    return f"/api/v1/keys/{key_id}"
+    return f"/api/v1/workspaces/default/keys/{key_id}"
 
 
 async def create(

@@ -64,8 +64,8 @@ flowchart LR
 | **Config propagation** | An admin change reaches the gateway in about **70 ms** |
 | **Route matching** | 0.4 µs for 100 routes, no memory allocations (Go benchmark) |
 | **Gateway tests** | 362 tests and table cases, **98% coverage**, the race detector, 5 fuzz tests |
-| **Control plane tests** | 451 tests, **100% coverage**, mypy strict |
-| **End to end** | 21 stories on the real stack (GoTrue login with MFA included), in CI on every push |
+| **Control plane tests** | 681 tests, **100% coverage**, mypy strict; permission and isolation guards over every endpoint |
+| **End to end** | 24 stories on the real stack (GoTrue login with MFA, workspace isolation), in CI on every push |
 
 The load test ran on one laptop with Docker Desktop; the differences between runs (with and without the gateway) are the meaningful part.
 
@@ -106,7 +106,7 @@ docker compose up -d --build --wait
 Log in with GoTrue as the Platform Admin and register a backend, a route, an app with a limit of 3 requests per minute, and a key for it:
 
 ```powershell
-$cp  = "http://localhost:8000/api/v1"
+$cp  = "http://localhost:8000/api/v1/workspaces/default"   # the `default` workspace
 $pw  = (Select-String -Path .env -Pattern '^PLATFORM_ADMIN_PASSWORD=(.*)').Matches.Groups[1].Value
 $tok = (Invoke-RestMethod -Method Post "http://localhost:9999/token?grant_type=password" -ContentType application/json `
           -Body (@{ email = "admin@example.com"; password = $pw } | ConvertTo-Json)).access_token
@@ -137,7 +137,7 @@ docker compose logs gateway --no-log-prefix --tail 3
 # one JSON line per request: route, consumer, status, ratelimit, latency_ms, upstream_ms, gateway_ms
 ```
 
-Or do the same by clicking in Swagger at `http://localhost:8000/docs` (**Authorize** with the `$tok` access token; it lasts 10 minutes). Block the consumer there (`PATCH /api/v1/consumers/{id}` with `{"status": "blocked"}`) and the next call gets `403` at once.
+Or do the same by clicking in Swagger at `http://localhost:8000/docs` (**Authorize** with the `$tok` access token; it lasts 10 minutes). Block the consumer there (`PATCH /api/v1/workspaces/default/consumers/{id}` with `{"status": "blocked"}`) and the next call gets `403` at once.
 
 ## How it is built
 
@@ -184,8 +184,8 @@ docker compose run --rm loadtest            # k6 load test
 
 ## Status and what's next
 
-The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA is in (MT.1). Next on the [roadmap](docs/ROADMAP.md):
+The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1) and workspaces with roles and permission checks (MT.2) are in. Next on the [roadmap](docs/ROADMAP.md):
 
-- **Workspaces and roles:** Owner, API Admin and Viewer per workspace, an audit log, members and invitations.
+- **Audit log, members and invitations, workspace lifecycle and quotas.**
 - **Gateway tenancy:** each workspace on its own subdomain, per-workspace limits, SSRF protection, load balancing with health checks, CORS.
 - Later: plans and monthly quotas, usage analytics, Prometheus metrics, a developer portal, and finally the React app.

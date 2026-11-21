@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 21, 2026 · **Current step:** MT.1 done (GoTrue login, `users`, Platform Admin with MFA); next: MT.2
+**Last updated:** Nov 21, 2026 · **Current step:** MT.2 done (workspaces, roles, permission checks, URLs under `/workspaces/{slug}`); next: MT.3
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 1/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜ 2/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 480 passing (about 70–125 s), including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
+| Tests | 681 passing (about 110 s), including permission and isolation guards over every endpoint and every role, including a populated MVP-to-MT.1 upgrade; no GoTrue process needed (tokens signed with the test secret, a fake GoTrue admin API) |
 | Coverage | 100% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **21 stories pass in about 6 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed, the test person reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **24 stories pass in about 6 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -129,7 +129,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | # | Step | Status |
 | --- | --- | --- |
 | MT.1 | Identity: GoTrue, `users`, JWT verification, Platform Admin with MFA | ✅ |
-| MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ⬜ |
+| MT.2 | Workspaces and roles, URLs under `/workspaces/{slug}`, isolation tests | ✅ |
 | MT.3 | Audit log | ⬜ |
 | MT.4 | Members and owners | ⬜ |
 | MT.5 | Workspace lifecycle and quotas | ⬜ |
@@ -176,6 +176,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - `openapi.json` regenerated and committed; e2e moved to the new URLs
 
 **Done when:** a Viewer can read but gets 403 on every write; a member of workspace A gets 404 on every endpoint of workspace B and 422 when referencing B's objects; the two guard tests cover every endpoint and fail if a new one is added without a permission.
+
+**Status:** ✅ Done (Nov 21). Commits `d499329` (memberships, per-workspace prefixes, slug rules, `default`-only gateway config), `86edfc4` (workspace-scoped API with `require_permission`, workspace endpoints, guard and isolation tests, e2e), the docs update `ba636ac`; review fixes `acf0a7c` (the new owner's row locked during creation), `f20fcb8` (permission guard against the plan's matrix, with valid requests), `fb253f0` (422 for a route filter naming another workspace's service), then the docs update. The guards were checked to fail on purpose: a DELETE declared with a read permission, and an endpoint under `/workspaces/{slug}` without one. Viewers and API Admins exist only in unit tests until MT.4 adds the members API.
 
 ### MT.3 Audit log [11]
 
@@ -429,3 +431,14 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 21 | MT.1 | Upgrading an MVP install: prepare the new `.env` **before** any Compose command (the new file needs the GoTrue secrets even for `down`), keeping the Postgres values and internal token from the old one and setting `PLATFORM_ADMIN_EMAIL` to the old `ADMIN_EMAIL`; keep the old file as `.env.mvp` until the stack is healthy and the admin's GoTrue login is checked (steps in DEVELOPMENT.md) | The volume keeps its original Postgres user and password; the migrated admin keeps its id and history and is linked at startup. A test upgrades a populated MVP database |
 | Nov 21 | MT.1 | Startup grants Platform Admin only after resolving a first binding or verifying the existing GoTrue UUID. Explicit relinking requires a confirmed GoTrue ban on a disabled user's replacement account before saving the binding | A binding conflict cannot promote the previous identity. A disabled user stays blocked from refreshing tokens after recovery |
 | Nov 21 | MT.1 | Timing tests against the token bucket assert on the response that proves the point (e.g. the denial that ended a drain), never on an extra call afterwards, and allow for every token a slow run can earn | The bucket refills continuously, so an extra call can rightly get a token that arrived during its Redis round trip: `TestBucketRefills` failed about 1 run in 120 for that reason |
+| Nov 21 | MT.2 | Until MT.6/MT.7, `/internal/config` carries only the `default` workspace | Path prefixes are unique per workspace from MT.2, but the gateway doesn't know workspaces yet: another workspace's routes and keys would work on its bare host, across tenants |
+| Nov 21 | MT.2 | A Platform Admin acting beyond their own role in a workspace (or as a non-member) needs MFA, like the platform endpoints; within their own role, no MFA | That power reaches every tenant; the migrated admin, Owner of `default`, keeps working with a password login (k6, e2e) |
+| Nov 21 | MT.2 | Startup makes the first Platform Admin Owner of `default` when it has no Owner (the migration does the same for an upgraded install) | A fresh install's `default` would otherwise have no Owner; a workspace always keeps one |
+| Nov 21 | MT.2 | Slug rules (DNS label, 3–50 chars, reserved names → 422) and the slug CHECK come with MT.2 instead of MT.5 | Workspaces can be created from MT.2 on |
+| Nov 21 | MT.2 | 403 for a role without the permission is `permission_denied`; `GET /api/v1/workspaces/{slug}` (`workspace:read`) added now | A code the dashboard can act on, like the other 403s; the plan lists the endpoint, and it gives `workspace:read` a user |
+| Nov 21 | MT.2 | `owner_email` is checked for shape only (not `EmailStr`) | It must only name an existing user, and the lookup is the real check; `email-validator` refuses addresses GoTrue accepts (e.g. `*.test`) |
+| Nov 21 | MT.2 | Guard tests read each endpoint's permission from its dependencies (`PermissionCheck` is a class with `.permission`); writes must declare a non-read permission; isolation fails if a new id parameter or `..._id` body field appears untested | New endpoints can't skip the checks silently |
+| Nov 21 | MT.2 | e2e reuses its workspace `e2e-tenant` (Owner: the test person) | Workspaces can be deleted only from MT.5; everything created inside it is deleted |
+| Nov 21 | MT.2 | Workspace creation share-locks the owner's row (`FOR SHARE`) from the "is active?" check to the commit (after review) | A parallel disable (which locks it `FOR UPDATE`) could otherwise commit in between and leave a new workspace with only a disabled Owner; now it finishes first (creation answers 422) or waits. Disabling an Owner afterwards stays allowed: the last-owner rules (MT.4) cover demoting, removing and leaving |
+| Nov 21 | MT.2 | The permission guard's expectations are a matrix copied by hand from PLAN.md, the production map must equal it, and allowed cases send valid requests that must succeed (after review) | Expectations taken from the map under test would expect a wrong grant instead of catching it |
+| Nov 21 | MT.2 | A list filter naming an object not in this workspace (`?service_id=`) answers 422, for another workspace's object and for an unknown one alike; the isolation guard also discovers `..._id` query parameters (after review) | The same answer as for a body reference; it was an empty 200 before, which leaked nothing but broke the "422 when referencing B's objects" rule |

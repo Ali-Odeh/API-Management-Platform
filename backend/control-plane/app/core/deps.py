@@ -6,7 +6,8 @@ Who may call what:
       async def me(user: CurrentUser): ...
 - PlatformAdmin: a Platform Admin whose token carries MFA (aal2). For the
   platform endpoints (PLAN.md section 6).
-- WorkspaceId: the workspace an endpoint acts on (see get_workspace_id).
+- require_permission(...): the workspace in the URL (`/workspaces/{slug}/...`)
+  and the caller's right to act there (see PermissionCheck).
 - InternalOnly: /internal endpoints need `X-Internal-Token`, the secret
   shared with the gateway (a user's JWT does NOT open them).
       @router.get("/config", dependencies=[InternalOnly])
@@ -15,7 +16,7 @@ Who may call what:
 import secrets
 import uuid
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
@@ -23,12 +24,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.core.errors import ForbiddenError
+from app.core.errors import ForbiddenError, NotFoundError
 from app.core.identity import TokenClaims, verify_access_token
+from app.core.permissions import Permission, Role, role_allows
 from app.gotrue.client import GoTrueAdmin
 from app.users import crud as users_crud
 from app.users.models import User
 from app.workspaces import crud as workspaces_crud
+from app.workspaces.crud import WORKSPACE_NOT_FOUND
 
 DbSession = Annotated[AsyncSession, Depends(get_db)]
 
@@ -100,20 +103,53 @@ async def require_platform_admin(caller: CurrentCaller) -> User:
 PlatformAdmin = Annotated[User, Depends(require_platform_admin)]
 
 
-async def get_workspace_id(user: CurrentUser, db: DbSession) -> uuid.UUID:
-    """The workspace a service, route, consumer or key endpoint acts on.
+@dataclass(frozen=True)
+class WorkspaceAccess:
+    """The workspace a request acts on, and why the caller may act there."""
 
-    MT.1 bridge, until MT.2 adds memberships and `/workspaces/{slug}` URLs:
-    every such endpoint acts on `default`, and only Platform Admins may call
-    them (the migrated MVP admin is one). Their MFA is not required here,
-    because in MT.2 they become the Owner of `default`, and Owners don't need it.
+    workspace_id: uuid.UUID
+    slug: str
+    user: User
+    role: Role | None  # None: a Platform Admin who isn't a member
+
+
+class PermissionCheck:
+    """Steps 2 and 3 of every workspace request (PLAN.md section 6).
+
+    One query resolves the slug in the URL and the caller's membership. An
+    unknown workspace, or one the caller isn't a member of, answers 404, so
+    it doesn't reveal that the workspace exists. A role without the
+    permission answers 403 permission_denied. A Platform Admin may act in
+    every workspace; where their own role doesn't cover it, that power
+    reaches every tenant, so it needs MFA, as on the platform endpoints.
+
+    A class (not a closure) so the guard tests can read `.permission` from
+    every endpoint's dependencies.
     """
-    if not user.is_platform_admin:
-        raise ForbiddenError("platform_admin_required")
-    return await workspaces_crud.get_default_workspace_id(db)
+
+    def __init__(self, permission: Permission) -> None:
+        self.permission = permission
+
+    async def __call__(self, slug: str, caller: CurrentCaller, db: DbSession) -> WorkspaceAccess:
+        found = await workspaces_crud.get_workspace_and_role(db, slug, user_id=caller.user.id)
+        if found is None:
+            raise NotFoundError(WORKSPACE_NOT_FOUND)
+        workspace_id, role = found
+        if role is not None and role_allows(role, self.permission):
+            pass
+        elif caller.user.is_platform_admin:
+            if not caller.claims.has_mfa:
+                raise ForbiddenError("mfa_required")
+        elif role is None:
+            raise NotFoundError(WORKSPACE_NOT_FOUND)
+        else:
+            raise ForbiddenError("permission_denied")
+        return WorkspaceAccess(workspace_id=workspace_id, slug=slug, user=caller.user, role=role)
 
 
-WorkspaceId = Annotated[uuid.UUID, Depends(get_workspace_id)]
+def require_permission(permission: Permission) -> Any:
+    """`access: Annotated[WorkspaceAccess, require_permission(Permission.SERVICES_READ)]`."""
+    return Depends(PermissionCheck(permission))
 
 
 def get_gotrue(request: Request) -> GoTrueAdmin:

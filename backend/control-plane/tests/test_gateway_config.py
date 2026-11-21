@@ -84,7 +84,7 @@ async def test_service_and_route_changes_bump(
 ) -> None:
     service = (
         await client.post(
-            f"{API}/services",
+            f"{API}/workspaces/default/services",
             json={"name": "orders", "upstream_url": "http://mock-backend:9000"},
             headers=auth_headers,
         )
@@ -93,7 +93,7 @@ async def test_service_and_route_changes_bump(
 
     route = (
         await client.post(
-            f"{API}/routes",
+            f"{API}/workspaces/default/routes",
             json={"service_id": service["id"], "path_prefix": "/v1/orders", "methods": ["GET"]},
             headers=auth_headers,
         )
@@ -101,19 +101,23 @@ async def test_service_and_route_changes_bump(
     await versions.assert_bumped()
 
     await client.patch(
-        f"{API}/routes/{route['id']}", json={"methods": ["GET", "POST"]}, headers=auth_headers
+        f"{API}/workspaces/default/routes/{route['id']}",
+        json={"methods": ["GET", "POST"]},
+        headers=auth_headers,
     )
     await versions.assert_bumped()
 
     await client.patch(
-        f"{API}/services/{service['id']}", json={"timeout_ms": 3000}, headers=auth_headers
+        f"{API}/workspaces/default/services/{service['id']}",
+        json={"timeout_ms": 3000},
+        headers=auth_headers,
     )
     await versions.assert_bumped()
 
-    await client.delete(f"{API}/routes/{route['id']}", headers=auth_headers)
+    await client.delete(f"{API}/workspaces/default/routes/{route['id']}", headers=auth_headers)
     await versions.assert_bumped()
 
-    await client.delete(f"{API}/services/{service['id']}", headers=auth_headers)
+    await client.delete(f"{API}/workspaces/default/services/{service['id']}", headers=auth_headers)
     await versions.assert_bumped()
 
 
@@ -122,7 +126,7 @@ async def test_consumer_and_key_changes_bump(
 ) -> None:
     consumer = (
         await client.post(
-            f"{API}/consumers",
+            f"{API}/workspaces/default/consumers",
             json={"name": "mobile-app", "email": "dev@example.com"},
             headers=auth_headers,
         )
@@ -131,31 +135,39 @@ async def test_consumer_and_key_changes_bump(
 
     key = (
         await client.post(
-            f"{API}/consumers/{consumer['id']}/keys", json={"name": "k"}, headers=auth_headers
+            f"{API}/workspaces/default/consumers/{consumer['id']}/keys",
+            json={"name": "k"},
+            headers=auth_headers,
         )
     ).json()
     await versions.assert_bumped()
 
     await client.patch(
-        f"{API}/consumers/{consumer['id']}", json={"status": "blocked"}, headers=auth_headers
+        f"{API}/workspaces/default/consumers/{consumer['id']}",
+        json={"status": "blocked"},
+        headers=auth_headers,
     )
     await versions.assert_bumped()
 
-    await client.delete(f"{API}/keys/{key['id']}", headers=auth_headers)
+    await client.delete(f"{API}/workspaces/default/keys/{key['id']}", headers=auth_headers)
     await versions.assert_bumped()
 
     # Revoking again writes nothing, so nothing changes for the gateway.
-    await client.delete(f"{API}/keys/{key['id']}", headers=auth_headers)
+    await client.delete(f"{API}/workspaces/default/keys/{key['id']}", headers=auth_headers)
     await versions.assert_unchanged()
 
     await client.post(
-        f"{API}/consumers/{consumer['id']}/keys", json={"name": "k2"}, headers=auth_headers
+        f"{API}/workspaces/default/consumers/{consumer['id']}/keys",
+        json={"name": "k2"},
+        headers=auth_headers,
     )
     await versions.assert_bumped()
 
     # Deleting the consumer also deletes its keys inside Postgres (cascade):
     # the triggers see that too.
-    await client.delete(f"{API}/consumers/{consumer['id']}", headers=auth_headers)
+    await client.delete(
+        f"{API}/workspaces/default/consumers/{consumer['id']}", headers=auth_headers
+    )
     await versions.assert_bumped()
 
 
@@ -170,19 +182,25 @@ async def test_failed_writes_do_not_bump(
     versions: Versions,
 ) -> None:
     body = {"name": "orders", "upstream_url": "http://mock-backend:9000"}
-    service = (await client.post(f"{API}/services", json=body, headers=auth_headers)).json()
+    service = (
+        await client.post(f"{API}/workspaces/default/services", json=body, headers=auth_headers)
+    ).json()
     await client.post(
-        f"{API}/routes",
+        f"{API}/workspaces/default/routes",
         json={"service_id": service["id"], "path_prefix": "/v1/orders", "methods": ["GET"]},
         headers=auth_headers,
     )
     versions.last = await versions.current()
 
-    duplicate = await client.post(f"{API}/services", json=body, headers=auth_headers)
+    duplicate = await client.post(
+        f"{API}/workspaces/default/services", json=body, headers=auth_headers
+    )
     assert duplicate.status_code == 409  # rolled back...
     await versions.assert_unchanged()  # ...so the bump was rolled back too
 
-    has_routes = await client.delete(f"{API}/services/{service['id']}", headers=auth_headers)
+    has_routes = await client.delete(
+        f"{API}/workspaces/default/services/{service['id']}", headers=auth_headers
+    )
     assert has_routes.status_code == 409
     await versions.assert_unchanged()
 
@@ -191,7 +209,9 @@ async def test_failed_writes_do_not_bump(
         await make_api_key(db, workspace.id, consumer.id)
     versions.last = await versions.current()
     too_many = await client.post(
-        f"{API}/consumers/{consumer.id}/keys", json={"name": "k"}, headers=auth_headers
+        f"{API}/workspaces/default/consumers/{consumer.id}/keys",
+        json={"name": "k"},
+        headers=auth_headers,
     )
     assert too_many.status_code == 409
     await versions.assert_unchanged()
@@ -200,7 +220,13 @@ async def test_failed_writes_do_not_bump(
 async def test_reads_and_login_do_not_bump(
     client: AsyncClient, auth_headers: Headers, versions: Versions
 ) -> None:
-    for path in ("/services", "/routes", "/consumers", "/me"):
+    for path in (
+        "/workspaces/default/services",
+        "/workspaces/default/routes",
+        "/workspaces/default/consumers",
+        "/me",
+        "/me/workspaces",
+    ):
         assert (await client.get(f"{API}{path}", headers=auth_headers)).status_code == 200
     await versions.assert_unchanged()
 

@@ -18,8 +18,8 @@ def _name_taken(name: str) -> dict[str, AppError]:
 
 async def list_consumers(
     db: AsyncSession,
-    *,
     workspace_id: uuid.UUID,
+    *,
     page: PageParams,
     status: ConsumerStatus | None = None,
 ) -> tuple[list[Consumer], int]:
@@ -32,8 +32,8 @@ async def list_consumers(
 
 async def get_consumer(
     db: AsyncSession,
-    *,
     workspace_id: uuid.UUID,
+    *,
     consumer_id: uuid.UUID,
     for_update: bool = False,
 ) -> Consumer:
@@ -49,7 +49,7 @@ async def get_consumer(
 
 
 async def create_consumer(
-    db: AsyncSession, *, workspace_id: uuid.UUID, data: ConsumerCreate
+    db: AsyncSession, workspace_id: uuid.UUID, *, data: ConsumerCreate
 ) -> Consumer:
     consumer = Consumer(workspace_id=workspace_id, **data.model_dump())
     db.add(consumer)
@@ -59,7 +59,7 @@ async def create_consumer(
 
 
 async def update_consumer(
-    db: AsyncSession, *, workspace_id: uuid.UUID, consumer_id: uuid.UUID, data: ConsumerUpdate
+    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID, data: ConsumerUpdate
 ) -> Consumer:
     consumer = await get_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)
     for field, value in data.model_dump(exclude_unset=True).items():
@@ -70,7 +70,7 @@ async def update_consumer(
 
 
 async def delete_consumer(
-    db: AsyncSession, *, workspace_id: uuid.UUID, consumer_id: uuid.UUID
+    db: AsyncSession, workspace_id: uuid.UUID, *, consumer_id: uuid.UUID
 ) -> None:
     """Delete a consumer. The database deletes its API keys too (ON DELETE CASCADE)."""
     consumer = await get_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)

@@ -21,7 +21,7 @@ from tests.fakes import FakeGoTrue, bearer, make_token
 
 ME = "/api/v1/me"
 USERS = "/api/v1/users"
-SERVICES = "/api/v1/services"
+SERVICES = "/api/v1/workspaces/default/services"
 
 Headers = dict[str, str]
 
@@ -129,30 +129,10 @@ async def test_disabled_user_is_refused_even_with_a_valid_token(
         assert r.json() == {"detail": "user_disabled"}
 
 
-# ---- Workspace endpoints in MT.1: Platform Admins only, acting on `default`
+# ---- In their own workspace, a member acts by role, without MFA
 
 
-async def test_workspace_endpoints_refuse_other_users(
-    client: AsyncClient, db: AsyncSession
-) -> None:
-    person = await make_user(db)
-    assert person.auth_user_id is not None
-    r = await client.get(SERVICES, headers=bearer(make_token(person.auth_user_id, person.email)))
-    assert r.status_code == 403
-    assert r.json() == {"detail": "platform_admin_required"}
-
-
-async def test_workspace_endpoints_need_the_default_workspace(
-    client: AsyncClient, db: AsyncSession
-) -> None:
-    # Startup creates it; without it there is nothing to act on.
-    admin = await make_user(db, is_platform_admin=True)
-    assert admin.auth_user_id is not None
-    r = await client.get(SERVICES, headers=bearer(make_token(admin.auth_user_id, admin.email)))
-    assert r.status_code == 404
-
-
-async def test_workspace_endpoints_work_without_mfa(
+async def test_an_owner_needs_no_mfa_in_their_workspace(
     client: AsyncClient, auth_headers: Headers, workspace: Workspace
 ) -> None:
     r = await client.get(SERVICES, headers=auth_headers)

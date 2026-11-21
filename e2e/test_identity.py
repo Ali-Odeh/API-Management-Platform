@@ -13,10 +13,6 @@ import pytest
 
 from conftest import CONTROL_PLANE_URL, GoTrue, Session
 
-# A test person the tests manage through GoTrue's admin API. A fixed address,
-# so repeated runs reuse one account instead of piling up new ones.
-PERSON_EMAIL = "e2e-person@example.test"
-
 
 def _me(session: Session) -> httpx.Response:
     return httpx.get(f"{CONTROL_PLANE_URL}/api/v1/me", headers=session.headers, timeout=10)
@@ -36,7 +32,7 @@ def test_platform_admin_logs_in_with_password_then_totp(
 
 
 def test_admin_api_works_with_gotrue_tokens(admin: httpx.Client) -> None:
-    assert admin.get("/services").status_code == 200
+    assert admin.get("/workspaces/default/services").status_code == 200
 
 
 def test_platform_endpoint_without_mfa_is_refused(
@@ -58,14 +54,6 @@ def test_a_token_gotrue_did_not_sign_is_refused() -> None:
 
 
 @pytest.fixture
-def person(gotrue: GoTrue) -> Session:
-    """A signed-in person with no rights, as a new team member will be."""
-    password = uuid.uuid4().hex  # a new one each run; 32 characters
-    gotrue.ensure_account(PERSON_EMAIL, password)
-    return gotrue.sign_in(PERSON_EMAIL, password)
-
-
-@pytest.fixture
 def person_id(admin: httpx.Client, person: Session) -> Iterator[str]:
     """The person's id in the control plane (their first request creates the row).
 
@@ -76,12 +64,6 @@ def person_id(admin: httpx.Client, person: Session) -> Iterator[str]:
     user_id: str = r.json()["id"]
     yield user_id
     assert admin.patch(f"/users/{user_id}", json={"is_active": True}).status_code == 200
-
-
-def test_a_person_without_rights_cannot_use_the_admin_api(person: Session) -> None:
-    r = httpx.get(f"{CONTROL_PLANE_URL}/api/v1/services", headers=person.headers, timeout=10)
-    assert r.status_code == 403
-    assert r.json() == {"detail": "platform_admin_required"}
 
 
 def test_disabled_person_is_refused_at_once_and_cannot_refresh(

@@ -14,7 +14,7 @@ from app.keys.models import ApiKey
 from app.workspaces.models import Workspace
 from tests.factories import expect_violation, make_api_key, make_consumer
 
-URL = "/api/v1/consumers"
+URL = "/api/v1/workspaces/default/consumers"
 Headers = dict[str, str]
 
 

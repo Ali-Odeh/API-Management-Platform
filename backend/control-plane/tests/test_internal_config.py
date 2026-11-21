@@ -114,16 +114,23 @@ async def test_snapshot_version_follows_changes(db: AsyncSession, workspace: Wor
     assert (await read_snapshot(engine)).version == await read_version(engine) == 2
 
 
-async def test_snapshot_covers_every_workspace(
+async def test_snapshot_carries_only_the_default_workspace(
     db: AsyncSession, workspace: Workspace, other_workspace: Workspace
 ) -> None:
-    # MVP: one global snapshot. The gateway serves all tenants.
+    # Until the gateway tells workspaces apart by Host (MT.6, MT.7), another
+    # workspace's routes and keys would work on its bare host: leave them out,
+    # even when both publish the same path.
     ours = await make_service(db, workspace.id, name="ours")
     theirs = await make_service(db, other_workspace.id, name="theirs")
-    await make_route(db, workspace.id, ours.id, path_prefix="/ours")
-    await make_route(db, other_workspace.id, theirs.id, path_prefix="/theirs")
+    mine = await make_route(db, workspace.id, ours.id, path_prefix="/v1/orders")
+    await make_route(db, other_workspace.id, theirs.id, path_prefix="/v1/orders")
+    our_key = await make_api_key(db, workspace.id, (await make_consumer(db, workspace.id)).id)
+    await make_api_key(db, other_workspace.id, (await make_consumer(db, other_workspace.id)).id)
+
     snapshot = await read_snapshot(engine)
-    assert {r.path_prefix for r in snapshot.routes} == {"/ours", "/theirs"}
+
+    assert [r.id for r in snapshot.routes] == [mine.id]
+    assert [k.id for k in snapshot.keys] == [our_key.id]
 
 
 # =====================================================================
@@ -177,7 +184,7 @@ async def change_config(client: AsyncClient, auth_headers: dict[str, str], name:
     """An admin change through the real API (bumps the version, sends NOTIFY)."""
     body = {"name": name, "email": "dev@example.com"}
     assert (
-        await client.post("/api/v1/consumers", json=body, headers=auth_headers)
+        await client.post("/api/v1/workspaces/default/consumers", json=body, headers=auth_headers)
     ).status_code == 201
 
 

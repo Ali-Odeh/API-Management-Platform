@@ -421,6 +421,41 @@
         "title": "KeyOut",
         "type": "object"
       },
+      "MyWorkspaceOut": {
+        "description": "A workspace I belong to, and my role there.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "created_at",
+          "role"
+        ],
+        "title": "MyWorkspaceOut",
+        "type": "object"
+      },
       "Page_ConsumerOut_": {
         "properties": {
           "items": {
@@ -461,6 +496,27 @@
           "total"
         ],
         "title": "Page[KeyOut]",
+        "type": "object"
+      },
+      "Page_MyWorkspaceOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MyWorkspaceOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[MyWorkspaceOut]",
         "type": "object"
       },
       "Page_RouteOut_": {
@@ -504,6 +560,37 @@
         ],
         "title": "Page[ServiceOut]",
         "type": "object"
+      },
+      "Page_WorkspaceOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WorkspaceOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[WorkspaceOut]",
+        "type": "object"
+      },
+      "Role": {
+        "description": "A member's role in one workspace, highest first (decision 0).",
+        "enum": [
+          "owner",
+          "api_admin",
+          "viewer"
+        ],
+        "title": "Role",
+        "type": "string"
       },
       "RouteConfig": {
         "description": "An active route on an active service, joined with what the proxy needs.",
@@ -998,6 +1085,71 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WorkspaceCreate": {
+        "properties": {
+          "name": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "owner_email": {
+            "description": "The first Owner; they must have signed in once (invitations: MT.4)",
+            "maxLength": 255,
+            "pattern": "^[^@\\s]+@[^@\\s]+$",
+            "title": "Owner Email",
+            "type": "string"
+          },
+          "slug": {
+            "description": "Lowercase letters, digits and '-' (a DNS label: it becomes the subdomain); can't be changed later",
+            "examples": [
+              "acme"
+            ],
+            "maxLength": 50,
+            "minLength": 3,
+            "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "slug",
+          "owner_email"
+        ],
+        "title": "WorkspaceCreate",
+        "type": "object"
+      },
+      "WorkspaceOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "created_at"
+        ],
+        "title": "WorkspaceOut",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -1018,10 +1170,499 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/v1/consumers": {
+    "/api/v1/me": {
       "get": {
-        "operationId": "list_consumers_api_v1_consumers_get",
+        "description": "The signed-in person (their row is created on their first request).",
+        "operationId": "me_api_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/v1/me/workspaces": {
+      "get": {
+        "description": "The workspaces I belong to and my role in each.",
+        "operationId": "my_workspaces_api_v1_me_workspaces_get",
         "parameters": [
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_MyWorkspaceOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Workspaces",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/v1/users/{user_id}": {
+      "patch": {
+        "description": "Disable or enable a person: `{\"is_active\": false}` locks them out at once.",
+        "operationId": "update_user_api_v1_users__user_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "User not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "You can't disable yourself"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Auth service unavailable. An enable was not made; a disable was kept (the API is closed) and the ban is finished by repeating the request"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update User",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/workspaces": {
+      "get": {
+        "description": "Every workspace (Platform Admin, with MFA).",
+        "operationId": "list_workspaces_api_v1_workspaces_get",
+        "parameters": [
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_WorkspaceOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Workspaces",
+        "tags": [
+          "platform"
+        ]
+      },
+      "post": {
+        "description": "A new workspace and its first Owner (Platform Admin, with MFA).",
+        "operationId": "create_workspace_api_v1_workspaces_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Slug already taken"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Invalid input, or the owner isn't a (active) user"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Workspace",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}": {
+      "get": {
+        "operationId": "get_workspace_api_v1_workspaces__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/consumers": {
+      "get": {
+        "operationId": "list_consumers_api_v1_workspaces__slug__consumers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
           {
             "description": "Only active or only blocked",
             "in": "query",
@@ -1097,7 +1738,17 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
           },
           "422": {
             "content": {
@@ -1121,7 +1772,18 @@
         ]
       },
       "post": {
-        "operationId": "create_consumer_api_v1_consumers_post",
+        "operationId": "create_consumer_api_v1_workspaces__slug__consumers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1161,7 +1823,17 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
           },
           "409": {
             "content": {
@@ -1195,10 +1867,10 @@
         ]
       }
     },
-    "/api/v1/consumers/{consumer_id}": {
+    "/api/v1/workspaces/{slug}/consumers/{consumer_id}": {
       "delete": {
         "description": "Delete a consumer **and all of its API keys**. This can't be undone.",
-        "operationId": "delete_consumer_api_v1_consumers__consumer_id__delete",
+        "operationId": "delete_consumer_api_v1_workspaces__slug__consumers__consumer_id__delete",
         "parameters": [
           {
             "in": "path",
@@ -1207,6 +1879,15 @@
             "schema": {
               "format": "uuid",
               "title": "Consumer Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -1233,7 +1914,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -1267,7 +1948,7 @@
         ]
       },
       "get": {
-        "operationId": "get_consumer_api_v1_consumers__consumer_id__get",
+        "operationId": "get_consumer_api_v1_workspaces__slug__consumers__consumer_id__get",
         "parameters": [
           {
             "in": "path",
@@ -1276,6 +1957,15 @@
             "schema": {
               "format": "uuid",
               "title": "Consumer Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -1309,7 +1999,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -1344,7 +2034,7 @@
       },
       "patch": {
         "description": "Change any field. To block a consumer: `{\"status\": \"blocked\"}`.",
-        "operationId": "update_consumer_api_v1_consumers__consumer_id__patch",
+        "operationId": "update_consumer_api_v1_workspaces__slug__consumers__consumer_id__patch",
         "parameters": [
           {
             "in": "path",
@@ -1353,6 +2043,15 @@
             "schema": {
               "format": "uuid",
               "title": "Consumer Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -1396,7 +2095,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -1440,9 +2139,9 @@
         ]
       }
     },
-    "/api/v1/consumers/{consumer_id}/keys": {
+    "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys": {
       "get": {
-        "operationId": "list_keys_api_v1_consumers__consumer_id__keys_get",
+        "operationId": "list_keys_api_v1_workspaces__slug__consumers__consumer_id__keys_get",
         "parameters": [
           {
             "in": "path",
@@ -1451,6 +2150,15 @@
             "schema": {
               "format": "uuid",
               "title": "Consumer Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           },
@@ -1511,7 +2219,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -1546,7 +2254,7 @@
       },
       "post": {
         "description": "Generate a key. **The `key` field is shown only in this response.**",
-        "operationId": "create_key_api_v1_consumers__consumer_id__keys_post",
+        "operationId": "create_key_api_v1_workspaces__slug__consumers__consumer_id__keys_post",
         "parameters": [
           {
             "in": "path",
@@ -1555,6 +2263,15 @@
             "schema": {
               "format": "uuid",
               "title": "Consumer Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -1598,7 +2315,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -1642,10 +2359,10 @@
         ]
       }
     },
-    "/api/v1/keys/{key_id}": {
+    "/api/v1/workspaces/{slug}/keys/{key_id}": {
       "delete": {
         "description": "Revoke a key. It stays in the list as revoked; revoking again changes nothing.",
-        "operationId": "revoke_key_api_v1_keys__key_id__delete",
+        "operationId": "revoke_key_api_v1_workspaces__slug__keys__key_id__delete",
         "parameters": [
           {
             "in": "path",
@@ -1654,6 +2371,15 @@
             "schema": {
               "format": "uuid",
               "title": "Key Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -1680,7 +2406,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -1714,57 +2440,19 @@
         ]
       }
     },
-    "/api/v1/me": {
+    "/api/v1/workspaces/{slug}/routes": {
       "get": {
-        "description": "The signed-in person (their row is created on their first request).",
-        "operationId": "me_api_v1_me_get",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Missing, invalid or expired GoTrue access token"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Me",
-        "tags": [
-          "me"
-        ]
-      }
-    },
-    "/api/v1/routes": {
-      "get": {
-        "operationId": "list_routes_api_v1_routes_get",
+        "operationId": "list_routes_api_v1_workspaces__slug__routes_get",
         "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
           {
             "description": "Only this service's routes",
             "in": "query",
@@ -1841,17 +2529,27 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
           },
           "422": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
+                  "$ref": "#/components/schemas/ErrorOut"
                 }
               }
             },
-            "description": "Validation Error"
+            "description": "Service not in this workspace"
           }
         },
         "security": [
@@ -1865,7 +2563,18 @@
         ]
       },
       "post": {
-        "operationId": "create_route_api_v1_routes_post",
+        "operationId": "create_route_api_v1_workspaces__slug__routes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -1905,7 +2614,17 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
           },
           "409": {
             "content": {
@@ -1939,9 +2658,9 @@
         ]
       }
     },
-    "/api/v1/routes/{route_id}": {
+    "/api/v1/workspaces/{slug}/routes/{route_id}": {
       "delete": {
-        "operationId": "delete_route_api_v1_routes__route_id__delete",
+        "operationId": "delete_route_api_v1_workspaces__slug__routes__route_id__delete",
         "parameters": [
           {
             "in": "path",
@@ -1950,6 +2669,15 @@
             "schema": {
               "format": "uuid",
               "title": "Route Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -1976,7 +2704,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -2010,7 +2738,7 @@
         ]
       },
       "get": {
-        "operationId": "get_route_api_v1_routes__route_id__get",
+        "operationId": "get_route_api_v1_workspaces__slug__routes__route_id__get",
         "parameters": [
           {
             "in": "path",
@@ -2019,6 +2747,15 @@
             "schema": {
               "format": "uuid",
               "title": "Route Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -2052,7 +2789,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -2086,7 +2823,7 @@
         ]
       },
       "patch": {
-        "operationId": "update_route_api_v1_routes__route_id__patch",
+        "operationId": "update_route_api_v1_workspaces__slug__routes__route_id__patch",
         "parameters": [
           {
             "in": "path",
@@ -2095,6 +2832,15 @@
             "schema": {
               "format": "uuid",
               "title": "Route Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -2138,7 +2884,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -2182,10 +2928,19 @@
         ]
       }
     },
-    "/api/v1/services": {
+    "/api/v1/workspaces/{slug}/services": {
       "get": {
-        "operationId": "list_services_api_v1_services_get",
+        "operationId": "list_services_api_v1_workspaces__slug__services_get",
         "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
           {
             "description": "Page number, starting at 1",
             "in": "query",
@@ -2243,7 +2998,17 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
           },
           "422": {
             "content": {
@@ -2267,7 +3032,18 @@
         ]
       },
       "post": {
-        "operationId": "create_service_api_v1_services_post",
+        "operationId": "create_service_api_v1_workspaces__slug__services_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -2307,7 +3083,17 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
           },
           "409": {
             "content": {
@@ -2341,9 +3127,9 @@
         ]
       }
     },
-    "/api/v1/services/{service_id}": {
+    "/api/v1/workspaces/{slug}/services/{service_id}": {
       "delete": {
-        "operationId": "delete_service_api_v1_services__service_id__delete",
+        "operationId": "delete_service_api_v1_workspaces__slug__services__service_id__delete",
         "parameters": [
           {
             "in": "path",
@@ -2352,6 +3138,15 @@
             "schema": {
               "format": "uuid",
               "title": "Service Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -2378,7 +3173,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -2422,7 +3217,7 @@
         ]
       },
       "get": {
-        "operationId": "get_service_api_v1_services__service_id__get",
+        "operationId": "get_service_api_v1_workspaces__slug__services__service_id__get",
         "parameters": [
           {
             "in": "path",
@@ -2431,6 +3226,15 @@
             "schema": {
               "format": "uuid",
               "title": "Service Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -2464,7 +3268,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -2498,7 +3302,7 @@
         ]
       },
       "patch": {
-        "operationId": "update_service_api_v1_services__service_id__patch",
+        "operationId": "update_service_api_v1_workspaces__slug__services__service_id__patch",
         "parameters": [
           {
             "in": "path",
@@ -2507,6 +3311,15 @@
             "schema": {
               "format": "uuid",
               "title": "Service Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
               "type": "string"
             }
           }
@@ -2550,7 +3363,7 @@
                 }
               }
             },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
           },
           "404": {
             "content": {
@@ -2591,115 +3404,6 @@
         "summary": "Update Service",
         "tags": [
           "services"
-        ]
-      }
-    },
-    "/api/v1/users/{user_id}": {
-      "patch": {
-        "description": "Disable or enable a person: `{\"is_active\": false}` locks them out at once.",
-        "operationId": "update_user_api_v1_users__user_id__patch",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "user_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "User Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UserUpdate"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UserOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Missing, invalid or expired GoTrue access token"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Not allowed: user_disabled, platform_admin_required or mfa_required"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "User not found"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "You can't disable yourself"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          },
-          "502": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorOut"
-                }
-              }
-            },
-            "description": "Auth service unavailable. An enable was not made; a disable was kept (the API is closed) and the ban is finished by repeating the request"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Update User",
-        "tags": [
-          "platform"
         ]
       }
     },

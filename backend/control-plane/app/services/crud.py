@@ -23,7 +23,7 @@ def _name_taken(name: str) -> dict[str, AppError]:
 
 
 async def list_services(
-    db: AsyncSession, *, workspace_id: uuid.UUID, page: PageParams
+    db: AsyncSession, workspace_id: uuid.UUID, *, page: PageParams
 ) -> tuple[list[Service], int]:
     """One page of services (newest first) and the total count."""
     query = (
@@ -35,7 +35,7 @@ async def list_services(
 
 
 async def get_service(
-    db: AsyncSession, *, workspace_id: uuid.UUID, service_id: uuid.UUID
+    db: AsyncSession, workspace_id: uuid.UUID, *, service_id: uuid.UUID
 ) -> Service:
     service = await db.scalar(
         select(Service).where(Service.id == service_id, Service.workspace_id == workspace_id)
@@ -46,7 +46,7 @@ async def get_service(
 
 
 async def create_service(
-    db: AsyncSession, *, workspace_id: uuid.UUID, data: ServiceCreate
+    db: AsyncSession, workspace_id: uuid.UUID, *, data: ServiceCreate
 ) -> Service:
     service = Service(workspace_id=workspace_id, **data.model_dump())
     db.add(service)
@@ -56,7 +56,7 @@ async def create_service(
 
 
 async def update_service(
-    db: AsyncSession, *, workspace_id: uuid.UUID, service_id: uuid.UUID, data: ServiceUpdate
+    db: AsyncSession, workspace_id: uuid.UUID, *, service_id: uuid.UUID, data: ServiceUpdate
 ) -> Service:
     service = await get_service(db, workspace_id=workspace_id, service_id=service_id)
     changes = data.model_dump(exclude_unset=True)  # only the fields that were sent
@@ -68,7 +68,7 @@ async def update_service(
 
 
 async def delete_service(
-    db: AsyncSession, *, workspace_id: uuid.UUID, service_id: uuid.UUID
+    db: AsyncSession, workspace_id: uuid.UUID, *, service_id: uuid.UUID
 ) -> None:
     """Delete a service. Refused (409) while routes still point to it."""
     service = await get_service(db, workspace_id=workspace_id, service_id=service_id)

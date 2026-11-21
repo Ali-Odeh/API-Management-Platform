@@ -132,6 +132,18 @@ async def _check_upgraded(before: dict[str, list[dict[str, Any]]], gotrue: FakeG
         assert (row["created_at"], row["updated_at"]) == (ADMIN_CREATED, ADMIN_UPDATED)
         assert row["is_platform_admin"] is True and row["is_active"] is True
         assert row["auth_user_id"] is None
+        # ...and Owner of `default`, where all the MVP config lives (MT.2).
+        async with engine.connect() as conn:
+            membership = (
+                await conn.execute(
+                    text(
+                        "SELECT workspace_id, role, added_by FROM workspace_members "
+                        "WHERE user_id = :id"
+                    ),
+                    {"id": ADMIN_ID},
+                )
+            ).one()
+        assert tuple(membership) == (WORKSPACE_ID, "owner", None)
 
         # Startup links them to their GoTrue account (here one that exists already).
         account = gotrue.add_account(ADMIN_EMAIL)
@@ -149,7 +161,7 @@ async def _check_upgraded(before: dict[str, list[dict[str, Any]]], gotrue: FakeG
         headers = bearer(make_token(account, ADMIN_EMAIL))
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
             me = await c.get("/api/v1/me", headers=headers)
-            services = await c.get("/api/v1/services", headers=headers)
+            services = await c.get("/api/v1/workspaces/default/services", headers=headers)
         assert me.status_code == 200
         assert me.json()["id"] == str(ADMIN_ID) and me.json()["is_platform_admin"] is True
         assert [s["id"] for s in services.json()["items"]] == [str(SERVICE_ID)]
