@@ -242,8 +242,8 @@ func BenchmarkAPIHandlerChain(b *testing.B) {
 // layers.
 type allowAll struct{}
 
-func (allowAll) Allow(_ context.Context, _ string, limit int) (ratelimit.Result, error) {
-	return ratelimit.Result{Allowed: true, Limit: limit, Remaining: limit - 1}, nil
+func (allowAll) Allow(_ context.Context, req ratelimit.Request) (ratelimit.Result, error) {
+	return ratelimit.Result{Allowed: true, Limit: req.WorkspaceLimit, Remaining: req.WorkspaceLimit - 1}, nil
 }
 
 // snapshotOf is a config with ws as its `default` workspace (until MT.7

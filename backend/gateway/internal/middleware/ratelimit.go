@@ -16,9 +16,10 @@ import (
 
 // Values of the request log's "ratelimit" field.
 const (
-	RateLimitOK          = "ok"
-	RateLimitLimited     = "limited"
-	RateLimitUnavailable = "unavailable" // Redis did not answer; the request went through
+	RateLimitOK               = "ok"
+	RateLimitLimited          = "limited"           // refused by the consumer's bucket
+	RateLimitLimitedWorkspace = "limited_workspace" // refused by the workspace's bucket
+	RateLimitUnavailable      = "unavailable"       // Redis did not answer; the request went through
 )
 
 // Rate-limit headers (the X- names GitHub and Kong use).
@@ -34,30 +35,39 @@ const unavailableWarnEvery = 10 * time.Second
 // Allower is what the rate-limit layer needs. *ratelimit.Limiter fits it;
 // tests pass a fake, so they need no Redis.
 type Allower interface {
-	Allow(ctx context.Context, consumerID string, limitPerMin int) (ratelimit.Result, error)
+	Allow(ctx context.Context, req ratelimit.Request) (ratelimit.Result, error)
 }
 
-// RateLimit runs after Auth and spends one token of the consumer's bucket:
+// RateLimit runs after Auth and spends one token of the workspace's bucket
+// and, on a protected route, one of the consumer's, in one Redis call:
 //
-//	budget left  → on to the backend, with X-RateLimit-Limit / -Remaining
-//	budget empty → 429 rate_limit_exceeded, with Retry-After (seconds)
-//	Redis down   → on to the backend anyway (fail open), warning in the log
+//	budget left in both    → on to the backend, with X-RateLimit-Limit / -Remaining
+//	either bucket is empty → 429 rate_limit_exceeded, with Retry-After (seconds)
+//	Redis down             → on to the backend anyway (fail open), warning in the log
 //
-// Public routes have no consumer and are not limited. Requests refused by
-// Auth (401/403) never get here, so they cost no budget.
+// Public routes have no consumer: the workspace's bucket alone limits them.
+// Requests refused by Auth (401/403) never get here, so they cost no budget.
+// The client gets the same 429 whichever bucket refused; the log tells them
+// apart (limited / limited_workspace).
 func RateLimit(limiter Allower, log *slog.Logger) Middleware {
 	warner := &throttledWarner{log: log, every: unavailableWarnEvery, now: time.Now}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			key, ok := consumerFrom(r.Context())
-			if !ok {
-				next.ServeHTTP(w, r) // public route: nobody to count
+			info := reqctx.From(r.Context())
+			ws := info.Workspace
+			if ws == nil {
+				// Only possible if main wires the rate limit without tenant before it.
+				log.Error("rate limit called without a workspace", "path", r.URL.Path)
+				respond.Error(w, http.StatusInternalServerError, "internal_error")
 				return
 			}
-			info := reqctx.From(r.Context())
+			req := ratelimit.Request{WorkspaceID: ws.ID, WorkspaceLimit: ws.Limits.RateLimitPerMin}
+			if key, ok := consumerFrom(r.Context()); ok {
+				req.ConsumerID, req.ConsumerLimit = key.ConsumerID, key.RateLimitPerMin
+			}
 
-			res, err := limiter.Allow(r.Context(), key.ConsumerID, key.RateLimitPerMin)
+			res, err := limiter.Allow(r.Context(), req)
 			if err != nil {
 				// A broken limiter must not take the whole API down.
 				info.RateLimit = RateLimitUnavailable
@@ -71,6 +81,9 @@ func RateLimit(limiter Allower, log *slog.Logger) Middleware {
 			h.Set(RemainingHeader, strconv.Itoa(res.Remaining))
 			if !res.Allowed {
 				info.RateLimit = RateLimitLimited
+				if res.LimitedBy == ratelimit.BucketWorkspace {
+					info.RateLimit = RateLimitLimitedWorkspace
+				}
 				h.Set("Retry-After", strconv.Itoa(retryAfterSeconds(res.RetryAfter)))
 				respond.Error(w, http.StatusTooManyRequests, "rate_limit_exceeded")
 				return
