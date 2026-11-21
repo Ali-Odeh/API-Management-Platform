@@ -6,10 +6,12 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.consumers import crud as consumers_crud
+from app.core.db import SessionLocal
 from app.core.permissions import Role
 from app.keys import crud as keys_crud
 from app.members import crud as members_crud
@@ -17,6 +19,7 @@ from app.members.models import WorkspaceMember
 from app.routes import crud as routes_crud
 from app.services import crud as services_crud
 from app.users.models import User
+from app.workspaces import crud as workspaces_crud
 from app.workspaces.models import Workspace
 from tests.factories import expect_violation, make_member, make_user, make_workspace
 from tests.fakes import bearer, make_token
@@ -209,3 +212,59 @@ def test_every_tenant_crud_function_takes_workspace_id_first(function: Any) -> N
     # a function that can't be called without a workspace can't forget it.
     params = list(inspect.signature(function).parameters)
     assert params[:2] == ["db", "workspace_id"]
+
+
+# ---- The new owner can't be disabled while the workspace is being created
+
+
+async def test_the_owner_cannot_be_disabled_halfway_through_creation(
+    client: AsyncClient,
+    db: AsyncSession,
+    mfa_headers: Headers,
+    owner: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The race from the review: another transaction disables the owner after
+    # the "is active?" check but before the workspace is saved. The owner's
+    # row is locked from that check to the commit, so the disable has to wait;
+    # here it gives up after 200 ms instead of slipping in.
+    async def try_to_disable() -> str:
+        async with SessionLocal() as other:
+            await other.execute(text("SET LOCAL lock_timeout = '200ms'"))
+            try:
+                await other.execute(
+                    text("UPDATE users SET is_active = false WHERE id = :id"), {"id": owner.id}
+                )
+                await other.commit()
+                return "disabled"
+            except DBAPIError:
+                return "had to wait"
+
+    real_flush = workspaces_crud.flush_or_raise
+    outcomes: list[str] = []
+
+    async def flush_then_race(*args: Any, **kwargs: Any) -> None:
+        await real_flush(*args, **kwargs)
+        outcomes.append(await try_to_disable())
+
+    monkeypatch.setattr(workspaces_crud, "flush_or_raise", flush_then_race)
+
+    r = await client.post(WORKSPACES, json=_body(), headers=mfa_headers)
+
+    assert r.status_code == 201
+    assert outcomes == ["had to wait"]
+    await db.refresh(owner)
+    assert owner.is_active  # the workspace got an active Owner
+
+
+async def test_a_disable_that_wins_the_race_makes_creation_fail(
+    client: AsyncClient, db: AsyncSession, mfa_headers: Headers, owner: User
+) -> None:
+    # The other order: the disable commits first, so creation sees it and refuses.
+    owner.is_active = False
+    await db.commit()
+
+    r = await client.post(WORKSPACES, json=_body(), headers=mfa_headers)
+
+    assert r.status_code == 422
+    assert r.json() == {"detail": "This user is disabled"}

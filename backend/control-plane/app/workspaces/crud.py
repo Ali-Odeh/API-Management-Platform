@@ -87,9 +87,12 @@ async def create_workspace(
     """A new workspace with its first Owner, in one transaction (Platform Admin).
 
     The owner must already be a user (they signed in once); inviting a new
-    person by email comes with MT.4.
+    person by email comes with MT.4. Their row stays share-locked from the
+    "is active?" check to the commit, so a parallel disable either finishes
+    first (and this answers 422) or waits until the workspace exists: never
+    a new workspace whose only Owner was disabled in between.
     """
-    owner = await users_crud.get_by_email(db, data.owner_email)
+    owner = await users_crud.get_by_email_locked(db, data.owner_email)
     if owner is None:
         raise UnprocessableError(
             "No user with this email; they must sign in once first (invitations: MT.4)"
