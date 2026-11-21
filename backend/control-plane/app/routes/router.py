@@ -23,7 +23,7 @@ _WRITE_ERRORS = error_responses(
 )
 
 
-@router.get("")
+@router.get("", responses=error_responses({422: "Service not in this workspace"}))
 async def list_routes(
     access: CanRead,
     db: DbSession,

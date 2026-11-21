@@ -249,6 +249,21 @@ async def test_list_newest_first_and_filter_by_service(
     assert {r["path_prefix"] for r in only_orders["items"]} == {"/v1/orders", "/v2/orders"}
 
 
+async def test_filter_by_a_service_not_in_this_workspace_is_422(
+    client: AsyncClient,
+    auth_headers: Headers,
+    db: AsyncSession,
+    workspace: Workspace,
+    other_workspace: Workspace,
+) -> None:
+    theirs = await make_service(db, other_workspace.id, name="theirs")
+    await make_route(db, other_workspace.id, theirs.id)
+    for service_id in (theirs.id, uuid.uuid4()):  # another workspace's, or none at all
+        r = await client.get(URL, params={"service_id": str(service_id)}, headers=auth_headers)
+        assert r.status_code == 422
+        assert r.json() == {"detail": "Service not found in this workspace"}
+
+
 async def test_get_one_and_unknown(
     client: AsyncClient, auth_headers: Headers, service: Service
 ) -> None:

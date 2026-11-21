@@ -30,9 +30,15 @@ async def list_routes(
     page: PageParams,
     service_id: uuid.UUID | None = None,
 ) -> tuple[list[Route], int]:
-    """One page of routes (newest first), optionally only those of one service."""
+    """One page of routes (newest first), optionally only those of one service.
+
+    A filter naming a service that isn't in this workspace is bad input (422),
+    as in a body, not an empty page: a reference to another workspace's object
+    is always refused the same way (and an unknown id looks the same).
+    """
     query = select(Route).where(Route.workspace_id == workspace_id)
     if service_id is not None:
+        await _ensure_service_exists(db, workspace_id, service_id=service_id)
         query = query.where(Route.service_id == service_id)
     return await paginate(db, query.order_by(Route.created_at.desc(), Route.id), page)
 

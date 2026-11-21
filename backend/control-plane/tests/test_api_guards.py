@@ -440,6 +440,39 @@ async def test_naming_another_workspaces_object_is_422(
     assert r.status_code == 422, r.text
 
 
+# Query parameters that name another object (filters), with a request that uses one.
+_QUERY_REFERENCES: dict[Endpoint, str] = {
+    ("GET", "/api/v1/workspaces/{slug}/routes"): "service_id",
+}
+
+
+def _query_id_params(method: str, path: str) -> set[str]:
+    params = _operation(method, path).get("parameters", [])
+    return {p["name"] for p in params if p["in"] == "query" and p["name"].endswith("_id")}
+
+
+def test_isolation_knows_every_query_reference() -> None:
+    # A new filter naming another object must be tested for isolation too.
+    referencing = {e for e in WORKSPACE_ENDPOINTS if _query_id_params(*e)}
+    assert referencing == set(_QUERY_REFERENCES)
+
+
+@pytest.mark.parametrize(("method", "path"), sorted(_QUERY_REFERENCES))
+async def test_filtering_by_another_workspaces_object_is_422(
+    client: AsyncClient, tenants: Tenants, method: str, path: str
+) -> None:
+    # Not an empty page: a reference to another workspace's object is refused
+    # the same way everywhere.
+    param = _QUERY_REFERENCES[(method, path)]
+    r = await client.request(
+        method,
+        _url(path, "acme"),
+        params={param: str(tenants.theirs[param])},
+        headers=_headers(tenants.alice),
+    )
+    assert r.status_code == 422, r.text
+
+
 # ---- Internal endpoints need the internal token
 
 
