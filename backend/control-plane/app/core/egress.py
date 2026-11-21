@@ -14,7 +14,15 @@ in step.
 import re
 from dataclasses import dataclass, field
 from functools import lru_cache
-from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address, ip_network
+from ipaddress import (
+    IPv4Address,
+    IPv4Network,
+    IPv6Address,
+    IPv6Network,
+    ip_address,
+    ip_interface,
+    ip_network,
+)
 
 IPAddress = IPv4Address | IPv6Address
 IPNetwork = IPv4Network | IPv6Network
@@ -49,7 +57,9 @@ _SIX_TO_FOUR = ip_network("2002::/16")
 _INTERNAL_NAMES = frozenset({"localhost"})
 _INTERNAL_SUFFIXES = (".localhost", ".internal")
 
-_LABEL = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+# '_' isn't valid in public DNS names, but Docker and internal resolvers serve
+# names such as billing_api, which the Platform Admin may need to allow.
+_LABEL = re.compile(r"^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$")
 
 
 def is_denied(ip: IPAddress) -> bool:
@@ -90,7 +100,8 @@ class AllowList:
     def parse(cls, value: str) -> "AllowList":
         """Read a comma-separated list of names, addresses and networks.
 
-        Raises ValueError naming the first entry that is none of them.
+        Raises ValueError naming the first entry that is none of them, or
+        that could never match (so an exception that looks set always works).
         """
         hosts: set[str] = set()
         networks: list[IPNetwork] = []
@@ -98,11 +109,10 @@ class AllowList:
             entry = raw.strip()
             if not entry:
                 continue
-            try:
-                networks.append(ip_network(entry, strict=False))
+            network = _allowed_network(entry)
+            if network is not None:
+                networks.append(network)
                 continue
-            except ValueError:
-                pass
             name = _normalize(entry)
             if not _is_host_name(name):
                 raise ValueError(
@@ -118,6 +128,41 @@ class AllowList:
         if any(ip.version == net.version and ip in net for net in self.networks):
             return True
         return not is_denied(ip)
+
+
+def _allowed_network(entry: str) -> IPNetwork | None:
+    """The network an address or CIDR entry allows, or None if it is neither.
+
+    Addresses are unmapped before they are compared, so an IPv4-mapped entry
+    (::ffff:10.0.0.0/104) means its IPv4 network (10.0.0.0/8). It is judged as
+    written: masked first, ::ffff:10.0.0.0/8 would become ::/8 and allow ::1.
+    """
+    if "%" in entry:
+        if _looks_like_ip(entry):
+            raise ValueError(f"{entry!r}: an address with a zone can't be allowed")
+        return None
+    try:
+        written = ip_interface(entry)
+    except ValueError:
+        return None
+    mapped = written.ip.ipv4_mapped if isinstance(written.ip, IPv6Address) else None
+    if mapped is None:
+        return written.network
+    bits = written.network.prefixlen
+    if bits < 96:
+        raise ValueError(
+            f"{entry!r}: an IPv4-mapped network must be /96 or longer; "
+            "write the IPv4 network instead"
+        )
+    return ip_network(f"{mapped}/{bits - 96}", strict=False)
+
+
+def _looks_like_ip(entry: str) -> bool:
+    try:
+        ip_address(entry.split("%", 1)[0])
+    except ValueError:
+        return False
+    return True
 
 
 @lru_cache
