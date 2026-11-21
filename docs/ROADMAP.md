@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 21, 2026 · **Current step:** MT.6 done (incremental config protocol); next: MT.7
+**Last updated:** Nov 21, 2026 · **Current step:** MT.7 done (gateway tenancy); next: MT.8
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅✅✅⬜⬜⬜⬜⬜⬜ 6/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅⬜⬜⬜⬜⬜ 7/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1198 passing (about 7 min), including config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
+| Tests | 1204 passing (about 5.5 min), including the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
 | Coverage | 99% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -36,10 +36,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 412 passing (tests, table cases and fuzz seeds), including config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
-| Coverage | **97.2%** total (minimum 90%, enforced), config 95.8%, server 97.4%, ratelimit 95.2%, main 87.0% |
-| Fuzz tests | 6 (paths, matching, prefix stripping, request IDs and config answers), 10 s each in CI |
-| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; whole chain without network **≈ 8.5 µs**; one rate-limit check **≈ 0.48 ms** (Windows → Docker's Redis, so a round trip dominates) |
+| Tests | 442 passing (tests, table cases and fuzz seeds), including two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
+| Coverage | **97.4%** total (minimum 90%, enforced): tenant, proxy and 5 more packages at 100%, config 95.8%, server 97.4%, ratelimit 95.2%, main 87.0% |
+| Fuzz tests | 7 (paths, matching, prefix stripping, request IDs, config answers and Host parsing: about 800,000 Hosts in the first 15 s run), 10 s each in CI |
+| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 10 µs** with the tenant step (9.9–13.2 µs over 3 runs on a busy machine; 8.5 µs at step 3.7); one rate-limit check **≈ 0.48 ms** (Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **32 stories pass in about 10 s** (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **36 stories pass in about 14 s**, including two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.77 ms median / 0.95 ms p95** (own code ≈ 0.08 ms, Redis ≈ 0.3 ms, rest = extra network hop); `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -134,7 +134,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.4 | Members and owners | ✅ |
 | MT.5 | Workspace lifecycle and quotas | ✅ |
 | MT.6 | Incremental config protocol | ✅ |
-| MT.7 | Gateway tenancy | ⬜ |
+| MT.7 | Gateway tenancy | ✅ |
 | MT.8 | Workspace limits in the gateway | ⬜ |
 | MT.9 | SSRF protection | ⬜ |
 | MT.10 | Load balancing and health checks | ⬜ |
@@ -248,6 +248,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Fuzz test for host parsing
 
 **Done when:** e2e shows two workspaces with the same `/v1/orders` reaching different backends via `acme.localhost` and `globex.localhost`; a key used on the other workspace's host gets 401; a suspended workspace gets 403 within one config update.
+
+**Status:** ✅ Done (Nov 22). Commits `965e931` (gateway: the `tenant` package and middleware, routing and keys inside the Host's workspace, trusted `X-Workspace-ID`, `workspace_id` in the log, `GATEWAY_BASE_DOMAIN`, the Host fuzz test), `ce78850` (control plane: one JSON request line per call and `request_id` / `workspace_id` on every app log line), `302354a` (e2e), then the docs. e2e makes two fresh workspaces per run (`e2e-a-…`, `e2e-b-…`) with the same `/v1/orders`: each Host reaches its own backend with its trusted `X-Workspace-ID`, the other workspace's key is 401, an unknown subdomain 404, and a suspended workspace 403 within one config update while the other keeps answering. A whole-chain Go test checks the same isolation, and the live logs of both services show `workspace_id`.
 
 ### MT.8 Workspace limits in the gateway [6]
 
@@ -491,3 +493,7 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.6 | A protocol error (a partial answer before any full one, or behind the current `seq`) keeps the snapshot and asks `since=0` after the usual backoff | Never guess; the backoff stops a misbehaving control plane from causing a busy loop |
 | Nov 22 | MT.6 | Review fixes add `X-Config-Generation`, make config tables read-only to the API role, and stream the existing JSON envelope by workspace | A restore can reuse sequence numbers, runtime writes belong in the triggers, and full sync must handle configs larger than 64 MiB |
 | Nov 22 | MT.6 | A workspace the gateway can't read is dropped (not served) and the rest of the answer applies; after a partial answer the gateway asks `since=0`. An answer is still refused whole when it is unreadable, incomplete, has a workspace without an id, or is over 1 GiB (second review) | Keeping its old config would leave stale keys in service; refusing the whole answer froze every tenant on one bad workspace, and a new gateway couldn't load any config. The cap was removed with the 64 MiB limit; 1 GiB keeps large configs working while a broken answer can't exhaust memory |
+| Nov 22 | MT.7 | Only `<one label>.GATEWAY_BASE_DOMAIN` names a workspace; every other name (the bare domain, `localhost`, IPs, `gateway:8080`, no Host) serves `default`. Under the base domain, anything but one valid label is `404 workspace_not_found` | PLAN.md said "unknown host → 404"; internal clients (e2e, k6, Docker) reach the gateway by service name. Like a reverse proxy's default server: such names can never lead to another tenant |
+| Nov 22 | MT.7 | `GATEWAY_BASE_DOMAIN` is optional, default `localhost`, and checked as a domain name at start | `*.localhost` needs no DNS, so the default works locally; a typo stops the gateway instead of making every workspace unreachable |
+| Nov 22 | MT.7 | The `tenant` step reads the snapshot once (and answers `503 config_not_loaded`); the router matches in the workspace from `reqctx` and no longer reads the snapshot | One config version per request, as before; the workspace travels in `reqctx` (AGENTS.md) instead of packages importing each other |
+| Nov 22 | MT.7 | The control plane writes JSON lines: one `request` line per call (uvicorn's access log off) and `request_id` / `workspace_id` on every app line, through per-request notes in a context variable; `httpx` at WARNING | "workspace_id on every control-plane log line" needed structured logs; httpx at INFO would log GoTrue lookups by email |
