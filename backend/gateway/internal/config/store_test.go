@@ -14,7 +14,7 @@ func TestStoreStartsEmpty(t *testing.T) {
 
 func TestStoreSwap(t *testing.T) {
 	var s Store
-	first, second := &Snapshot{Version: 1}, &Snapshot{Version: 2}
+	first, second := &Snapshot{Seq: 1}, &Snapshot{Seq: 2}
 
 	s.swap(first)
 	if s.Current() != first {
@@ -30,16 +30,16 @@ func TestStoreSwap(t *testing.T) {
 // fails this test if Store were not safe for concurrent use.
 func TestStoreConcurrentReadsDuringSwaps(t *testing.T) {
 	var s Store
-	s.swap(&Snapshot{Version: 0})
+	s.swap(&Snapshot{Seq: 0})
 
 	var wg sync.WaitGroup
 	for range 8 {
 		wg.Go(func() {
 			last := int64(-1)
 			for range 1000 {
-				v := s.Current().Version
+				v := s.Current().Seq
 				if v < last {
-					t.Errorf("version went back from %d to %d", last, v)
+					t.Errorf("sequence went back from %d to %d", last, v)
 					return
 				}
 				last = v
@@ -47,7 +47,7 @@ func TestStoreConcurrentReadsDuringSwaps(t *testing.T) {
 		})
 	}
 	for v := int64(1); v <= 1000; v++ {
-		s.swap(&Snapshot{Version: v})
+		s.swap(&Snapshot{Seq: v})
 	}
 	wg.Wait()
 }

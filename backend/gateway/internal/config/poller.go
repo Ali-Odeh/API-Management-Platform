@@ -18,8 +18,8 @@ const (
 	// Extra time on top of CONFIG_WAIT before a held request counts as lost.
 	// The control plane answers by CONFIG_WAIT at the latest.
 	clientTimeoutMargin = 10 * time.Second
-	// Upper bound for a snapshot body, so a broken answer can't eat memory.
-	maxSnapshotBytes = 64 << 20 // 64 MiB
+	// Upper bound for an answer's body, so a broken answer can't eat memory.
+	maxAnswerBytes = 64 << 20 // 64 MiB
 	// Never ask more often than this, even if the control plane answers
 	// instantly every time (a bug or a proxy that ignores ?wait=). Without it
 	// such a bug would turn the loop into a busy loop.
@@ -27,22 +27,28 @@ const (
 )
 
 // Poller keeps a Store up to date by long-polling the control plane.
+//
+// It asks "what changed after my sequence?" (?since=<seq>) and merges each
+// answer into a new snapshot. At start, and after any answer that doesn't
+// fit what it holds (resync), it asks for everything (since=0).
 type Poller struct {
 	client      *http.Client
-	url         string // .../internal/config?wait=30
+	url         string // .../internal/config
+	wait        string // seconds the control plane may hold a request
 	token       settings.Secret
 	store       *Store
 	log         *slog.Logger
 	backoff     backoff
 	minInterval time.Duration
+	resync      bool // the next request asks for everything (since=0)
 }
 
 // NewPoller builds a poller that writes into store. Call Run to start it.
 func NewPoller(cfg settings.Settings, store *Store, log *slog.Logger) *Poller {
-	query := url.Values{"wait": {strconv.Itoa(int(cfg.ConfigWait / time.Second))}}
 	return &Poller{
 		client:      &http.Client{Timeout: cfg.ConfigWait + clientTimeoutMargin},
-		url:         cfg.ControlPlaneURL + "/internal/config?" + query.Encode(),
+		url:         cfg.ControlPlaneURL + "/internal/config",
+		wait:        strconv.Itoa(int(cfg.ConfigWait / time.Second)),
 		token:       cfg.InternalToken,
 		store:       store,
 		log:         log,
@@ -69,7 +75,7 @@ func (p *Poller) Run(ctx context.Context) {
 		if err != nil {
 			wait = p.backoff.next()
 			p.log.Warn("config poll failed, keeping the current config",
-				"error", err, "retry_in", wait.Round(time.Millisecond).String(), "version", p.currentVersion())
+				"error", err, "retry_in", wait.Round(time.Millisecond).String(), "seq", p.currentSeq())
 		} else {
 			p.backoff.reset()
 		}
@@ -83,14 +89,12 @@ func (p *Poller) Run(ctx context.Context) {
 // poll makes one request and applies its answer. nil means the gateway is up
 // to date (a new snapshot was stored, or 304 said nothing changed).
 func (p *Poller) poll(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
+	query := url.Values{"since": {strconv.FormatInt(p.since(), 10)}, "wait": {p.wait}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url+"?"+query.Encode(), nil)
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("X-Internal-Token", p.token.Reveal())
-	if current := p.store.Current(); current != nil {
-		req.Header.Set("If-None-Match", strconv.Quote(strconv.FormatInt(current.Version, 10)))
-	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -112,30 +116,51 @@ func (p *Poller) poll(ctx context.Context) error {
 	}
 }
 
-// apply parses a 200 body and makes it the current snapshot.
+// since is the sequence to ask from: the current one, or 0 for everything
+// (at start, or to recover from an answer that didn't fit).
+func (p *Poller) since() int64 {
+	if p.resync {
+		return 0
+	}
+	return p.currentSeq()
+}
+
+// apply parses a 200 body, merges it into the current snapshot and makes
+// the result current.
 func (p *Poller) apply(body io.Reader) error {
-	snap, skipped, err := parseSnapshot(io.LimitReader(body, maxSnapshotBytes))
+	a, skipped, err := parseAnswer(io.LimitReader(body, maxAnswerBytes))
 	if err != nil {
-		return fmt.Errorf("read snapshot: %w", err)
+		return fmt.Errorf("read config: %w", err)
 	}
 	for _, reason := range skipped {
 		p.log.Warn("config entry skipped", "reason", reason.Error())
 	}
 
-	previous := p.currentVersion()
-	p.store.swap(snap)
+	current := p.store.Current()
+	next, err := merge(current, a)
+	if err != nil {
+		p.resync = true // ask for everything next time
+		return err
+	}
+	p.resync = false
+	p.store.swap(next)
 	p.log.Info("config updated",
-		"version", snap.Version, "previous_version", previous,
-		"routes", len(snap.Routes), "keys", len(snap.Keys), "skipped", len(skipped))
+		"seq", next.Seq, "previous_seq", seqOf(current), "full", a.Full,
+		"changed", len(a.Workspaces), "deleted", len(a.Deleted),
+		"workspaces", len(next.Workspaces), "skipped", len(skipped))
 	return nil
 }
 
-// currentVersion is for logs: the version in use, or 0 before the first one.
-func (p *Poller) currentVersion() int64 {
-	if current := p.store.Current(); current != nil {
-		return current.Version
+// currentSeq is the sequence in use, or 0 before the first config.
+func (p *Poller) currentSeq() int64 {
+	return seqOf(p.store.Current())
+}
+
+func seqOf(snap *Snapshot) int64 {
+	if snap == nil {
+		return 0
 	}
-	return 0
+	return snap.Seq
 }
 
 // sleep waits for d, or returns false at once if ctx is cancelled first.

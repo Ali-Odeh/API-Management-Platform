@@ -15,7 +15,7 @@ type fakeSource struct{ snap *config.Snapshot }
 func (f fakeSource) Current() *config.Snapshot { return f.snap }
 
 func TestRouterAnswersItself(t *testing.T) {
-	loaded := &config.Snapshot{Version: 7, Routes: testRoutes}
+	loaded := snapshotOf(&config.Workspace{Version: 7, Routes: testRoutes})
 
 	tests := []struct {
 		name       string
@@ -28,6 +28,9 @@ func TestRouterAnswersItself(t *testing.T) {
 	}{
 		{name: "no config yet", snap: nil, method: "GET", path: "/v1", wantStatus: 503, wantError: "config_not_loaded", wantHeader: [2]string{"Retry-After", "1"}},
 		{name: "unknown path", snap: loaded, method: "GET", path: "/v2", wantStatus: 404, wantError: "route_not_found"},
+		// Other workspaces' routes are never served before MT.7: without
+		// `default`, nothing matches.
+		{name: "no default workspace", snap: config.NewSnapshot(7, &config.Workspace{ID: "w1", Hosts: []string{"acme"}, Routes: testRoutes}), method: "GET", path: "/v1", wantStatus: 404, wantError: "route_not_found"},
 		{name: "wrong method", snap: loaded, method: "PUT", path: "/v1/orders/7", wantStatus: 405, wantError: "method_not_allowed", wantHeader: [2]string{"Allow", "DELETE, GET, POST"}},
 
 		// Encoded traversal arrives decoded; it must never be matched.
@@ -62,7 +65,7 @@ func TestRouterAnswersItself(t *testing.T) {
 }
 
 func TestRouterPassesTheMatchOn(t *testing.T) {
-	snap := &config.Snapshot{Version: 7, Routes: testRoutes}
+	snap := snapshotOf(&config.Workspace{Version: 7, Routes: testRoutes})
 
 	var got Match
 	var ok bool
@@ -83,8 +86,8 @@ func TestRouterPassesTheMatchOn(t *testing.T) {
 	if got.Route.ID != "orders" {
 		t.Errorf("route = %q, want orders", got.Route.ID)
 	}
-	if got.Snapshot != snap {
-		t.Error("next got a different snapshot than the one used for matching")
+	if got.Workspace != snap.Default() {
+		t.Error("next got a different workspace than the one used for matching")
 	}
 }
 
@@ -116,4 +119,12 @@ func TestFromContextWithoutRouter(t *testing.T) {
 	if _, ok := FromContext(httptest.NewRequest("GET", "/", nil).Context()); ok {
 		t.Error("FromContext found a match on a request that never went through the router")
 	}
+}
+
+// snapshotOf is a config with ws as its `default` workspace (until MT.7
+// every request is served from it).
+func snapshotOf(ws *config.Workspace) *config.Snapshot {
+	ws.ID, ws.Slug, ws.Status = "ws-default", config.DefaultHost, config.WorkspaceActive
+	ws.Hosts = []string{config.DefaultHost}
+	return config.NewSnapshot(ws.Version, ws)
 }

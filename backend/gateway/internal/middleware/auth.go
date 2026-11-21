@@ -59,7 +59,7 @@ func Auth(log *slog.Logger) Middleware {
 				return
 			}
 
-			key, status, code := authenticate(m.Snapshot, keys)
+			key, status, code := authenticate(m.Workspace, keys)
 			if key != nil {
 				info := reqctx.From(r.Context()) // for the request log
 				info.ConsumerID = key.ConsumerID
@@ -91,10 +91,11 @@ func consumerFrom(ctx context.Context) (key config.Key, ok bool) {
 	return key, ok
 }
 
-// authenticate finds the key in the snapshot. status is 0 when the request
+// authenticate finds the key in the workspace. A key of another workspace is
+// unknown here, so it gets 401 like any wrong key. status is 0 when the request
 // may go on; key is set whenever the key was found, even for a blocked
 // consumer, so the log shows who was turned away.
-func authenticate(snap *config.Snapshot, sent []string) (key *config.Key, status int, code string) {
+func authenticate(ws *config.Workspace, sent []string) (key *config.Key, status int, code string) {
 	if len(sent) == 0 || strings.TrimSpace(sent[0]) == "" {
 		return nil, http.StatusUnauthorized, "missing_api_key"
 	}
@@ -103,7 +104,7 @@ func authenticate(snap *config.Snapshot, sent []string) (key *config.Key, status
 		return nil, http.StatusUnauthorized, "invalid_api_key"
 	}
 
-	found, ok := snap.Keys[hashAPIKey(sent[0])]
+	found, ok := ws.Keys[hashAPIKey(sent[0])]
 	if !ok {
 		// Unknown and revoked keys get the same answer, so a caller can't
 		// tell which keys once existed.

@@ -97,39 +97,104 @@ func startPoller(t *testing.T, cp *fakeControlPlane) (*Store, context.CancelFunc
 	return store, cancel
 }
 
-func TestPollerLoadsConfigThenAsksWithItsVersion(t *testing.T) {
+// fullBody is validBody as a full answer (every workspace) at seq.
+func fullBody(seq string) string {
+	body := strings.Replace(validBody, `"full": false`, `"full": true`, 1)
+	return strings.Replace(body, `"seq": 43`, `"seq": `+seq, 1)
+}
+
+func since(r *http.Request) string { return r.URL.Query().Get("since") }
+
+func TestPollerLoadsConfigThenAsksWhatChanged(t *testing.T) {
 	cp := newFakeControlPlane(t)
 	store, _ := startPoller(t, cp)
 
 	first := cp.next(t)
-	if first.URL.Path != "/internal/config" || first.URL.Query().Get("wait") != "7" {
-		t.Errorf("first request = %s, want /internal/config?wait=7", first.URL)
+	if first.URL.Path != "/internal/config" || first.URL.Query().Get("wait") != "7" || since(first) != "0" {
+		t.Errorf("first request = %s, want /internal/config?since=0&wait=7", first.URL)
 	}
 	if got := first.Header.Get("X-Internal-Token"); got != "s3cret" {
 		t.Errorf("X-Internal-Token = %q, want the configured token", got)
-	}
-	if got := first.Header.Get("If-None-Match"); got != "" {
-		t.Errorf("If-None-Match = %q on the first request, want none (no config yet)", got)
 	}
 	if store.Current() != nil {
 		t.Fatal("store has a snapshot before any answer")
 	}
 
-	cp.respond(http.StatusOK, validBody)
+	cp.respond(http.StatusOK, fullBody("43"))
 
 	second := cp.next(t)
-	if got := second.Header.Get("If-None-Match"); got != `"43"` {
-		t.Errorf(`If-None-Match = %q, want "43"`, got)
+	if since(second) != "43" {
+		t.Errorf("since = %q, want 43", since(second))
 	}
-	if v := store.Current().Version; v != 43 {
-		t.Errorf("store version = %d, want 43", v)
+	if seq := store.Current().Seq; seq != 43 {
+		t.Errorf("store seq = %d, want 43", seq)
 	}
 
 	cp.respond(http.StatusNotModified, "")
 
-	third := cp.next(t)
-	if got := third.Header.Get("If-None-Match"); got != `"43"` {
-		t.Errorf(`after 304, If-None-Match = %q, want "43"`, got)
+	if third := cp.next(t); since(third) != "43" {
+		t.Errorf("after 304, since = %q, want 43", since(third))
+	}
+}
+
+// A partial answer is merged: the unchanged workspace is the same pointer.
+func TestPollerMergesPartialAnswers(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	store, _ := startPoller(t, cp)
+
+	cp.next(t)
+	cp.respond(http.StatusOK, fullBody("43"))
+	cp.next(t)
+	acme := store.Current().Workspaces["ws1"]
+
+	cp.respond(http.StatusOK, `{"seq": 44, "full": false, "workspaces": [
+	  {"id": "ws2", "slug": "globex", "status": "active", "version": 1, "hosts": ["globex"]}], "deleted": []}`)
+	cp.next(t)
+
+	snap := store.Current()
+	if snap.Seq != 44 || len(snap.Workspaces) != 2 || snap.ByHost["globex"] == nil {
+		t.Fatalf("snapshot = %+v, want acme and globex at seq 44", snap)
+	}
+	if snap.Workspaces["ws1"] != acme {
+		t.Error("the unchanged workspace was rebuilt instead of reused")
+	}
+}
+
+// An answer that doesn't fit what the gateway holds is not guessed at: the
+// config stays, and the next request asks for everything.
+func TestPollerAsksForEverythingAfterAProtocolError(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	store, _ := startPoller(t, cp)
+
+	cp.next(t)
+	cp.respond(http.StatusOK, fullBody("43"))
+	cp.next(t)
+	cp.respond(http.StatusOK, `{"seq": 40, "full": false, "workspaces": [], "deleted": []}`)
+
+	if r := cp.next(t); since(r) != "0" {
+		t.Fatalf("after a partial answer behind ours, since = %q, want 0", since(r))
+	}
+	if seq := store.Current().Seq; seq != 43 {
+		t.Errorf("store seq = %d, want 43 (kept)", seq)
+	}
+	cp.respond(http.StatusOK, fullBody("40"))
+	if r := cp.next(t); since(r) != "40" {
+		t.Errorf("after the full answer, since = %q, want 40", since(r))
+	}
+}
+
+func TestPollerRefusesAPartialAnswerFirst(t *testing.T) {
+	cp := newFakeControlPlane(t)
+	store, _ := startPoller(t, cp)
+
+	cp.next(t)
+	cp.respond(http.StatusOK, validBody) // partial, but the gateway holds nothing yet
+
+	if r := cp.next(t); since(r) != "0" {
+		t.Errorf("since = %q, want 0", since(r))
+	}
+	if store.Current() != nil {
+		t.Error("a partial answer was stored as the whole config")
 	}
 }
 
@@ -140,7 +205,7 @@ func TestPollerKeepsConfigOnFailures(t *testing.T) {
 	store, _ := startPoller(t, cp)
 
 	cp.next(t)
-	cp.respond(http.StatusOK, validBody)
+	cp.respond(http.StatusOK, fullBody("43"))
 
 	failures := []struct {
 		name   string
@@ -149,43 +214,43 @@ func TestPollerKeepsConfigOnFailures(t *testing.T) {
 		{"server error", func() { cp.respond(http.StatusInternalServerError, "boom") }},
 		{"wrong token", func() { cp.respond(http.StatusUnauthorized, `{"detail":"bad token"}`) }},
 		{"broken JSON", func() { cp.respond(http.StatusOK, "<html>proxy error</html>") }},
-		{"no version", func() { cp.respond(http.StatusOK, `{"routes": []}`) }},
+		{"no seq", func() { cp.respond(http.StatusOK, `{"workspaces": []}`) }},
 		{"dropped connection", cp.dropConnection},
 	}
 	for _, f := range failures {
 		cp.next(t)
 		f.answer()
-		if v := store.Current().Version; v != 43 {
-			t.Fatalf("after %s: store version = %d, want 43 (kept)", f.name, v)
+		if seq := store.Current().Seq; seq != 43 {
+			t.Fatalf("after %s: store seq = %d, want 43 (kept)", f.name, seq)
 		}
 	}
 
-	// Still polling, still with the old version, and a new config is applied.
+	// Still polling from the same sequence, and a new change is applied.
 	r := cp.next(t)
-	if got := r.Header.Get("If-None-Match"); got != `"43"` {
-		t.Errorf(`If-None-Match = %q, want "43"`, got)
+	if since(r) != "43" {
+		t.Errorf("since = %q, want 43", since(r))
 	}
-	cp.respond(http.StatusOK, strings.Replace(validBody, `"version": 43`, `"version": 44`, 1))
+	cp.respond(http.StatusOK, strings.Replace(validBody, `"seq": 43`, `"seq": 44`, 1))
 	cp.next(t)
-	if v := store.Current().Version; v != 44 {
-		t.Errorf("store version = %d, want 44", v)
+	if seq := store.Current().Seq; seq != 44 {
+		t.Errorf("store seq = %d, want 44", seq)
 	}
 }
 
 // The control plane is the source of truth: after a database reset the
-// version can go down, and the gateway must follow.
-func TestPollerAcceptsALowerVersion(t *testing.T) {
+// sequence can go down in a full answer, and the gateway must follow.
+func TestPollerAcceptsALowerSeqInAFullAnswer(t *testing.T) {
 	cp := newFakeControlPlane(t)
 	store, _ := startPoller(t, cp)
 
 	cp.next(t)
-	cp.respond(http.StatusOK, validBody) // version 43
+	cp.respond(http.StatusOK, fullBody("43"))
 	cp.next(t)
-	cp.respond(http.StatusOK, `{"version": 1, "routes": [], "keys": []}`)
+	cp.respond(http.StatusOK, `{"seq": 1, "full": true, "workspaces": [], "deleted": []}`)
 	cp.next(t)
 
-	if v := store.Current().Version; v != 1 {
-		t.Errorf("store version = %d, want 1", v)
+	if snap := store.Current(); snap.Seq != 1 || len(snap.Workspaces) != 0 {
+		t.Errorf("snapshot = %+v, want an empty config at seq 1", snap)
 	}
 }
 
@@ -253,9 +318,8 @@ func TestApplyLogsSkippedEntries(t *testing.T) {
 	cfg := settings.Settings{ControlPlaneURL: "http://cp", InternalToken: "t", ConfigWait: time.Second}
 	p := NewPoller(cfg, store, slog.New(slog.NewJSONHandler(&logs, nil)))
 
-	body := `{"version": 5, "routes": [
-		{"id": "bad", "path_prefix": "/x", "methods": ["GET"], "upstream_url": "nope", "timeout_ms": 1}
-	], "keys": []}`
+	body := `{"seq": 5, "full": true, "workspaces": [{"id": "w", "slug": "default", "status": "active",
+		"services": [], "routes": [{"id": "bad", "service_id": "nope", "path_prefix": "/x", "methods": ["GET"]}]}]}`
 	if err := p.apply(strings.NewReader(body)); err != nil {
 		t.Fatalf("apply() error: %v", err)
 	}
@@ -266,8 +330,8 @@ func TestApplyLogsSkippedEntries(t *testing.T) {
 			t.Errorf("logs do not contain %s:\n%s", want, out)
 		}
 	}
-	if store.Current().Version != 5 {
-		t.Errorf("store version = %d, want 5", store.Current().Version)
+	if store.Current().Seq != 5 {
+		t.Errorf("store seq = %d, want 5", store.Current().Seq)
 	}
 }
 
@@ -275,8 +339,8 @@ func TestNewPollerBuildsTheRequestURLAndTimeout(t *testing.T) {
 	cfg := settings.Settings{ControlPlaneURL: "http://control-plane:8000", InternalToken: "t", ConfigWait: 30 * time.Second}
 	p := NewPoller(cfg, &Store{}, slog.New(slog.DiscardHandler))
 
-	if p.url != "http://control-plane:8000/internal/config?wait=30" {
-		t.Errorf("url = %s", p.url)
+	if p.url != "http://control-plane:8000/internal/config" || p.wait != "30" {
+		t.Errorf("url = %s, wait = %s", p.url, p.wait)
 	}
 	if p.client.Timeout != 40*time.Second {
 		t.Errorf("client timeout = %s, want 40s (wait + margin)", p.client.Timeout)

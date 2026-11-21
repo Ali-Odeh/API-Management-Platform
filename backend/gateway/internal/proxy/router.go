@@ -43,8 +43,8 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the config once. The whole request (matching now, the key check
-	// in step 3.6) uses this one snapshot, even if a newer one arrives
-	// while the request is running.
+	// later) uses this one snapshot, even if a newer one arrives while the
+	// request is running.
 	snap := rt.source.Current()
 	if snap == nil {
 		w.Header().Set("Retry-After", "1")
@@ -52,7 +52,15 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	route, allowed := match(snap.Routes, r.URL.Path, r.Method)
+	// Every request goes to `default` until the gateway tells workspaces
+	// apart by Host (MT.7). Without it in the config, no route can match.
+	ws := snap.Default()
+	if ws == nil {
+		respond.Error(w, http.StatusNotFound, "route_not_found")
+		return
+	}
+
+	route, allowed := match(ws.Routes, r.URL.Path, r.Method)
 	if route == nil {
 		if len(allowed) > 0 {
 			w.Header().Set("Allow", strings.Join(allowed, ", "))
@@ -64,7 +72,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	reqctx.From(r.Context()).RouteID = route.ID // for the request log
-	ctx := context.WithValue(r.Context(), matchKey{}, Match{Snapshot: snap, Route: route})
+	ctx := context.WithValue(r.Context(), matchKey{}, Match{Workspace: ws, Route: route})
 	rt.next.ServeHTTP(w, r.WithContext(ctx))
 }
 
@@ -81,11 +89,12 @@ func isCleanPath(p string) bool {
 }
 
 // Match is what the router found for a request. Later steps read it with
-// FromContext: auth (3.6) needs the snapshot's keys and the route's
-// auth_required, the proxy (3.4) needs the route's upstream and timeout.
+// FromContext: auth needs the workspace's keys and the route's
+// auth_required, the proxy needs the route's upstream and timeout. Both come
+// from the one snapshot the router read.
 type Match struct {
-	Snapshot *config.Snapshot
-	Route    *config.Route
+	Workspace *config.Workspace
+	Route     *config.Route
 }
 
 // matchKey is the context key for Match. An unexported type means no other
