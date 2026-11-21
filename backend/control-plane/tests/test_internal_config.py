@@ -184,7 +184,7 @@ async def change_config(client: AsyncClient, auth_headers: dict[str, str], name:
     """An admin change through the real API (bumps the version, sends NOTIFY)."""
     body = {"name": name, "email": "dev@example.com"}
     assert (
-        await client.post("/api/v1/consumers", json=body, headers=auth_headers)
+        await client.post("/api/v1/workspaces/default/consumers", json=body, headers=auth_headers)
     ).status_code == 201
 
 

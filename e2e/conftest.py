@@ -50,6 +50,7 @@ class World:
     """Creates test objects through the admin API and deletes them at the end."""
 
     admin: httpx.Client
+    base: str = "/workspaces/default"  # the workspace the objects live in
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:6])
     _routes: list[str] = field(default_factory=list)
     _services: list[str] = field(default_factory=list)
@@ -104,7 +105,7 @@ class World:
         return Key(id=created["id"], raw=created["key"])
 
     def _create(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        r = self.admin.post(path, json=body)
+        r = self.admin.post(f"{self.base}{path}", json=body)
         assert r.status_code == 201, f"POST {path} {body}: {r.status_code} {r.text}"
         result: dict[str, Any] = r.json()
         return result
@@ -118,7 +119,7 @@ class World:
             ("/consumers", self._consumers),
         ):
             for id_ in reversed(ids):
-                r = self.admin.delete(f"{path}/{id_}")
+                r = self.admin.delete(f"{self.base}{path}/{id_}")
                 assert r.status_code in (204, 404), f"cleanup DELETE {path}/{id_}: {r.text}"
 
 
@@ -293,6 +294,19 @@ def platform_admin_session(
         yield gotrue.verify_totp(session, factor_id, secret)
     finally:
         gotrue.remove_factors(user_id, E2E_FACTOR)
+
+
+# A test person the tests manage through GoTrue's admin API. A fixed address,
+# so repeated runs reuse one account instead of piling up new ones.
+PERSON_EMAIL = "e2e-person@example.test"
+
+
+@pytest.fixture
+def person(gotrue: GoTrue) -> Session:
+    """A signed-in person with no rights of their own, as a new team member will be."""
+    password = uuid.uuid4().hex  # a new one each run; 32 characters
+    gotrue.ensure_account(PERSON_EMAIL, password)
+    return gotrue.sign_in(PERSON_EMAIL, password)
 
 
 @pytest.fixture(scope="session")

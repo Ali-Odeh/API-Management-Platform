@@ -45,6 +45,11 @@ async def _by_email(db: AsyncSession, email: str) -> User | None:
     return result.one_or_none()
 
 
+async def get_by_email(db: AsyncSession, email: str) -> User | None:
+    """The person with this email (any case), if they have a row."""
+    return await _by_email(db, email)
+
+
 async def get_or_create_from_token(db: AsyncSession, claims: TokenClaims) -> User:
     """The person behind a verified GoTrue token; their row is created just in time.
 

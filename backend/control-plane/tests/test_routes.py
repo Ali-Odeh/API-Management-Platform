@@ -12,7 +12,7 @@ from app.services.models import Service
 from app.workspaces.models import Workspace
 from tests.factories import expect_violation, make_route, make_service
 
-URL = "/api/v1/routes"
+URL = "/api/v1/workspaces/default/routes"
 Headers = dict[str, str]
 
 
@@ -328,7 +328,7 @@ async def test_delete_route_then_service_can_be_deleted(
 ) -> None:
     created = (await create(client, auth_headers, service)).json()
     route_path = f"{URL}/{created['id']}"
-    service_path = f"/api/v1/services/{service.id}"
+    service_path = f"/api/v1/workspaces/default/services/{service.id}"
     assert (await client.delete(service_path, headers=auth_headers)).status_code == 409
 
     assert (await client.delete(route_path, headers=auth_headers)).status_code == 204

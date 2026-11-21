@@ -25,8 +25,8 @@ def _errors(path_prefix: str) -> dict[str, AppError]:
 
 async def list_routes(
     db: AsyncSession,
-    *,
     workspace_id: uuid.UUID,
+    *,
     page: PageParams,
     service_id: uuid.UUID | None = None,
 ) -> tuple[list[Route], int]:
@@ -37,7 +37,7 @@ async def list_routes(
     return await paginate(db, query.order_by(Route.created_at.desc(), Route.id), page)
 
 
-async def get_route(db: AsyncSession, *, workspace_id: uuid.UUID, route_id: uuid.UUID) -> Route:
+async def get_route(db: AsyncSession, workspace_id: uuid.UUID, *, route_id: uuid.UUID) -> Route:
     route = await db.scalar(
         select(Route).where(Route.id == route_id, Route.workspace_id == workspace_id)
     )
@@ -46,7 +46,7 @@ async def get_route(db: AsyncSession, *, workspace_id: uuid.UUID, route_id: uuid
     return route
 
 
-async def create_route(db: AsyncSession, *, workspace_id: uuid.UUID, data: RouteCreate) -> Route:
+async def create_route(db: AsyncSession, workspace_id: uuid.UUID, *, data: RouteCreate) -> Route:
     await _ensure_service_exists(db, workspace_id=workspace_id, service_id=data.service_id)
     route = Route(workspace_id=workspace_id, **data.model_dump())
     db.add(route)
@@ -56,7 +56,7 @@ async def create_route(db: AsyncSession, *, workspace_id: uuid.UUID, data: Route
 
 
 async def update_route(
-    db: AsyncSession, *, workspace_id: uuid.UUID, route_id: uuid.UUID, data: RouteUpdate
+    db: AsyncSession, workspace_id: uuid.UUID, *, route_id: uuid.UUID, data: RouteUpdate
 ) -> Route:
     route = await get_route(db, workspace_id=workspace_id, route_id=route_id)
     changes = data.model_dump(exclude_unset=True)
@@ -71,14 +71,14 @@ async def update_route(
     return route
 
 
-async def delete_route(db: AsyncSession, *, workspace_id: uuid.UUID, route_id: uuid.UUID) -> None:
+async def delete_route(db: AsyncSession, workspace_id: uuid.UUID, *, route_id: uuid.UUID) -> None:
     route = await get_route(db, workspace_id=workspace_id, route_id=route_id)
     await db.delete(route)
     await db.commit()
 
 
 async def _ensure_service_exists(
-    db: AsyncSession, *, workspace_id: uuid.UUID, service_id: uuid.UUID
+    db: AsyncSession, workspace_id: uuid.UUID, *, service_id: uuid.UUID
 ) -> None:
     """A missing service is bad input in the body (422), not a missing URL (404)."""
     try:

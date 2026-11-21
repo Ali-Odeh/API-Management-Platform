@@ -8,13 +8,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.errors import ConflictError, NotFoundError, UpstreamError
+from app.core.permissions import Role
 from app.gotrue import client as gotrue_client
 from app.main import app
+from app.members.models import WorkspaceMember
 from app.users import crud as users_crud
 from app.users.models import User
+from app.workspaces.crud import get_or_create_default_workspace
 from app.workspaces.models import Workspace
 from scripts import relink_user as relink_script
-from tests.factories import make_user
+from tests.factories import make_member, make_user
 from tests.fakes import FakeGoTrue
 
 
@@ -46,6 +49,10 @@ async def test_startup_creates_workspace_and_platform_admin(
     assert startup_gotrue.passwords[email] == settings.platform_admin_password
     workspaces = (await db.scalars(select(Workspace))).all()
     assert [w.slug for w in workspaces] == ["default"]
+    # A fresh install's `default` gets its Owner: the Platform Admin.
+    owner = await db.scalar(select(WorkspaceMember))
+    assert owner is not None
+    assert (owner.workspace_id, owner.user_id, owner.role) == (workspaces[0].id, user.id, "owner")
     assert startup_gotrue.closed  # shutdown closes the GoTrue client
 
 
@@ -57,7 +64,34 @@ async def test_restarting_does_not_duplicate_anything(
 
     assert await db.scalar(select(func.count()).select_from(User)) == 1
     assert await db.scalar(select(func.count()).select_from(Workspace)) == 1
+    assert await db.scalar(select(func.count()).select_from(WorkspaceMember)) == 1
     assert len(startup_gotrue.accounts) == 1
+
+
+async def test_an_existing_owner_of_default_is_left_alone(
+    db: AsyncSession, startup_gotrue: FakeGoTrue
+) -> None:
+    default = await get_or_create_default_workspace(db)
+    someone = await make_user(db, email="owner@example.com")
+    await make_member(db, default.id, someone.id, Role.OWNER)
+
+    await _run_startup()
+
+    members = (await db.scalars(select(WorkspaceMember))).all()
+    assert [(m.user_id, m.role) for m in members] == [(someone.id, "owner")]
+
+
+async def test_an_admin_with_a_binding_conflict_is_not_made_owner(
+    db: AsyncSession, startup_gotrue: FakeGoTrue
+) -> None:
+    # The configured email's row is bound to another GoTrue account than the one
+    # GoTrue gives that email now: no admin rights, so no ownership either.
+    await make_user(db, email=get_settings().platform_admin_email.lower())
+    startup_gotrue.add_account(get_settings().platform_admin_email.lower())
+
+    await _run_startup()
+
+    assert await db.scalar(select(func.count()).select_from(WorkspaceMember)) == 0
 
 
 async def test_without_a_password_the_platform_admin_is_invited_once(
