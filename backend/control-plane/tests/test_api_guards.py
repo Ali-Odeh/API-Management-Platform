@@ -49,7 +49,12 @@ Endpoint = tuple[str, str]  # (method, path template)
 
 PUBLIC: set[Endpoint] = {("GET", "/health")}
 # Any signed-in person may call these: they only concern the caller.
-SELF: set[Endpoint] = {("GET", "/api/v1/me"), ("GET", "/api/v1/me/workspaces")}
+SELF: set[Endpoint] = {
+    ("GET", "/api/v1/me"),
+    ("GET", "/api/v1/me/workspaces"),
+    ("DELETE", "/api/v1/me/workspaces/{slug}"),  # leave a workspace I belong to
+}
+LEAVE: Endpoint = ("DELETE", "/api/v1/me/workspaces/{slug}")
 WORKSPACE_PREFIX = "/api/v1/workspaces/{slug}"
 
 
@@ -232,6 +237,8 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     """Workspace `acme` with one object of each kind: path parameter -> its id.
 
     The service has no routes (so it can be deleted); the route uses another one.
+    `user_id` is a Viewer to change or remove; `candidate@acme.test` is a user
+    who isn't a member yet, to add.
     """
     workspace = await make_workspace(db, slug="acme")
     service = await make_service(db, workspace.id, name="spare")
@@ -239,12 +246,16 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     route = await make_route(db, workspace.id, routed.id)
     consumer = await make_consumer(db, workspace.id)
     key = await make_api_key(db, workspace.id, consumer.id)
+    viewer = await make_user(db, email="target@acme.test")
+    await make_member(db, workspace.id, viewer.id, Role.VIEWER)
+    await make_user(db, email="candidate@acme.test")
     return {
         "workspace_id": workspace.id,
         "service_id": service.id,
         "route_id": route.id,
         "consumer_id": consumer.id,
         "key_id": key.id,
+        "user_id": viewer.id,
     }
 
 
@@ -266,6 +277,10 @@ _VALID_BODIES: dict[Endpoint, Callable[[dict[str, uuid.UUID]], dict[str, Any]]] 
         "rate_limit_per_min": 100,
     },
     ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): lambda ids: {"name": "k"},
+    ("POST", "/api/v1/workspaces/{slug}/members"): lambda ids: {
+        "email": "candidate@acme.test", "role": "viewer",
+    },
+    ("PATCH", "/api/v1/workspaces/{slug}/members/{user_id}"): lambda ids: {"role": "api_admin"},
 }  # fmt: skip
 
 
@@ -357,11 +372,14 @@ async def tenants(db: AsyncSession) -> Tenants:
     route = await make_route(db, globex.id, service.id)
     consumer = await make_consumer(db, globex.id)
     key = await make_api_key(db, globex.id, consumer.id)
+    their_member = await make_user(db, email="member@globex.test")
+    await make_member(db, globex.id, their_member.id, Role.VIEWER)
     theirs = {
         "service_id": service.id,
         "route_id": route.id,
         "consumer_id": consumer.id,
         "key_id": key.id,
+        "user_id": their_member.id,
     }
     return Tenants(alice=alice, acme_id=acme.id, theirs=theirs)
 
@@ -381,7 +399,7 @@ ENDPOINTS_WITH_IDS = [e for e in WORKSPACE_ENDPOINTS if _path_ids(e[1])]
 
 def test_isolation_knows_every_kind_of_id() -> None:
     # A new kind of object in a URL must get an object of `globex` in `tenants`.
-    known = {"service_id", "route_id", "consumer_id", "key_id"}
+    known = {"service_id", "route_id", "consumer_id", "key_id", "user_id"}
     assert {p for e in WORKSPACE_ENDPOINTS for p in _path_ids(e[1])} <= known
 
 
@@ -499,6 +517,10 @@ _ACTIONS: dict[Endpoint, str] = {
     ("DELETE", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): "consumer.delete",
     ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): "key.create",
     ("DELETE", "/api/v1/workspaces/{slug}/keys/{key_id}"): "key.revoke",
+    ("POST", "/api/v1/workspaces/{slug}/members"): "member.add",
+    ("PATCH", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.role_change",
+    ("DELETE", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.remove",
+    LEAVE: "member.leave",
 }
 
 # Valid requests for the platform endpoints (the workspace ones use _VALID_BODIES).
@@ -512,7 +534,7 @@ _PLATFORM_BODIES: dict[Endpoint, Callable[[User], dict[str, Any]]] = {
 
 def test_every_mutating_endpoint_names_its_audit_event() -> None:
     assert set(_ACTIONS) == set(MUTATING)
-    assert set(_PLATFORM_BODIES) == set(MUTATING) - set(WORKSPACE)
+    assert set(_PLATFORM_BODIES) == set(MUTATING) - set(WORKSPACE) - SELF
 
 
 @dataclass
@@ -520,6 +542,7 @@ class Actors:
     owner: User  # Owner of `acme`
     platform_admin: User  # not a member of `acme`
     person: User  # the one platform endpoints act on
+    leaver: User  # a Viewer of `acme` who leaves it
 
 
 @pytest.fixture
@@ -528,7 +551,9 @@ async def actors(db: AsyncSession, acme: dict[str, uuid.UUID]) -> Actors:
     await make_member(db, acme["workspace_id"], owner.id, Role.OWNER)
     platform_admin = await make_user(db, email="platform@example.com", is_platform_admin=True)
     person = await make_user(db, email="person@example.com")
-    return Actors(owner=owner, platform_admin=platform_admin, person=person)
+    leaver = await make_user(db, email="leaver@acme.test")
+    await make_member(db, acme["workspace_id"], leaver.id, Role.VIEWER)
+    return Actors(owner=owner, platform_admin=platform_admin, person=person, leaver=leaver)
 
 
 async def _mutate(
@@ -545,6 +570,8 @@ async def _mutate(
     if endpoint in WORKSPACE:
         user = actors.platform_admin if as_platform_admin else actors.owner
         return await _valid_request(client, method, path, acme, user, mfa=as_platform_admin)
+    if endpoint == LEAVE:
+        return await client.request(method, _url(path, "acme"), headers=_headers(actors.leaver))
     body = _PLATFORM_BODIES[endpoint](actors.person)
     url = _url(path, ids={"user_id": actors.person.id})
     return await client.request(
@@ -578,8 +605,14 @@ async def test_every_change_writes_exactly_one_event(
 
     assert 200 <= r.status_code < 300, r.text
     [event] = await _events_since(seen)
-    in_workspace = (method, path) in WORKSPACE
-    actor = actors.owner if in_workspace else actors.platform_admin
+    in_workspace = (method, path) in WORKSPACE or (method, path) == LEAVE
+    actor = (
+        actors.leaver
+        if (method, path) == LEAVE
+        else actors.owner
+        if in_workspace
+        else actors.platform_admin
+    )
     assert event.action == _ACTIONS[(method, path)]
     assert event.workspace_id == (acme["workspace_id"] if in_workspace else None)
     assert (event.actor_user_id, event.actor_email) == (actor.id, actor.email)
@@ -603,6 +636,7 @@ _TABLES = {
     "route": "routes",
     "consumer": "consumers",
     "key": "api_keys",
+    "member": "workspace_members",
 }
 
 
