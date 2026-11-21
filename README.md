@@ -11,6 +11,7 @@ It is a learning project, built step by step with production habits: tests at ev
 - **Routing:** `/v1/orders/...` goes to the orders service, by longest path prefix and HTTP method, on whole path segments.
 - **API keys:** consumers (client apps) get keys, shown once and stored hashed. No key or a wrong key is `401`, a blocked consumer is `403`.
 - **Rate limiting:** a token bucket per consumer and one per workspace in Redis, checked together in one atomic Lua script shared by every gateway instance. Over either limit is `429` with `Retry-After`. If Redis is down, traffic still flows (fail open).
+- **SSRF protection:** a tenant's service can't point the gateway at the platform's insides (private, loopback, link-local and cloud-metadata addresses). The gateway checks the address it really connects to, after DNS, so DNS rebinding doesn't help; the control plane refuses plainly internal URLs on save. The Platform Admin can allow exceptions (`UPSTREAM_ALLOW`).
 - **Noisy-neighbor protection:** each workspace may have only so many requests in flight per gateway instance (`503 workspace_overloaded` beyond that), so a slow backend in one workspace can't tie up the gateway for the others.
 - **Reverse proxy:** per-route timeouts (`504`), dead backends (`502`), optional prefix stripping, trusted `X-Forwarded-*` headers. The backend never sees the API key; it gets `X-Consumer-ID`.
 - **Observability:** a request ID on every call, and one JSON log line per request with the route, the consumer, the status and how long the backend and the gateway each took.
@@ -185,7 +186,7 @@ docker compose run --rm loadtest            # k6 load test
 
 ## Status and what's next
 
-The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), and workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), are in. Next on the [roadmap](docs/ROADMAP.md):
+The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), and SSRF protection (MT.9), are in. Next on the [roadmap](docs/ROADMAP.md):
 
-- **More gateway work:** SSRF protection, load balancing with health checks, CORS and a body size limit.
+- **More gateway work:** load balancing with health checks, CORS and a body size limit.
 - Later: plans and monthly quotas, usage analytics, Prometheus metrics, a developer portal, and finally the React app.

@@ -495,7 +495,7 @@ There is no login endpoint: the dashboard logs in with GoTrue directly. The MVP'
 - Errors return `{ "detail": "..." }` with the right status code: 401 not signed in, 403 not allowed, 404 unknown id or workspace (or another workspace's), 409 duplicate, still in use, `last_owner` or `quota_exceeded`, 422 invalid input or a reference to something not in this workspace
 - `PATCH` changes only the fields sent; sending `null` is rejected, except in `PATCH /limits`, where `null` puts a limit back to the platform default (MT.5)
 - A route `path_prefix` of `/health` or below it (`/health/db`) is reserved by the gateway and rejected with 422. `/healthy` and `/api/health` are fine. v2 adds `/metrics`
-- Upstream and target URLs: only `http` and `https`, without a query string, a fragment, a username or a password (each → 422: a password would be stored, returned by the API and sent to the gateway, which ignores it); an internal IP literal or a known internal name (`localhost`, `*.internal`) not covered by `UPSTREAM_ALLOW` → 422. The gateway enforces the real check at connect time (section 7)
+- Upstream and target URLs: only `http` and `https`, without a query string, a fragment, a username or a password (each → 422: a password would be stored, returned by the API and sent to the gateway, which ignores it); an internal IP literal or a known internal name (`localhost`, `*.localhost`, `*.internal`) not covered by `UPSTREAM_ALLOW` → 422 (MT.9; the URL is normalized first, so `http://2130706433` or `http://0x7f.0.0.1` count as `127.0.0.1`). Other names (`redis`) pass: the gateway judges them once DNS has answered. The gateway enforces the real check at connect time (section 7)
 - Every write records an audit event in the same transaction (section 5): exactly one per change; a request that changes nothing (a PATCH with the same values, revoking a revoked key) records none. Actions are `<target>.<verb>` (`service.create`, `route.update`, `consumer.delete`, `key.create`, `key.revoke`, `user.create`, `user.disable`, `user.enable`, `user.relink`, `member.add`), lifecycle events as listed below (`workspace.created`). `actor_type` is `platform_admin` when only platform power allowed the change (and on platform endpoints), `user` within the person's own role, `system` for startup and scripts
 - Every response carries `X-Request-ID`: the client's when it is 1–128 characters of `A-Z a-z 0-9 . _ -`, else a new one; audit events store it with the IP and user agent
 - Audit lists filter by `?actor=` (an email, any case), `?action=`, `?target_type=`, `?from=` (at or after) and `?to=` (before); the platform list also by `?workspace_id=`
@@ -681,10 +681,11 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 **SSRF protection (MT)**
 
 - The transport's `net.Dialer` has a `Control` hook that runs after DNS resolution and before connecting. It checks the real IP (IPv4-mapped IPv6 is unmapped first) against the egress policy, so DNS rebinding can't get around it.
-- Blocked by default: `127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`, `169.254.0.0/16`, `fe80::/10`, `0.0.0.0/8`, `100.64.0.0/10`, multicast.
-- `UPSTREAM_ALLOW` (hostnames and CIDRs, set by the Platform Admin) makes exceptions; local Compose and CI allow `mock-backend`. A hostname in the list is allowed together with the addresses it resolves to.
-- A refused connection: `502 {"error":"upstream_not_allowed"}` and a warning log line with the workspace and the target. Passive health checks don't count it as a target failure.
-- The check runs once per new connection (the pool reuses connections), so it costs nothing per request. The policy function has a fuzz test.
+- Blocked by default: `127.0.0.0/8`, `::1`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `fc00::/7`, `169.254.0.0/16`, `fe80::/10`, `0.0.0.0/8`, `100.64.0.0/10`, multicast; since MT.9 also `::` (unspecified) and `240.0.0.0/4` (reserved and broadcast). An IPv6 address carrying an IPv4 one (NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, 6to4 `2002::/16`, IPv4-compatible `::/96`) is judged by the IPv4 address inside.
+- `UPSTREAM_ALLOW` (comma-separated host names, addresses and CIDRs, set by the Platform Admin; read by the gateway and the control plane, checked at start) makes exceptions; local Compose and CI allow `mock-backend`. A host name in the list is allowed together with the addresses it resolves to **when the upstream URL uses that name**: the same address under another name or as a literal is still refused (MT.9).
+- How (MT.9): the `egress` package's dialer connects hosts the allow list names as they are; for every other host Go's dialer resolves the name and calls the `Control` hook for each address right before connecting. Proxies from the environment are never used (they would dial around the check).
+- A refused connection: `502 {"error":"upstream_not_allowed"}` and a warning log line with the workspace, route, host and the refused address. It is never reported as a timeout, even when the route's time ran out meanwhile. Passive health checks don't count it as a target failure.
+- The check runs once per new connection (the pool reuses connections), so it costs nothing per request. The deny list has a fuzz test against an independent reading built from `netip`'s classifiers; DNS rebinding is tested with a fake DNS server whose answer changes between two dials.
 
 **Workspace limits (MT)**
 
@@ -1033,7 +1034,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.6 Incremental config: `config_seq`, per-workspace versions, gateway merge [7]
 - [x] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]
 - [x] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
-- [ ] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
+- [x] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
 - [ ] MT.10 Load balancing: targets, weighted round robin, active and passive health checks [14]
 - [ ] MT.11 CORS and body size limit [15, 16]
 - [ ] MT.12 MT end to end: e2e stories, load test, README and developer docs [all]

@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 22, 2026 · **Current step:** MT.8 done (workspace limits in the gateway); next: MT.9
+**Last updated:** Nov 22, 2026 · **Current step:** MT.9 done (SSRF protection); next: MT.10
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅⬜⬜⬜⬜ 8/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅⬜⬜⬜ 9/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1204 passing (about 5.5 min), including the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
+| Tests | 1275 passing (about 5.5 min), including internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
 | Coverage | 99% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -36,9 +36,9 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 468 passing (tests, table cases and fuzz seeds), including the workspace and consumer buckets spent together or not at all by 100 parallel requests, a slow workspace held to its in-flight share while another keeps answering, two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
-| Coverage | **97.7%** total (minimum 90%, enforced): inflight, tenant, proxy, middleware and 3 more packages at 100%, config 95.8%, server 97.4%, ratelimit 97.9%, main 87.0% |
-| Fuzz tests | 7 (paths, matching, prefix stripping, request IDs, config answers and Host parsing: about 800,000 Hosts in the first 15 s run), 10 s each in CI |
+| Tests | 491 passing (tests, table cases and fuzz seeds), including internal upstreams refused before connecting (also through a name, and through DNS rebinding with a fake DNS server), the workspace and consumer buckets spent together or not at all by 100 parallel requests, a slow workspace held to its in-flight share while another keeps answering, two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
+| Coverage | **97.8%** total (minimum 90%, enforced): inflight, tenant, proxy, middleware and 3 more packages at 100%, egress 98.6%, config 95.8%, server 97.4%, ratelimit 97.9%, main 87.0% |
+| Fuzz tests | 8 (paths, matching, prefix stripping, request IDs, config answers, Host parsing: about 800,000 Hosts in the first 15 s run, and the SSRF deny list: 2.6 million addresses in 15 s against an independent reading), 10 s each in CI |
 | Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 11 µs** with the tenant and in-flight steps (10.7–11.9 µs over 3 runs; 9.9–13.2 µs at MT.7, 8.5 µs at step 3.7); an in-flight slot **23 ns** (no allocations; 79 ns with 8 goroutines on one workspace); one rate-limit check with both buckets **≈ 0.4 ms** (0.38–0.49 ms; one bucket 0.39–0.40 ms on the same machine; Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back. Workspace limit 3/min (MT.8): a public route 3 × 200 then 429, and a consumer with its own budget 429 too (`limited_workspace` in the log); in-flight limit 1: `503 workspace_overloaded` with `Retry-After: 1` while a 2 s request runs, another workspace answering |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **38 stories pass in about 16 s**, including a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **42 stories pass in about 17 s**, including a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.78 ms median / 0.83 ms p95** (since MT.8 public and protected routes both make the Redis call; the gateway's own work with Redis ≈ 0.38 ms in its log; 0.77 / 0.95 ms at step 4.4); `default`'s rate limit is raised for the run and put back; `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -136,7 +136,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.6 | Incremental config protocol | ✅ |
 | MT.7 | Gateway tenancy | ✅ |
 | MT.8 | Workspace limits in the gateway | ✅ |
-| MT.9 | SSRF protection | ⬜ |
+| MT.9 | SSRF protection | ✅ |
 | MT.10 | Load balancing and health checks | ⬜ |
 | MT.11 | CORS and body size limit | ⬜ |
 | MT.12 | MT end to end, load test, docs | ⬜ |
@@ -274,6 +274,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Fuzz test for the policy; a DNS-rebinding test (a name resolving to an internal IP at connect time is refused)
 
 **Done when:** e2e shows a service pointing at `http://redis:6379` refused with `upstream_not_allowed`; all other e2e stories pass with the allow list.
+
+**Status:** ✅ Done (Nov 22). Commits `1d0c7e0` (the `egress` package: deny list, allow list, the dialer with the `Control` hook, fuzz and DNS-rebinding tests), `8d396bd` (the gateway dials through it: `502 upstream_not_allowed` and a warning with workspace, route, host and address; `UPSTREAM_ALLOW` in settings and Compose), `2d83b8f` (the control plane's 422 on save), `d8ee7fb` (e2e, the fuzz test in CI), then the docs. The live log shows `redis` refused at `172.18.0.2`. All 42 e2e stories pass with `UPSTREAM_ALLOW=mock-backend`, and the k6 smoke run passes through the guarded dialer. The race detector is clean on Linux, including the DNS-rebinding test.
 
 ### MT.10 Load balancing and health checks [14]
 
@@ -506,3 +508,9 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.8 | The in-flight step is the last before the proxy; requests refused earlier (404, 401, 403, 429) never take a slot. No new log field: the 503 line carries the route and workspace | Only requests on their way to a backend tie up the instance |
 | Nov 22 | MT.8 | The rate-limit and in-flight steps answer 500 when no workspace is on the request (only possible if `main` wires them without `tenant`) | Like the router and auth: a wiring mistake must not let traffic through unlimited |
 | Nov 22 | MT.8 | The k6 load test logs in with password and TOTP (its own factor `loadtest`, removed afterwards; the runner gets `GOTRUE_SERVICE_ROLE_KEY` like e2e), raises `default`'s rate limit to 1,000,000/min for the run and puts back the override that was there (also when setup fails) | `default`'s 6,000/min would refuse most of 300 requests/s; `PATCH /limits` is a Platform Admin endpoint and needs MFA; raising `WORKSPACE_RATE_LIMIT_PER_MIN` would change the default for every workspace |
+| Nov 22 | MT.9 | The deny list adds `::` (unspecified), `240.0.0.0/4` (reserved and broadcast) and judges IPv6 addresses that carry an IPv4 one (NAT64, 6to4, IPv4-compatible) by that IPv4 address | Each is another spelling of an internal address: `64:ff9b::a00:1` reaches 10.0.0.1 through a NAT64 gateway, `::ffff:` was already in the plan |
+| Nov 22 | MT.9 | An allowed host name opens its addresses only when the upstream URL uses that name; the same address as a literal or under another name stays refused | The dialer's hook sees only the address; checking the name before dialing keeps "allowed together with the addresses it resolves to" without opening Docker's whole network to every tenant |
+| Nov 22 | MT.9 | The control plane's known internal names are `localhost`, `*.localhost` and `*.internal`; single-label names such as `redis` pass on save | `*.localhost` always means this machine (RFC 6761). A single label may well be a tenant's real service name; the gateway refuses it at connect time if it resolves inside |
+| Nov 22 | MT.9 | The early check runs in the service schema's validator (422 in pydantic's error shape), after URL normalization | Same place and shape as the scheme and credentials rules; `http://2130706433` and `http://0x7f.0.0.1` reach it as `127.0.0.1` |
+| Nov 22 | MT.9 | Compose defaults `UPSTREAM_ALLOW` to `mock-backend` with `${UPSTREAM_ALLOW-mock-backend}` (no colon), so an existing `.env` without the line keeps the local stack working and an explicit empty value allows nothing | Upgrading developers need no `.env` change; production sets it empty or to its own hosts |
+| Nov 22 | MT.9 | A policy refusal is never reported as a timeout, even when the route's time ran out meanwhile; no new log field on the request line, a separate warning names host and address | The client and the operator see the real cause; the request line's status 502 and the warning are enough |
