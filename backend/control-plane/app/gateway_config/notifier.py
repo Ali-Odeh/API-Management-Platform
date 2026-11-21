@@ -7,8 +7,8 @@ LISTEN only works while that exact connection stays open.
 How a waiting request uses it, without ever missing a change:
 
     wake = notifier.subscribe()        # 1. take the wake-up signal FIRST
-    version = await read_version()     # 2. then read the version
-    if version == known:
+    seq = await read_seq()             # 2. then read the sequence
+    if seq == since:
         await notifier.wait(wake, seconds=30)  # 3. until a NOTIFY or 30 s
 
 If a NOTIFY lands between steps 1 and 2, the signal from step 1 is already
@@ -39,7 +39,7 @@ class ConfigNotifier:
     # ---- for waiting requests
 
     def subscribe(self) -> asyncio.Event:
-        """The signal the next NOTIFY will set. Take it BEFORE reading the version."""
+        """The signal the next NOTIFY will set. Take it BEFORE reading the sequence."""
         return self._wake_signal
 
     async def wait(self, signal: asyncio.Event, *, seconds: float) -> None:

@@ -1,92 +1,207 @@
-"""Reading the config version and the config snapshot.
+"""Reading the config sequence and the gateway's config, workspace by workspace.
 
-(Writing the version is the database triggers' job, see models.py.)
+(Writing the sequence and the versions is the database triggers' job, see models.py.)
 """
 
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+import uuid
+from collections import defaultdict
+from collections.abc import Iterable, MutableMapping
+from typing import Any
+
+from sqlalchemy import Row, select
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from app.consumers.models import Consumer
-from app.gateway_config.models import SINGLETON_ID, ConfigVersion
-from app.gateway_config.schemas import ConfigSnapshot, KeyConfig, RouteConfig
+from app.gateway_config.models import SINGLETON_ID, ConfigSeq, WorkspaceConfig
+from app.gateway_config.schemas import (
+    ConfigAnswer,
+    GatewayLimits,
+    KeyConfig,
+    RouteConfig,
+    ServiceConfig,
+    TargetConfig,
+    WorkspaceConfigOut,
+)
 from app.keys.models import ApiKey
 from app.routes.models import Route
 from app.services.models import Service
-from app.workspaces.models import DEFAULT_WORKSPACE_SLUG, Workspace
+from app.workspaces.limits import default_limit
+from app.workspaces.models import Workspace, WorkspaceStatus
 
-_VERSION_QUERY = select(ConfigVersion.version).where(ConfigVersion.id == SINGLETON_ID)
+# Built workspaces, by id: one entry per workspace, for its latest version.
+WorkspaceCache = MutableMapping[uuid.UUID, WorkspaceConfigOut]
 
-# Until the gateway tells workspaces apart by Host (MT.6, MT.7), it serves only
-# `default`. Another workspace's routes and keys must not reach it: they would
-# work on the gateway's bare host, across tenants (path prefixes are unique
-# only per workspace since MT.2).
-_SERVED_WORKSPACE = (
-    select(Workspace.id).where(Workspace.slug == DEFAULT_WORKSPACE_SLUG).scalar_subquery()
-)
+_SEQ_QUERY = select(ConfigSeq.seq).where(ConfigSeq.id == SINGLETON_ID)
+_IN_CONFIG = (WorkspaceStatus.ACTIVE, WorkspaceStatus.SUSPENDED)
+# Until service targets exist (MT.10), a service's upstream_url is its one target.
+_ONLY_TARGET_WEIGHT = 100
 
 
-async def get_config_version(db: AsyncSession) -> ConfigVersion:
-    """The current version row, always read fresh from the database.
+async def get_config_seq(db: AsyncSession) -> ConfigSeq:
+    """The sequence row, always read fresh from the database.
 
     populate_existing: if this session already loaded the row, refresh it
     instead of returning the cached copy, since triggers change it behind
     the ORM's back.
     """
     query = (
-        select(ConfigVersion)
-        .where(ConfigVersion.id == SINGLETON_ID)
+        select(ConfigSeq)
+        .where(ConfigSeq.id == SINGLETON_ID)
         .execution_options(populate_existing=True)
     )
     return (await db.scalars(query)).one()
 
 
-async def read_version(engine: AsyncEngine) -> int:
+async def read_seq(engine: AsyncEngine) -> int:
     """Just the number: a cheap query, run on every gateway request."""
     async with engine.connect() as conn:
-        return (await conn.execute(_VERSION_QUERY)).scalar_one()
+        return (await conn.execute(_SEQ_QUERY)).scalar_one()
 
 
-async def read_snapshot(engine: AsyncEngine) -> ConfigSnapshot:
-    """The version and everything the gateway needs, from ONE consistent view.
+async def read_answer(
+    engine: AsyncEngine,
+    *,
+    since: int,
+    slugs: frozenset[str] | None,
+    cache: WorkspaceCache,
+) -> ConfigAnswer:
+    """What changed after `since`, from ONE consistent view of the database.
 
-    REPEATABLE READ: every query in this transaction sees the database as it
-    was at the first query. Without it, a change committing between reading
-    the version and reading the routes could label old routes with a new
-    version, and the gateway would believe it is up to date and miss that
-    change for good.
+    A full answer (every workspace) when `since` is 0 (a gateway starting),
+    newer than the database's sequence (e.g. after a database reset), or
+    otherwise unusable. Else only the workspaces whose seq is above `since`:
+    those still served come back complete, the deleted and purged ones by id.
+    `slugs` limits the answer to those workspaces (a dedicated gateway).
+
+    REPEATABLE READ: every query sees the database as of the first one, so
+    the sequence, each version and its data always match. Without it, a
+    change committing in between could label old data with a new version,
+    and the gateway would never ask for it again.
+
+    `cache` holds each workspace built for its latest version: a workspace
+    that didn't change since another gateway asked is not built again.
     """
     async with engine.connect() as conn:
         conn = await conn.execution_options(isolation_level="REPEATABLE READ")
         async with conn.begin():
-            version = (await conn.execute(_VERSION_QUERY)).scalar_one()
-            route_rows = await conn.execute(
-                select(
-                    Route.id,
-                    Route.path_prefix,
-                    Route.methods,
-                    Route.strip_prefix,
-                    Route.auth_required,
-                    Service.upstream_url,
-                    Service.timeout_ms,
+            seq = (await conn.execute(_SEQ_QUERY)).scalar_one()
+            full = since <= 0 or since > seq
+            query = select(
+                Workspace.id, Workspace.slug, Workspace.status, WorkspaceConfig.version
+            ).join(WorkspaceConfig, WorkspaceConfig.workspace_id == Workspace.id)
+            if full:
+                query = query.where(Workspace.status.in_(_IN_CONFIG))
+            else:
+                query = query.where(WorkspaceConfig.seq > since)
+            if slugs is not None:
+                query = query.where(Workspace.slug.in_(slugs))
+            rows = (await conn.execute(query.order_by(Workspace.slug))).all()
+
+            served = [row for row in rows if row.status in _IN_CONFIG]
+            missing = [
+                row.id
+                for row in served
+                if row.id not in cache or cache[row.id].version != row.version
+            ]
+            if missing:
+                cache.update(await _build(conn, missing))
+            deleted = sorted(row.id for row in rows if row.status not in _IN_CONFIG)
+            for workspace_id in deleted:
+                cache.pop(workspace_id, None)
+            return ConfigAnswer(
+                seq=seq,
+                full=full,
+                workspaces=[cache[row.id] for row in served],
+                deleted=deleted,
+            )
+
+
+async def _build(
+    conn: AsyncConnection, workspace_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, WorkspaceConfigOut]:
+    """Each workspace's config, complete: four queries however many are built."""
+    workspaces = await conn.execute(
+        select(
+            Workspace.id,
+            Workspace.slug,
+            Workspace.status,
+            Workspace.rate_limit_per_min,
+            Workspace.max_concurrent,
+            WorkspaceConfig.version,
+        )
+        .join(WorkspaceConfig, WorkspaceConfig.workspace_id == Workspace.id)
+        .where(Workspace.id.in_(workspace_ids))
+    )
+    services = _grouped(
+        await conn.execute(
+            select(Service.workspace_id, Service.id, Service.timeout_ms, Service.upstream_url)
+            .where(Service.workspace_id.in_(workspace_ids), Service.is_active)
+            .order_by(Service.id)
+        )
+    )
+    routes = _grouped(
+        await conn.execute(
+            select(
+                Route.workspace_id,
+                Route.id,
+                Route.service_id,
+                Route.path_prefix,
+                Route.methods,
+                Route.strip_prefix,
+                Route.auth_required,
+            )
+            .join(Service, Route.service_id == Service.id)
+            .where(Route.workspace_id.in_(workspace_ids), Route.is_active, Service.is_active)
+            .order_by(Route.path_prefix)
+        )
+    )
+    keys = _grouped(
+        await conn.execute(
+            select(
+                ApiKey.workspace_id,
+                ApiKey.id,
+                ApiKey.key_hash,
+                ApiKey.consumer_id,
+                Consumer.status.label("consumer_status"),
+                Consumer.rate_limit_per_min,
+            )
+            .join(Consumer, ApiKey.consumer_id == Consumer.id)
+            .where(ApiKey.workspace_id.in_(workspace_ids), ApiKey.revoked_at.is_(None))
+            .order_by(ApiKey.id)
+        )
+    )
+    built: dict[uuid.UUID, WorkspaceConfigOut] = {}
+    for workspace in workspaces:
+        built[workspace.id] = WorkspaceConfigOut(
+            id=workspace.id,
+            slug=workspace.slug,
+            status=workspace.status,
+            version=workspace.version,
+            hosts=[workspace.slug],
+            limits=GatewayLimits(
+                rate_limit_per_min=_effective(workspace.rate_limit_per_min, "rate_limit_per_min"),
+                max_concurrent=_effective(workspace.max_concurrent, "max_concurrent"),
+            ),
+            services=[
+                ServiceConfig(
+                    id=s.id,
+                    timeout_ms=s.timeout_ms,
+                    targets=[TargetConfig(id=s.id, url=s.upstream_url, weight=_ONLY_TARGET_WEIGHT)],
                 )
-                .join(Service, Route.service_id == Service.id)
-                .where(Route.is_active, Service.is_active, Route.workspace_id == _SERVED_WORKSPACE)
-                .order_by(Route.path_prefix)
-            )
-            key_rows = await conn.execute(
-                select(
-                    ApiKey.id,
-                    ApiKey.key_hash,
-                    ApiKey.consumer_id,
-                    Consumer.status.label("consumer_status"),
-                    Consumer.rate_limit_per_min,
-                )
-                .join(Consumer, ApiKey.consumer_id == Consumer.id)
-                .where(ApiKey.revoked_at.is_(None), ApiKey.workspace_id == _SERVED_WORKSPACE)
-                .order_by(ApiKey.id)
-            )
-            return ConfigSnapshot(
-                version=version,
-                routes=[RouteConfig.model_validate(row) for row in route_rows],
-                keys=[KeyConfig.model_validate(row) for row in key_rows],
-            )
+                for s in services[workspace.id]
+            ],
+            routes=[RouteConfig.model_validate(r) for r in routes[workspace.id]],
+            keys=[KeyConfig.model_validate(k) for k in keys[workspace.id]],
+        )
+    return built
+
+
+def _grouped(rows: Iterable[Row[Any]]) -> defaultdict[uuid.UUID, list[Row[Any]]]:
+    by_workspace: defaultdict[uuid.UUID, list[Row[Any]]] = defaultdict(list)
+    for row in rows:
+        by_workspace[row.workspace_id].append(row)
+    return by_workspace
+
+
+def _effective(own: int | None, column: str) -> int:
+    return own if own is not None else default_limit(column)

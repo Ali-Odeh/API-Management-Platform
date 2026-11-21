@@ -13,8 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from app.audit.models import AuditEvent
 from app.core.db import Base, SessionLocal
 from app.core.permissions import Role
+from app.gateway_config.models import WorkspaceConfig
 from app.workspaces.models import Workspace, WorkspaceStatus
-from app.workspaces.purge import TENANT_TABLES, purge_due, run
+from app.workspaces.purge import KEPT_TABLES, TENANT_TABLES, purge_due, run
 from tests.conftest import OWNER_URL
 from tests.factories import (
     make_api_key,
@@ -91,7 +92,7 @@ def test_the_purge_knows_every_table_with_workspace_data() -> None:
     with_workspace = {
         table.name
         for table in Base.metadata.sorted_tables
-        if "workspace_id" in table.columns and table.name != "workspaces"
+        if "workspace_id" in table.columns and table.name not in KEPT_TABLES
     }
     assert set(TENANT_TABLES) == with_workspace
 
@@ -113,6 +114,25 @@ async def test_purges_only_overdue_deleted_workspaces(db: AsyncSession) -> None:
     # People stay: only the membership went.
     async with SessionLocal() as session:
         assert await session.scalar(select(func.count()).select_from(Workspace)) == 3
+
+
+async def test_gateways_learn_of_the_purge(db: AsyncSession) -> None:
+    # The workspace's config row stays, with a newer sequence: a gateway that
+    # was away when it was deleted still gets it in `deleted` (MT.6).
+    due = await _populated(db, "due")
+    await _delete(due.id, purge_in=-timedelta(seconds=1))
+    async with SessionLocal() as session:
+        before = await session.scalar(
+            select(WorkspaceConfig.seq).where(WorkspaceConfig.workspace_id == due.id)
+        )
+
+    await purge_due(PURGE_URL)
+
+    async with SessionLocal() as session:
+        after = await session.scalar(
+            select(WorkspaceConfig.seq).where(WorkspaceConfig.workspace_id == due.id)
+        )
+    assert before is not None and after is not None and after > before
 
 
 async def test_the_purge_is_recorded_platform_level(db: AsyncSession) -> None:

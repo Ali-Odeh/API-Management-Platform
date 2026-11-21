@@ -44,7 +44,7 @@ from app.core.config import get_settings
 from app.core.db import Base, SessionLocal, driver_dsn, engine
 from app.core.db_roles import prepare_roles
 from app.core.permissions import Role
-from app.gateway_config.models import ConfigVersion
+from app.gateway_config.models import ConfigSeq
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
 from app.main import app
@@ -86,18 +86,16 @@ async def _clean_tables() -> AsyncIterator[None]:
     # DELETE, not TRUNCATE: our test tables hold a handful of rows, and on tiny
     # tables TRUNCATE (which takes heavy locks and rewrites files) is far slower.
     # Children before parents (reverse dependency order), so foreign keys are happy.
-    # config_version is a singleton the triggers need: reset it, never delete it
+    # config_seq is a singleton the triggers need: reset it, never delete it
     # (the DELETEs fire the triggers and bump it, so the reset comes last).
     tables = [
-        t.name
-        for t in reversed(Base.metadata.sorted_tables)
-        if t.name != ConfigVersion.__tablename__
+        t.name for t in reversed(Base.metadata.sorted_tables) if t.name != ConfigSeq.__tablename__
     ]
     owner = create_async_engine(OWNER_URL, poolclass=pool.NullPool)
     async with owner.begin() as conn:
         for name in tables:  # asyncpg runs one statement per call
             await conn.execute(text(f"DELETE FROM {name}"))
-        await conn.execute(text("UPDATE config_version SET version = 1, updated_at = now()"))
+        await conn.execute(text("UPDATE config_seq SET seq = 1, updated_at = now()"))
     await owner.dispose()
     yield
     # Each test has its own event loop, and a pooled asyncpg connection only

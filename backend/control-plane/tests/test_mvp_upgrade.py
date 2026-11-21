@@ -33,7 +33,7 @@ from app.users import crud as users_crud
 from tests.fakes import FakeGoTrue, bearer, make_token
 
 MVP_HEAD = "db8a66008fec"
-CONFIG_TABLES = ("workspaces", "services", "routes", "consumers", "api_keys", "config_version")
+CONFIG_TABLES = ("workspaces", "services", "routes", "consumers", "api_keys")
 # Workspace columns added after the MVP that are NULL on an upgraded row (MT.5).
 NEW_WORKSPACE_COLUMNS = (
     "status_reason", "deleted_at", "purge_after",
@@ -124,6 +124,9 @@ async def _seed_mvp() -> dict[str, list[dict[str, Any]]]:
         for sql, params in _MVP_DATA:
             await conn.execute(text(sql), params)
     before = await _snapshot(engine)
+    async with engine.connect() as conn:  # the MVP's single config version
+        version = await conn.scalar(text("SELECT version FROM config_version"))
+    before["config_version"] = [{"version": version}]
     await engine.dispose()
     return before
 
@@ -134,7 +137,16 @@ async def _check_upgraded(before: dict[str, list[dict[str, Any]]], gotrue: FakeG
     try:
         # The config is exactly as it was: no row added, changed or bumped.
         after = await _snapshot(engine)
+        mvp_version = before.pop("config_version")[0]["version"]
         assert _columns_of(after, before) == before
+        # The sequence continues from the MVP's version (MT.6), so a running
+        # gateway isn't sent back to the start; the workspace starts at version 1.
+        async with engine.connect() as conn:
+            assert await conn.scalar(text("SELECT seq FROM config_seq")) == mvp_version
+            config = (await conn.execute(text("SELECT * FROM workspace_config"))).one()._mapping
+        assert (config["workspace_id"], config["version"], config["seq"]) == (
+            WORKSPACE_ID, 1, mvp_version,
+        )  # fmt: skip
         # Columns added since the MVP start at their defaults (MT.5: active,
         # the platform's limits).
         [workspace] = after["workspaces"]

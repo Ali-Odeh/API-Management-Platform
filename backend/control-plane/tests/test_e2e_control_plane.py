@@ -2,7 +2,7 @@
 
 Every other test checks one piece. This one walks the whole MVP admin flow
 through the real API and, after each step, looks at /internal/config exactly
-as the Go gateway will in milestone M3.
+as the Go gateway does (its `default` workspace, from a full answer).
 """
 
 from typing import Any
@@ -20,8 +20,10 @@ async def test_admin_flow_as_seen_by_the_gateway(
         r = await gateway.get(CONFIG)
         assert r.status_code == 200
         body: dict[str, Any] = r.json()
-        assert r.headers["ETag"] == f'"{body["version"]}"'
-        return body
+        assert r.headers["ETag"] == f'"{body["seq"]}"'
+        assert body["full"] is True
+        default: dict[str, Any] = next(w for w in body["workspaces"] if w["slug"] == "default")
+        return {**default, "seq": body["seq"]}
 
     # 0. Nothing configured yet.
     start = await config()
@@ -55,16 +57,24 @@ async def test_admin_flow_as_seen_by_the_gateway(
     ).json()
 
     after_route = await config()
+    assert after_route["seq"] > start["seq"]
     assert after_route["version"] > start["version"]
+    assert after_route["services"] == [
+        {
+            "id": service["id"],
+            "timeout_ms": 2000,
+            # Its one target until MT.10: the upstream URL, cleaned up by the API.
+            "targets": [{"id": service["id"], "url": "http://mock-backend:9000", "weight": 100}],
+        }
+    ]
     assert after_route["routes"] == [
         {
             "id": route["id"],
+            "service_id": service["id"],
             "path_prefix": "/v1/orders",  # cleaned up by the API
             "methods": ["GET", "POST"],
             "strip_prefix": False,
             "auth_required": True,  # secure by default
-            "upstream_url": "http://mock-backend:9000",
-            "timeout_ms": 2000,
         }
     ]
 
@@ -119,8 +129,8 @@ async def test_admin_flow_as_seen_by_the_gateway(
 
     end = await config()
     assert end["routes"] == [] and end["keys"] == []
-    assert end["version"] > after_key["version"]
+    assert end["seq"] > after_key["seq"]
 
     # 8. And an up-to-date gateway gets 304.
-    same = await gateway.get(CONFIG, headers={"If-None-Match": f'"{end["version"]}"'})
+    same = await gateway.get(CONFIG, params={"since": end["seq"]})
     assert same.status_code == 304
