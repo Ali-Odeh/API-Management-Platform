@@ -16,6 +16,7 @@ from app.core.openapi import error_responses
 from app.core.permissions import Role
 from app.core.request_id import RequestIdMiddleware
 from app.core.request_log import RequestLogMiddleware, configure_logging
+from app.gateway_config import crud as gateway_config_crud
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
 from app.gateway_config.router import router as gateway_config_router
@@ -74,6 +75,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     gotrue = gotrue_client.create_gotrue_admin(settings)
     app.state.gotrue = gotrue
     await _bootstrap(gotrue, settings)
+    # Before serving gateways: a default changed in .env reaches them too.
+    await gateway_config_crud.apply_config_defaults(engine, settings)
 
     # Start listening for config changes, for long-polling gateways.
     notifier = ConfigNotifier(driver_dsn(settings.database_url))

@@ -1,12 +1,18 @@
 // Load test: how much time does the gateway add to each request?
 //
 // Three runs at the same fixed rate, one after the other:
-//   direct            k6 -> mock backend                                  (baseline)
-//   gateway_public    k6 -> gateway (route, log, workspace rate limit, proxy) -> mock backend
+//   direct            k6 -> mock backends                                 (baseline)
+//   gateway_public    k6 -> gateway (Host -> workspace, route, log, workspace
+//                     rate limit, pick a target, proxy) -> mock backends
 //   gateway_protected k6 -> gateway (+ API key; its consumer's bucket in the same
-//                     Redis call) -> mock backend
+//                     Redis call) -> mock backends
 // The differences between them are what the gateway costs. Since MT.8 both
 // gateway runs make the one Redis call (the workspace's bucket).
+//
+// Since MT.12 the test runs in a workspace of its own, `lt-<run id>`, called
+// on its subdomain (`Host: lt-<run id>.localhost`) like a tenant's clients,
+// with a service on both mock backend instances (round robin). The direct
+// run alternates between the same two instances.
 //
 // Run (inside the Compose network):  docker compose run --rm loadtest
 // Settings (environment): RATE (requests/s, default 300), DURATION (seconds
@@ -16,26 +22,35 @@ import http from 'k6/http';
 import crypto from 'k6/crypto';
 import encoding from 'k6/encoding';
 import { check, sleep } from 'k6';
+import exec from 'k6/execution';
 
 const CONTROL_PLANE = __ENV.CONTROL_PLANE_URL || 'http://control-plane:8000';
 const GOTRUE = __ENV.GOTRUE_URL || 'http://auth:9999';
 const GATEWAY = __ENV.GATEWAY_URL || 'http://gateway:8080';
-const BACKEND = __ENV.MOCK_BACKEND_URL || 'http://mock-backend:9000';
+const BACKENDS = [
+  __ENV.MOCK_BACKEND_URL || 'http://mock-backend:9000',
+  __ENV.MOCK_BACKEND_2_URL || 'http://mock-backend-2:9000',
+];
 const RATE = Number(__ENV.RATE || 300);
 const DURATION = Number(__ENV.DURATION || 30);
 const PAUSE = 5; // seconds between runs, so one run's tail doesn't overlap the next
 // The consumer's limit: the control plane's maximum. Every request does the
 // full Redis check, but the bucket never runs dry (no 429s).
 const RATE_LIMIT_PER_MIN = 100000;
-// The `default` workspace's limit during the test (the control plane's
-// maximum). Its own limit (WORKSPACE_RATE_LIMIT_PER_MIN, 6000/min by default)
-// would refuse most of 300 requests/s: every request also passes its bucket
-// since MT.8. Put back as it was afterwards.
+// The test workspace's limit (the control plane's maximum). The platform
+// default (WORKSPACE_RATE_LIMIT_PER_MIN, 6000/min) would refuse most of 300
+// requests/s: every request also passes the workspace's bucket since MT.8.
 const WORKSPACE_RATE_LIMIT_PER_MIN = 1000000;
-// The Platform Admin's MFA factor the test enrolls (limits need MFA) and removes.
+// The Platform Admin's MFA factor the test enrolls (creating a workspace and
+// its limits need MFA) and removes.
 const FACTOR_NAME = 'loadtest';
 // Unique names, so the test never touches other data (like the e2e tests).
+// k6 runs this init code once per VU, each with another random value: only
+// setup's counts, and everything after setup reads it from setup's data.
 const RUN_ID = Math.random().toString(16).slice(2, 8);
+// The test's own workspace (a new slug every run: slugs are never reused).
+// Deleted at the end, for the purge job.
+const WORKSPACE = `lt-${RUN_ID}`;
 const RUNS = ['direct', 'gateway_public', 'gateway_protected'];
 
 function scenario(index, exec) {
@@ -74,11 +89,11 @@ export const options = {
 
 // ---- setup / teardown: create and delete our own objects ----
 
+// path is under /api/v1, e.g. `/workspaces/${WORKSPACE}/services`.
 function admin(method, path, body, token) {
   const params = { headers: { 'Content-Type': 'application/json' }, tags: { run: 'setup' } };
   if (token) params.headers.Authorization = `Bearer ${token}`;
-  // Everything the load test creates lives in the `default` workspace.
-  const res = http.request(method, `${CONTROL_PLANE}/api/v1/workspaces/default${path}`, body ? JSON.stringify(body) : null, params);
+  const res = http.request(method, `${CONTROL_PLANE}/api/v1${path}`, body ? JSON.stringify(body) : null, params);
   if (res.status >= 300) {
     throw new Error(`${method} ${path}: ${res.status} ${res.body}`);
   }
@@ -94,8 +109,9 @@ function gotrue(method, path, body, token) {
   return res;
 }
 
-// The Platform Admin logs in with GoTrue: password, then a TOTP code (the
-// workspace's limits are platform settings, which need MFA). The factor is
+// The Platform Admin logs in with GoTrue: password, then a TOTP code
+// (creating a workspace and setting its limits are platform actions, which
+// need MFA). The factor is
 // enrolled here and removed in teardown, like the e2e tests do.
 function login() {
   // Compose passes these through without requiring them, so check them here.
@@ -164,66 +180,74 @@ function totpCode(secret) {
 export function setup() {
   const { token, userId } = login();
 
-  // Raise `default`'s own rate limit for the test; teardown puts back what
-  // was there (null = the platform default). k6 runs no teardown when setup
-  // fails, so a failure here puts it back at once.
-  const before = admin('GET', '', null, token).limit_overrides.rate_limit_per_min;
-  admin('PATCH', '/limits', { rate_limit_per_min: WORKSPACE_RATE_LIMIT_PER_MIN }, token);
+  // The test's workspace, with the Platform Admin as its Owner and a rate
+  // limit 300 requests/s can't reach. k6 runs no teardown when setup fails,
+  // so a failure after this point deletes the workspace at once.
+  admin('POST', '/workspaces', { name: 'Load test', slug: WORKSPACE, owner_email: __ENV.PLATFORM_ADMIN_EMAIL }, token);
   try {
-    return { token, userId, workspaceRateLimitBefore: before, ...createTestObjects(token) };
+    admin('PATCH', `/workspaces/${WORKSPACE}/limits`, { rate_limit_per_min: WORKSPACE_RATE_LIMIT_PER_MIN }, token);
+    return { token, userId, ...createTestObjects(token) };
   } catch (e) {
-    admin('PATCH', '/limits', { rate_limit_per_min: before }, token);
+    deleteWorkspace(WORKSPACE, token);
     removeFactors(userId);
     throw e;
   }
 }
 
-// A service, a public and a protected route, and a consumer with a key, all
-// named after this run; returned once the gateway serves them.
+// A service on both backends, a public and a protected route, and a
+// consumer with a key; returned once the gateway serves them.
 function createTestObjects(token) {
-  const service = admin('POST', '/services', { name: `lt-${RUN_ID}-backend`, targets: [{ url: BACKEND }] }, token);
+  const base = `/workspaces/${WORKSPACE}`;
+  const service = admin('POST', `${base}/services`, {
+    name: 'backend',
+    targets: BACKENDS.map((url) => ({ url })),
+  }, token);
   const route = (label, authRequired) =>
-    admin('POST', '/routes', {
+    admin('POST', `${base}/routes`, {
       service_id: service.id,
-      path_prefix: `/lt-${RUN_ID}/${label}`,
+      path_prefix: `/lt-${RUN_ID}/${label}`, // the run id in the path, for gateway_ms.py
       methods: ['GET'],
       auth_required: authRequired,
     }, token);
   const publicRoute = route('public', false);
   const protectedRoute = route('protected', true);
-  const consumer = admin('POST', '/consumers', {
-    name: `lt-${RUN_ID}-client`,
+  const consumer = admin('POST', `${base}/consumers`, {
+    name: 'client',
     email: 'loadtest@example.com',
     rate_limit_per_min: RATE_LIMIT_PER_MIN,
   }, token);
-  const key = admin('POST', `/consumers/${consumer.id}/keys`, { name: 'loadtest' }, token);
+  const key = admin('POST', `${base}/consumers/${consumer.id}/keys`, { name: 'loadtest' }, token);
 
-  // Wait until the gateway has the new config (usually ~70 ms; up to 5 s).
+  // Its clients call the workspace's subdomain.
+  const host = `${WORKSPACE}.localhost`;
+  // Wait until the gateway has the new config (usually a few ms; up to 5 s).
   const probe = `${GATEWAY}${protectedRoute.path_prefix}/ready`;
   for (let i = 0; ; i++) {
-    const res = http.get(probe, { headers: { 'X-API-Key': key.key }, tags: { run: 'setup' } });
+    const res = http.get(probe, { headers: { Host: host, 'X-API-Key': key.key }, tags: { run: 'setup' } });
     if (res.status === 200) break;
     if (i === 100) throw new Error(`gateway never served the test route: ${res.status}`);
     sleep(0.05);
   }
 
-  console.log(`load test ${RUN_ID}: ${RATE} requests/s, ${DURATION} s per run`);
+  console.log(`load test ${RUN_ID}: ${RATE} requests/s, ${DURATION} s per run, workspace ${WORKSPACE}`);
   return {
     runId: RUN_ID,
+    workspace: WORKSPACE,
+    host,
     publicPath: publicRoute.path_prefix,
     protectedPath: protectedRoute.path_prefix,
     apiKey: key.key,
-    cleanup: { routes: [publicRoute.id, protectedRoute.id], service: service.id, consumer: consumer.id },
   };
 }
 
+// Deleting the workspace takes everything in it out of the gateway at once;
+// the purge job removes the data later.
+function deleteWorkspace(slug, token) {
+  admin('DELETE', `/workspaces/${slug}`, { confirm: slug }, token);
+}
+
 export function teardown(data) {
-  // Routes first: a service with routes can't be deleted. Deleting the
-  // consumer deletes its key.
-  data.cleanup.routes.forEach((id) => admin('DELETE', `/routes/${id}`, null, data.token));
-  admin('DELETE', `/services/${data.cleanup.service}`, null, data.token);
-  admin('DELETE', `/consumers/${data.cleanup.consumer}`, null, data.token);
-  admin('PATCH', '/limits', { rate_limit_per_min: data.workspaceRateLimitBefore }, data.token);
+  deleteWorkspace(data.workspace, data.token);
   removeFactors(data.userId);
 }
 
@@ -234,15 +258,17 @@ function ok(res) {
 }
 
 export function direct(data) {
-  ok(http.get(`${BACKEND}/lt-${data.runId}/direct/item`));
+  // Each instance every other request, as the gateway's round robin does.
+  const backend = BACKENDS[exec.scenario.iterationInTest % BACKENDS.length];
+  ok(http.get(`${backend}/lt-${data.runId}/direct/item`));
 }
 
 export function gatewayPublic(data) {
-  ok(http.get(`${GATEWAY}${data.publicPath}/item`));
+  ok(http.get(`${GATEWAY}${data.publicPath}/item`, { headers: { Host: data.host } }));
 }
 
 export function gatewayProtected(data) {
-  ok(http.get(`${GATEWAY}${data.protectedPath}/item`, { headers: { 'X-API-Key': data.apiKey } }));
+  ok(http.get(`${GATEWAY}${data.protectedPath}/item`, { headers: { Host: data.host, 'X-API-Key': data.apiKey } }));
 }
 
 // ---- the report: one table, and the differences between the runs ----
@@ -282,7 +308,7 @@ export function handleSummary(data) {
       `${pad(run, 19)}${pad(count(run), 10)}${pad(failed(run).toFixed(2) + '%', 9)}${ms(stat(run, 'med'))}  ${ms(stat(run, 'p(95)'))}  ${ms(stat(run, 'p(99)'))}`),
     '',
     'Time the gateway adds (difference of medians and of p95s):',
-    `  gateway (route, log, Redis, proxy)   median ${ms(stat('gateway_public', 'med') - stat('direct', 'med'))}  p95 ${ms(stat('gateway_public', 'p(95)') - stat('direct', 'p(95)'))}`,
+    `  gateway (tenant, route, Redis, pick) median ${ms(stat('gateway_public', 'med') - stat('direct', 'med'))}  p95 ${ms(stat('gateway_public', 'p(95)') - stat('direct', 'p(95)'))}`,
     `  + key check and consumer bucket      median ${ms(stat('gateway_protected', 'med') - stat('gateway_public', 'med'))}  p95 ${ms(stat('gateway_protected', 'p(95)') - stat('gateway_public', 'p(95)'))}`,
     `  total                                median ${ms(stat('gateway_protected', 'med') - stat('direct', 'med'))}  p95 ${ms(stat('gateway_protected', 'p(95)') - stat('direct', 'p(95)'))}`,
     '',

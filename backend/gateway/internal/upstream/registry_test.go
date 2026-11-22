@@ -3,7 +3,9 @@ package upstream
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -71,6 +73,7 @@ func TestAChangedServiceStartsFresh(t *testing.T) {
 func TestSyncDropsWhatLeftTheConfig(t *testing.T) {
 	be := newBackend(t)
 	r := newTestRegistry(t)
+	sent := countRequests(r)
 	health := config.Health{Path: "/health", Interval: 5 * time.Millisecond, Unhealthy: 1, Healthy: 1}
 	svc := serviceAt(t, "s", be.srv.URL, health)
 	r.Sync(snapshot(config.WorkspaceActive, svc))
@@ -86,13 +89,32 @@ func TestSyncDropsWhatLeftTheConfig(t *testing.T) {
 		if _, ok := r.load("s"); ok {
 			t.Errorf("%s: the service still has a balancer", name)
 		}
-		before := be.count("/health")
-		time.Sleep(30 * time.Millisecond)
-		if after := be.count("/health"); after != before {
+		// Counted where checks leave the gateway, not where they arrive: a
+		// check written just before stop can still reach the server after
+		// Sync returns, but stop waits for the checkers, so none starts.
+		before := sent.Load()
+		time.Sleep(30 * time.Millisecond) // six intervals
+		if after := sent.Load(); after != before {
 			t.Errorf("%s: %d checks after it left", name, after-before)
 		}
 	}
 }
+
+// countRequests counts the requests r's active checks start. Call it before
+// the first Sync: the checkers read the client's transport.
+func countRequests(r *Registry) *atomic.Int64 {
+	var n atomic.Int64
+	next := r.client.Transport
+	r.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		n.Add(1)
+		return next.RoundTrip(req)
+	})
+	return &n
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // A request still on an older config gets a balancer of its own, which the
 // registry doesn't keep: nothing outlives its service.

@@ -95,7 +95,9 @@ async def _clean_tables() -> AsyncIterator[None]:
     async with owner.begin() as conn:
         for name in tables:  # asyncpg runs one statement per call
             await conn.execute(text(f"DELETE FROM {name}"))
-        await conn.execute(text("UPDATE config_seq SET seq = 1, updated_at = now()"))
+        await conn.execute(
+            text("UPDATE config_seq SET seq = 1, defaults = NULL, updated_at = now()")
+        )
     await owner.dispose()
     yield
     # Each test has its own event loop, and a pooled asyncpg connection only

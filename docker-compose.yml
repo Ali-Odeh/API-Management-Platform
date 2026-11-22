@@ -323,6 +323,9 @@ services:
         condition: service_healthy
       mock-backend:
         condition: service_healthy
+      # The test's service has a target on each instance (MT.12).
+      mock-backend-2:
+        condition: service_healthy
       redis:
         condition: service_healthy
 

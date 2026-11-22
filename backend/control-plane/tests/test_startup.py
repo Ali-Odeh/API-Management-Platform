@@ -10,6 +10,8 @@ from app.audit.context import AuditContext
 from app.core.config import Settings, get_settings
 from app.core.errors import ConflictError, NotFoundError, UpstreamError
 from app.core.permissions import Role
+from app.gateway_config.crud import config_defaults
+from app.gateway_config.models import ConfigSeq
 from app.gotrue import client as gotrue_client
 from app.main import app
 from app.members.models import WorkspaceMember
@@ -339,3 +341,14 @@ def test_settings_require_a_long_gotrue_secret(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("GOTRUE_JWT_SECRET", "too-short")
     with pytest.raises(ValueError, match="gotrue_jwt_secret"):
         Settings(_env_file=None)
+
+
+async def test_startup_applies_the_platform_defaults(
+    db: AsyncSession, startup_gotrue: FakeGoTrue
+) -> None:
+    # Before serving gateways, startup records the defaults it builds config
+    # with (and bumps what inherits a changed one, see test_gateway_config).
+    await _run_startup()
+
+    recorded = await db.scalar(select(ConfigSeq.defaults))
+    assert recorded == config_defaults(get_settings())

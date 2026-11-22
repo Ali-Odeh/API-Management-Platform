@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 22, 2026 · **Current step:** MT.11 done (CORS and body size limit); next: MT.12
+**Last updated:** Nov 22, 2026 · **Current step:** MT.12 done: **the MT milestone is complete**; next: planning v2
 
 ## Overview
 
@@ -13,12 +13,14 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅⬜ 11/12 | 🔄 In progress |
-| v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
+| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅✅ 12/12 | ✅ Done |
+| v2: Plans and analytics (backend) | not planned yet | ⏳ Next (to be planned) |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
+
+**MT:** 12 of 12 steps done (100%). 🎉 Multi-tenancy and login are complete: the MT definition of done (PLAN.md section 1) is an e2e story run on every push.
 
 ## Quality today
 
@@ -26,7 +28,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1436 passing (about 6–7 min), including route CORS settings (origins normalized, `*` never with credentials) and body limits within the ceiling, service targets (the 50 limit, the last target kept under parallel deletes, URLs once per service), health settings, one config bump per transaction, internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
+| Tests | 1443 passing (about 7 min), including platform defaults from `.env` reaching running gateways (only the workspaces that inherit a changed default are bumped, once), route CORS settings (origins normalized, `*` never with credentials) and body limits within the ceiling, service targets (the 50 limit, the last target kept under parallel deletes, URLs once per service), health settings, one config bump per transaction, internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
 | Coverage | 99% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -42,7 +44,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 11 µs** with the tenant, CORS, body-limit and in-flight steps (10.3–11.5 µs over 3 runs at MT.11; 10.7–11.9 µs at MT.8; 9.9–13.2 µs at MT.7, 8.5 µs at step 3.7); a target pick **23–36 ns** for 1 to 10 targets (no allocations); an in-flight slot **23 ns** (no allocations; 79 ns with 8 goroutines on one workspace); one rate-limit check with both buckets **≈ 0.4 ms** (0.38–0.49 ms; one bucket 0.39–0.40 ms on the same machine; Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back. Workspace limit 3/min (MT.8): a public route 3 × 200 then 429, and a consumer with its own budget 429 too (`limited_workspace` in the log); in-flight limit 1: `503 workspace_overloaded` with `Retry-After: 1` while a 2 s request runs, another workspace answering |
-| Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
+| Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests); under load at 300 requests/s, Redis call included, **0.36–0.38 ms median / 0.55–0.58 ms p95** (MT.12, three runs) |
 | gofmt, go vet | clean |
 | Race detector | clean, including balancers picked while the config changes and checkers start and stop, the in-flight counters under 64 goroutines, 100 parallel two-bucket checks, 1,000 requests while the config changes every ms, and requests reading while 1,000 answers are merged (`go test -race` in a Linux container; also in CI) |
 | Config propagation | a committed change served by the gateway **≈ 4 ms** after `psql` returns (10 runs, first 45 ms; MT.6, one changed workspace per answer); 68 ms admin change → gateway at step 2.5 |
@@ -56,8 +58,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **51 stories pass in about 20 s**, including a CORS preflight from an allowed and a refused origin, a credentialed call from a page, 413 with and without `Content-Length`, traffic over two targets by weight (exactly 30 and 10 of 40), traffic moving off a stopped target within its thresholds and back, `503 no_healthy_upstream`, a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
-| Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.78 ms median / 0.83 ms p95** (since MT.8 public and protected routes both make the Redis call; the gateway's own work with Redis ≈ 0.38 ms in its log; 0.77 / 0.95 ms at step 4.4); `default`'s rate limit is raised for the run and put back; `docker compose run --rm loadtest` |
+| End-to-end tests | **56 stories pass in about 22 s**, including the MT definition of done as one setup (two workspaces made with MFA, each with its own Owner, one person API Admin in one and Viewer in the other, `/v1/orders` on two targets each with an exact 10 / 10 split, keys, members and references never crossing, every change in its own workspace's log only, suspend, delete and restore seen at the gateway), a CORS preflight from an allowed and a refused origin, a credentialed call from a page, 413 with and without `Content-Length`, traffic over two targets by weight (exactly 30 and 10 of 40), traffic moving off a stopped target within its thresholds and back, `503 no_healthy_upstream`, a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**, in its own workspace on its subdomain with two targets (MT.12): the gateway adds **0.81–0.86 ms median / 1.10–1.20 ms p95** over three runs (0.78 / 0.83 ms at MT.8, 0.77 / 0.95 ms at step 4.4). The gateway's own work is unchanged (0.36–0.38 ms median in its log); the direct baseline's p95 was lower this time (1.34–1.41 ms against 1.71 ms), which widens the p95 difference; `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
 
@@ -139,7 +141,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.9 | SSRF protection | ✅ |
 | MT.10 | Load balancing and health checks | ✅ |
 | MT.11 | CORS and body size limit | ✅ |
-| MT.12 | MT end to end, load test, docs | ⬜ |
+| MT.12 | MT end to end, load test, docs | ✅ |
 
 The order follows dependencies: identity before roles, roles before audit and members, the config protocol before the gateway's tenancy, targets after SSRF (both live in the gateway's transport).
 
@@ -312,6 +314,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Decisions taken during MT added to the decisions log below
 
 **Done when:** CI is green on a fresh stack, including the MT e2e stories and the k6 smoke run; the gateway overhead measured again and written down.
+
+**Status:** ✅ Done (Nov 22). Commits `2bc9f7c` (the flaky `TestSyncDropsWhatLeftTheConfig` counts checks where they leave the gateway), `a08eb60` (a changed platform default reaches running gateways), `21a5ed4` (the MT definition of done as an e2e module), `ee70859` (k6 in its own workspace on two targets), then the docs. Every item of PLAN.md section 11 "MT adds" has an e2e story: login and MFA (`test_identity`), two workspaces on one path and the wrong host's key (`test_tenancy`, `test_mt_done`), roles (`test_members`, `test_mt_done`), last-owner rules (`test_members`), suspend and restore (`test_lifecycle`, `test_tenancy`, `test_mt_done`), audit entries for each change (`test_audit`, `test_mt_done`), the workspace rate limit (`test_workspace_limits`), SSRF (`test_ssrf`), two targets and a stopped one (`test_load_balancing`, `test_mt_done`), CORS and 413 (`test_cors_body_limit`), invitations through Mailpit's API (`test_members`). All 56 stories pass in about 22 s. k6: 0.81–0.86 ms median and 1.10–1.20 ms p95 added at 300 requests/s, three runs, 0 errors. The flaky test passed 200 runs in a row after the fix. The platform-defaults fix was checked live: restarting the control plane with `WORKSPACE_MAX_CONCURRENT=150` sent the running gateway a partial answer with the two workspaces that inherit it.
 
 ## v2 and v3: backend (after MT)
 
@@ -535,3 +539,8 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.11 | On a route with CORS on, the gateway replaces a backend's own `Access-Control-Allow-Origin` and `-Credentials`, and sets them on the gateway's own errors too | Two such headers make a browser reject the answer; a page must be able to read a 401 or 429 |
 | Nov 22 | MT.11 | Order after the router: CORS, then the body limit, then auth | A preflight carries no key; a too-large body is refused before it costs a rate-limit token or a slot |
 | Nov 22 | MT.11 | A body cut at the limit while uploaded is the client's `413`, not a target failure, and the log gets `body_limit` | It says nothing about the backend; the decision said the limit shows in the log line |
+| Nov 22 | MT.12 | A changed platform default (`WORKSPACE_RATE_LIMIT_PER_MIN`, `WORKSPACE_MAX_CONCURRENT`, `MAX_REQUEST_BODY`) reaches running gateways: `config_seq.defaults` records the defaults the answers were built with; at startup `apply_config_defaults(...)` (`SECURITY DEFINER`, `EXECUTE` for `apim_app` only) bumps the workspaces that inherit a changed one and stores the new values, under the `config_seq` row lock. An unknown record (the first start after the upgrade) counts as every default changed | Without it, a gateway asking `since=N` kept the old value until that workspace changed for another reason, while a newly started gateway got the new one: two instances enforcing different limits. Only inheriting workspaces move, so other gateways' caches stay warm. All control-plane instances must share the defaults (otherwise each start bumps again) |
+| Nov 22 | MT.12 | The quota defaults (`WORKSPACE_MAX_SERVICES` and the others) and `MAX_REQUEST_BODY_CEILING` are not recorded | The gateway never sees them; the control plane reads them on every write |
+| Nov 22 | MT.12 | The upstream health tests count checks at the client's transport (requests started), not at the test server | `stop()` waits for the checkers, so no check can start after it returns, but a check written just before can still arrive afterwards: counting at the server was flaky |
+| Nov 22 | MT.12 | The MT definition of done is one e2e module with a module-scoped setup (`test_mt_done.py`) and two fixed Owner accounts reused by every run; changes are matched in the audit log by their `X-Request-ID` | The definition is one connected story; request ids prove each change is in its own log and not the other's without relying on target ids or timing |
+| Nov 22 | MT.12 | The k6 test runs in its own workspace `lt-<run id>` (made by the Platform Admin with MFA, rate limit raised, deleted at the end) instead of raising `default`'s limit; the direct baseline alternates between the two mock backend instances | Host-based routing and two targets as the step asks, and the test no longer changes a workspace someone else uses. k6 runs init code once per VU, so the run id, workspace and host travel in setup's data |
