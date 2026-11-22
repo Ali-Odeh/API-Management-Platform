@@ -21,9 +21,7 @@ from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
-
-REQUEST_ID_MAX_LENGTH = 128
-PATH_MAX_LENGTH = 2048
+from app.usage.events import PATH_MAX_LENGTH, REQUEST_ID_MAX_LENGTH
 
 
 class RequestLog(Base):

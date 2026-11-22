@@ -7,6 +7,8 @@ are skipped (check.ps1's container and CI set it).
 
 import asyncio
 import os
+import subprocess
+import sys
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -436,3 +438,20 @@ async def test_ensure_group_is_safe_to_repeat_but_reports_other_errors(
 def test_the_stream_entry_reads_empty_fields_as_none() -> None:
     parsed = UsageEvent.model_validate(event(route_id="", client_ip=""))
     assert (parsed.route_id, parsed.client_ip, parsed.consumer_id) == (None, None, None)
+
+
+def test_the_worker_needs_none_of_the_apis_settings() -> None:
+    # Its container gets only INGEST_DATABASE_URL, REDIS_URL and the period.
+    env = {
+        "PATH": os.environ["PATH"],
+        "INGEST_DATABASE_URL": INGEST_URL,
+        "REDIS_URL": "redis://redis:6379/0",
+    }
+    done = subprocess.run(
+        [sys.executable, "-c", "import app.usage.ingest, scripts.usage_ingest"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr

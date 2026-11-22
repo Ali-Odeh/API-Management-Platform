@@ -3,6 +3,10 @@
 The stream is an edge of the control plane, so every entry is validated
 here before anything reaches Postgres: a malformed entry is dropped (and
 counted), never stored half-right.
+
+The usage-ingest worker imports this module, so it must not import the API
+(app.core.db and the models build the API's engine from its settings,
+which the worker's container doesn't have).
 """
 
 import uuid
@@ -12,9 +16,10 @@ from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
-from app.usage.models import PATH_MAX_LENGTH, REQUEST_ID_MAX_LENGTH
-
 SCHEMA_VERSION = "1"
+# Column lengths of request_logs (app/usage/models.py uses these).
+REQUEST_ID_MAX_LENGTH = 128
+PATH_MAX_LENGTH = 2048
 
 
 def _empty_is_none(value: object) -> object:
