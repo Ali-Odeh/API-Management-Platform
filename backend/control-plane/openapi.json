@@ -150,6 +150,39 @@
         "title": "AuditEventOut",
         "type": "object"
       },
+      "Bucket": {
+        "properties": {
+          "client_errors": {
+            "title": "Client Errors",
+            "type": "integer"
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Latency"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          },
+          "server_errors": {
+            "title": "Server Errors",
+            "type": "integer"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "requests",
+          "client_errors",
+          "server_errors",
+          "latency",
+          "start"
+        ],
+        "title": "Bucket",
+        "type": "object"
+      },
       "ConfigAnswer": {
         "properties": {
           "deleted": {
@@ -279,6 +312,58 @@
         ],
         "title": "ConsumerStatus",
         "type": "string"
+      },
+      "ConsumerTraffic": {
+        "properties": {
+          "client_errors": {
+            "title": "Client Errors",
+            "type": "integer"
+          },
+          "consumer_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumer Id"
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Latency"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          },
+          "server_errors": {
+            "title": "Server Errors",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "client_errors",
+          "server_errors",
+          "latency",
+          "consumer_id",
+          "name"
+        ],
+        "title": "ConsumerTraffic",
+        "type": "object"
       },
       "ConsumerUpdate": {
         "description": "Also how a consumer is blocked: PATCH {\"status\": \"blocked\"}.",
@@ -449,6 +534,33 @@
         "title": "CorsConfig",
         "type": "object"
       },
+      "Counts": {
+        "properties": {
+          "client_errors": {
+            "title": "Client Errors",
+            "type": "integer"
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Latency"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          },
+          "server_errors": {
+            "title": "Server Errors",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "client_errors",
+          "server_errors",
+          "latency"
+        ],
+        "title": "Counts",
+        "type": "object"
+      },
       "ErrorOut": {
         "description": "The plan's error format (section 6): {\"detail\": \"...\"}.",
         "properties": {
@@ -533,6 +645,15 @@
         ],
         "title": "HealthConfig",
         "type": "object"
+      },
+      "Interval": {
+        "enum": [
+          "minute",
+          "hour",
+          "day"
+        ],
+        "title": "Interval",
+        "type": "string"
       },
       "KeyConfig": {
         "description": "A non-revoked key. Blocked consumers' keys are included so the gateway can answer 403.",
@@ -736,6 +857,51 @@
           "revoked_at"
         ],
         "title": "KeyOut",
+        "type": "object"
+      },
+      "Latency": {
+        "description": "Percentiles of the whole request's time at the gateway (null: no requests).",
+        "properties": {
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "p99_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P99 Ms"
+          }
+        },
+        "required": [
+          "p50_ms",
+          "p95_ms",
+          "p99_ms"
+        ],
+        "title": "Latency",
         "type": "object"
       },
       "LimitOverrides": {
@@ -1249,6 +1415,27 @@
         "title": "Page[MyWorkspaceOut]",
         "type": "object"
       },
+      "Page_RequestLogOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RequestLogOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[RequestLogOut]",
+        "type": "object"
+      },
       "Page_RouteOut_": {
         "properties": {
           "items": {
@@ -1331,6 +1518,145 @@
           "total"
         ],
         "title": "Page[WorkspaceOut]",
+        "type": "object"
+      },
+      "RequestLogOut": {
+        "properties": {
+          "bytes": {
+            "title": "Bytes",
+            "type": "integer"
+          },
+          "client_ip": {
+            "anyOf": [
+              {
+                "format": "ipvanyaddress",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Ip"
+          },
+          "consumer_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumer Id"
+          },
+          "event_id": {
+            "format": "uuid",
+            "title": "Event Id",
+            "type": "string"
+          },
+          "key_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Id"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "number"
+          },
+          "method": {
+            "title": "Method",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "ratelimit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratelimit"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "route_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Id"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "ts": {
+            "format": "date-time",
+            "title": "Ts",
+            "type": "string"
+          },
+          "upstream_ms": {
+            "title": "Upstream Ms",
+            "type": "number"
+          }
+        },
+        "required": [
+          "event_id",
+          "ts",
+          "request_id",
+          "method",
+          "path",
+          "status",
+          "latency_ms",
+          "upstream_ms",
+          "bytes",
+          "route_id",
+          "target_id",
+          "consumer_id",
+          "key_id",
+          "client_ip",
+          "ratelimit"
+        ],
+        "title": "RequestLogOut",
         "type": "object"
       },
       "Role": {
@@ -1554,6 +1880,58 @@
           "updated_at"
         ],
         "title": "RouteOut",
+        "type": "object"
+      },
+      "RouteTraffic": {
+        "properties": {
+          "client_errors": {
+            "title": "Client Errors",
+            "type": "integer"
+          },
+          "latency": {
+            "$ref": "#/components/schemas/Latency"
+          },
+          "path_prefix": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Prefix"
+          },
+          "requests": {
+            "title": "Requests",
+            "type": "integer"
+          },
+          "route_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Id"
+          },
+          "server_errors": {
+            "title": "Server Errors",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests",
+          "client_errors",
+          "server_errors",
+          "latency",
+          "route_id",
+          "path_prefix"
+        ],
+        "title": "RouteTraffic",
         "type": "object"
       },
       "RouteUpdate": {
@@ -2183,6 +2561,99 @@
           }
         },
         "title": "TargetUpdate",
+        "type": "object"
+      },
+      "TopOut_ConsumerTraffic_": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ConsumerTraffic"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "items"
+        ],
+        "title": "TopOut[ConsumerTraffic]",
+        "type": "object"
+      },
+      "TopOut_RouteTraffic_": {
+        "properties": {
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RouteTraffic"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "items"
+        ],
+        "title": "TopOut[RouteTraffic]",
+        "type": "object"
+      },
+      "TrafficOut": {
+        "description": "Requests over time; empty buckets are included (zero).",
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/Bucket"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "interval": {
+            "$ref": "#/components/schemas/Interval"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "totals": {
+            "$ref": "#/components/schemas/Counts"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "interval",
+          "totals",
+          "buckets"
+        ],
+        "title": "TrafficOut",
         "type": "object"
       },
       "Usage": {
@@ -3594,6 +4065,429 @@
         "summary": "Rename Workspace",
         "tags": [
           "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/analytics/consumers": {
+      "get": {
+        "description": "The busiest consumers in the range.",
+        "operationId": "top_consumers_api_v1_workspaces__slug__analytics_consumers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many, busiest first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "How many, busiest first",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At or after this time (default: a day before `to`)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "At or after this time (default: a day before `to`)",
+              "title": "From"
+            }
+          },
+          {
+            "description": "Before this time (default: now)",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Before this time (default: now)",
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopOut_ConsumerTraffic_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Top Consumers",
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/analytics/routes": {
+      "get": {
+        "description": "The busiest routes in the range.",
+        "operationId": "top_routes_api_v1_workspaces__slug__analytics_routes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many, busiest first",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "How many, busiest first",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At or after this time (default: a day before `to`)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "At or after this time (default: a day before `to`)",
+              "title": "From"
+            }
+          },
+          {
+            "description": "Before this time (default: now)",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Before this time (default: now)",
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TopOut_RouteTraffic_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Top Routes",
+        "tags": [
+          "usage"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/analytics/traffic": {
+      "get": {
+        "description": "Requests, client and server errors and latency over time (empty buckets as zero).",
+        "operationId": "traffic_api_v1_workspaces__slug__analytics_traffic_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Interval",
+              "default": "hour"
+            }
+          },
+          {
+            "description": "Only this route's requests",
+            "in": "query",
+            "name": "route_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this route's requests",
+              "title": "Route Id"
+            }
+          },
+          {
+            "description": "Only this consumer's requests",
+            "in": "query",
+            "name": "consumer_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this consumer's requests",
+              "title": "Consumer Id"
+            }
+          },
+          {
+            "description": "At or after this time (default: a day before `to`)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "At or after this time (default: a day before `to`)",
+              "title": "From"
+            }
+          },
+          {
+            "description": "Before this time (default: now)",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Before this time (default: now)",
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Traffic",
+        "tags": [
+          "usage"
         ]
       }
     },
@@ -5066,6 +5960,226 @@
         "summary": "Change Role",
         "tags": [
           "members"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/request-logs": {
+      "get": {
+        "description": "The request log, newest first: one row per request the gateway answered.",
+        "operationId": "list_request_logs_api_v1_workspaces__slug__request_logs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only this route's requests",
+            "in": "query",
+            "name": "route_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this route's requests",
+              "title": "Route Id"
+            }
+          },
+          {
+            "description": "Only this consumer's requests",
+            "in": "query",
+            "name": "consumer_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this consumer's requests",
+              "title": "Consumer Id"
+            }
+          },
+          {
+            "description": "Only this status",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 599,
+                  "minimum": 100,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this status",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Only this method",
+            "in": "query",
+            "name": "method",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 10,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only this method",
+              "title": "Method"
+            }
+          },
+          {
+            "description": "At or after this time (default: a day before `to`)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "At or after this time (default: a day before `to`)",
+              "title": "From"
+            }
+          },
+          {
+            "description": "Before this time (default: now)",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Before this time (default: now)",
+              "title": "To"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_RequestLogOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Request Logs",
+        "tags": [
+          "usage"
         ]
       }
     },

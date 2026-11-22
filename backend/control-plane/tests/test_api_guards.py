@@ -209,16 +209,16 @@ async def test_platform_endpoint_refuses_everyone_else(
 PLAN_MATRIX: dict[Role, set[str]] = {
     Role.VIEWER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read",
+        "members:read", "workspace:read", "usage:read",
     },
     Role.API_ADMIN: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read",
+        "members:read", "workspace:read", "usage:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
     },
     Role.OWNER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read",
+        "members:read", "workspace:read", "usage:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
         "members:write", "workspace:write", "workspace:delete",
     },
@@ -486,9 +486,11 @@ async def test_naming_another_workspaces_object_is_422(
     assert r.status_code == 422, r.text
 
 
-# Query parameters that name another object (filters), with a request that uses one.
-_QUERY_REFERENCES: dict[Endpoint, str] = {
-    ("GET", "/api/v1/workspaces/{slug}/routes"): "service_id",
+# Query parameters that name another object (filters), per endpoint.
+_QUERY_REFERENCES: dict[Endpoint, tuple[str, ...]] = {
+    ("GET", "/api/v1/workspaces/{slug}/routes"): ("service_id",),
+    ("GET", "/api/v1/workspaces/{slug}/analytics/traffic"): ("route_id", "consumer_id"),
+    ("GET", "/api/v1/workspaces/{slug}/request-logs"): ("route_id", "consumer_id"),
 }
 
 
@@ -499,17 +501,19 @@ def _query_id_params(method: str, path: str) -> set[str]:
 
 def test_isolation_knows_every_query_reference() -> None:
     # A new filter naming another object must be tested for isolation too.
-    referencing = {e for e in WORKSPACE_ENDPOINTS if _query_id_params(*e)}
-    assert referencing == set(_QUERY_REFERENCES)
+    found = {e: _query_id_params(*e) for e in WORKSPACE_ENDPOINTS if _query_id_params(*e)}
+    assert found == {e: set(params) for e, params in _QUERY_REFERENCES.items()}
 
 
-@pytest.mark.parametrize(("method", "path"), sorted(_QUERY_REFERENCES))
+@pytest.mark.parametrize(
+    ("method", "path", "param"),
+    [(*e, param) for e, params in sorted(_QUERY_REFERENCES.items()) for param in params],
+)
 async def test_filtering_by_another_workspaces_object_is_422(
-    client: AsyncClient, tenants: Tenants, method: str, path: str
+    client: AsyncClient, tenants: Tenants, method: str, path: str, param: str
 ) -> None:
     # Not an empty page: a reference to another workspace's object is refused
     # the same way everywhere.
-    param = _QUERY_REFERENCES[(method, path)]
     r = await client.request(
         method,
         _url(path, "acme"),
