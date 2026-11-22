@@ -211,10 +211,12 @@ function createTestObjects(token) {
     }, token);
   const publicRoute = route('public', false);
   const protectedRoute = route('protected', true);
+  // The consumer's limit comes from its plan (V2.2).
+  const plan = admin('POST', `${base}/plans`, { name: 'Load test', rate_limit_per_min: RATE_LIMIT_PER_MIN }, token);
   const consumer = admin('POST', `${base}/consumers`, {
     name: 'client',
     email: 'loadtest@example.com',
-    rate_limit_per_min: RATE_LIMIT_PER_MIN,
+    plan_id: plan.id,
   }, token);
   const key = admin('POST', `${base}/consumers/${consumer.id}/keys`, { name: 'loadtest' }, token);
 

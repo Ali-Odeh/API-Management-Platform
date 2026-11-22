@@ -58,6 +58,8 @@ class World:
     base: str = "/workspaces/default"  # the workspace the objects live in
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:6])
     _routes: list[str] = field(default_factory=list)
+    _plans: dict[int, str] = field(default_factory=dict)  # rate limit -> plan id
+    _extra_plans: list[str] = field(default_factory=list)  # plans with a quota
     _services: list[str] = field(default_factory=list)
     _consumers: list[str] = field(default_factory=list)
 
@@ -111,11 +113,28 @@ class World:
         self._routes.append(route["id"])
         return route
 
-    def consumer(self, label: str, rate_limit_per_min: int = 1000) -> dict[str, Any]:
+    def plan(self, rate_limit_per_min: int, monthly_quota: int | None = None) -> str:
+        """A plan of this run with that limit (V2.2: consumers' limits come from plans)."""
+        if monthly_quota is not None or rate_limit_per_min not in self._plans:
+            body = {
+                "name": self.name(f"{rate_limit_per_min}-per-min-{uuid.uuid4().hex[:4]}"),
+                "rate_limit_per_min": rate_limit_per_min,
+                "monthly_quota": monthly_quota,
+            }
+            plan_id = self._create("/plans", body)["id"]
+            if monthly_quota is not None:
+                self._extra_plans.append(plan_id)
+                return plan_id
+            self._plans[rate_limit_per_min] = plan_id
+        return self._plans[rate_limit_per_min]
+
+    def consumer(
+        self, label: str, rate_limit_per_min: int = 1000, *, plan_id: str | None = None
+    ) -> dict[str, Any]:
         body = {
             "name": self.name(label),
             "email": "e2e@example.com",
-            "rate_limit_per_min": rate_limit_per_min,
+            "plan_id": plan_id or self.plan(rate_limit_per_min),
         }
         consumer = self._create("/consumers", body)
         self._consumers.append(consumer["id"])
@@ -133,11 +152,12 @@ class World:
 
     def cleanup(self) -> None:
         # Routes first: a service that still has routes can't be deleted.
-        # Deleting a consumer also deletes its keys.
+        # Deleting a consumer also deletes its keys; plans go after their consumers.
         for path, ids in (
             ("/routes", self._routes),
             ("/services", self._services),
             ("/consumers", self._consumers),
+            ("/plans", [*self._plans.values(), *self._extra_plans]),
         ):
             for id_ in reversed(ids):
                 r = self.admin.delete(f"{self.base}{path}/{id_}")

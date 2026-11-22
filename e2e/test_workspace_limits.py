@@ -56,7 +56,7 @@ def _make(admin: httpx.Client, rate_limit_per_min: int, max_concurrent: int) -> 
         assert r.status_code == 201, r.text
     r = admin.post(
         f"{base}/consumers",
-        json={"name": "app", "email": "e2e@example.com", "rate_limit_per_min": 1000},
+        json={"name": "app", "email": "e2e@example.com"},  # the default plan
     )
     assert r.status_code == 201, r.text
     r = admin.post(f"{base}/consumers/{r.json()['id']}/keys", json={"name": "e2e"})
