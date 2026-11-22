@@ -329,10 +329,14 @@ go test -run=^$ -bench=. -benchmem ./internal/proxy ./internal/middleware ./cmd/
 
 ## End-to-end tests
 
-The MVP and MT stories against the real stack (29 checks, about 9 s): GoTrue
+The MVP and MT stories against the real stack (56 stories, about 22 s): GoTrue
 login with password and TOTP, a disabled person locked out, workspaces and
 their isolation, the audit log, an invitation read from Mailpit and accepted,
-the last-owner rule, then requests through the gateway. They run in their own container, create their own
+the last-owner rule, then requests through the gateway: tenants on their own
+subdomains, workspace limits, SSRF, load balancing, CORS and body limits.
+`test_mt_done.py` plays the MT definition of done as a whole, with two fixed
+Owner accounts (`e2e-owner-acme@example.test`, `e2e-owner-globex@example.test`)
+reused by every run. They run in their own container, create their own
 objects and always delete them. For MFA they enroll their own factor named
 `e2e` on the Platform Admin and remove it again, so a factor you enrolled is
 left alone; their test person `e2e-person@example.test` and their workspace
@@ -369,8 +373,9 @@ docker compose up -d control-plane gateway
 
 k6 in Docker: direct vs. through the gateway, at a fixed rate (about 1 min
 40 s). It logs in as the Platform Admin with password and its own TOTP factor
-(removed afterwards) to raise the `default` workspace's rate limit for the run,
-and puts it back at the end. Details and results in
+(removed afterwards), creates its own workspace `lt-<run id>` with a raised
+rate limit and a service on both mock backends, calls it on its subdomain,
+and deletes the workspace at the end (MT.12). Details and results in
 [loadtest/README.md](../loadtest/README.md).
 
 ```powershell
