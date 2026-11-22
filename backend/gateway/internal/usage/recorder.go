@@ -8,11 +8,13 @@ import (
 )
 
 // Defaults of a Recorder. A second's events at 1,000 requests/s fit the
-// buffer ten times over; a batch of 500 is one pipelined round trip.
+// buffer ten times over. Small batches written often keep Redis, which runs
+// one command at a time and also answers the rate-limit checks, from
+// working through a long pipeline while those checks wait.
 const (
 	DefaultBufferSize   = 10_000
-	DefaultBatchSize    = 500
-	DefaultFlushEvery   = time.Second
+	DefaultBatchSize    = 100
+	DefaultFlushEvery   = 200 * time.Millisecond
 	DefaultWriteTimeout = 2 * time.Second
 	// At most one "events dropped" warning per this interval.
 	dropWarnEvery = 10 * time.Second
