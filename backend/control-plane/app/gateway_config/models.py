@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, SmallInteger, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -76,6 +77,9 @@ class ConfigSeq(Base):
     )
     seq: Mapped[int] = mapped_column(BigInteger, server_default="1")
     generation: Mapped[uuid.UUID] = mapped_column(server_default=func.gen_random_uuid())
+    # The platform defaults the config answers were last built with (see
+    # crud.apply_config_defaults); NULL until the first start that records them.
+    defaults: Mapped[dict[str, int] | None] = mapped_column(JSONB)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

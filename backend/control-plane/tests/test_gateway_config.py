@@ -8,19 +8,33 @@ use move nothing.
 
 import asyncio
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from pydantic import ByteSize
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.core.config import get_settings
 from app.core.db import Base, SessionLocal, engine
 from app.core.permissions import Role
-from app.gateway_config.crud import get_config_seq
-from app.gateway_config.models import CONFIG_CHANGED_CHANNEL, CONFIG_COLUMNS, WorkspaceConfig
+from app.gateway_config.crud import (
+    WorkspaceCache,
+    apply_config_defaults,
+    config_defaults,
+    get_config_seq,
+    read_answer,
+)
+from app.gateway_config.models import (
+    CONFIG_CHANGED_CHANNEL,
+    CONFIG_COLUMNS,
+    ConfigSeq,
+    WorkspaceConfig,
+)
 from app.services.models import Service
-from app.workspaces.models import Workspace
+from app.workspaces.models import Workspace, WorkspaceStatus
 from tests.conftest import OWNER_URL
 from tests.factories import (
     expect_violation,
@@ -440,3 +454,104 @@ async def test_commit_sends_notify_and_rollback_does_not(
         assert received.empty()
 
         await listener.remove_listener(CONFIG_CHANGED_CHANNEL, on_notify)
+
+
+# ---- Platform defaults from the environment (MT.12)
+
+
+async def _forget_recorded_defaults() -> None:
+    """As before the first start that records them (the API may not write config_seq)."""
+    owner = create_async_engine(OWNER_URL)
+    try:
+        async with owner.begin() as conn:
+            await conn.execute(text("UPDATE config_seq SET defaults = NULL"))
+    finally:
+        await owner.dispose()
+
+
+@pytest.fixture
+async def inheriting(db: AsyncSession) -> dict[str, uuid.UUID]:
+    """Workspaces each inheriting exactly one default (setting the others
+    themselves), one inheriting none, a deleted one, and `default`; the
+    current defaults are recorded."""
+    own = {"rate_limit_per_min": 10, "max_concurrent": 10}
+    made = {
+        "default": await make_workspace(db, slug="default"),
+        "rate": await make_workspace(db, slug="w-rate", max_concurrent=10),
+        "concurrent": await make_workspace(db, slug="w-concurrent", rate_limit_per_min=10),
+        "body": await make_workspace(db, slug="w-body", **own),
+        "none": await make_workspace(db, slug="w-none", **own),
+        "deleted": await make_workspace(
+            db,
+            slug="w-deleted",
+            status=WorkspaceStatus.DELETED,
+            deleted_at=datetime.now(UTC),
+            purge_after=datetime.now(UTC) + timedelta(days=30),
+        ),
+    }
+    for name, max_body_bytes in (("body", None), ("none", 1024)):
+        service = await make_service(db, made[name].id)
+        await make_route(db, made[name].id, service.id, max_body_bytes=max_body_bytes)
+    await apply_config_defaults(engine, get_settings())
+    return {name: workspace.id for name, workspace in made.items()}
+
+
+async def _recorded() -> dict[str, int] | None:
+    async with SessionLocal() as session:
+        return await session.scalar(select(ConfigSeq.defaults))
+
+
+async def test_the_defaults_are_recorded(inheriting: dict[str, uuid.UUID]) -> None:
+    assert await _recorded() == config_defaults(get_settings())
+
+
+async def test_unchanged_defaults_bump_nothing(inheriting: dict[str, uuid.UUID]) -> None:
+    watch = await Watch().start()
+    await apply_config_defaults(engine, get_settings())
+    await watch.assert_unchanged()
+
+
+async def test_unknown_recorded_defaults_bump_everything_that_inherits(
+    inheriting: dict[str, uuid.UUID],
+) -> None:
+    await _forget_recorded_defaults()
+    watch = await Watch().start()
+    await apply_config_defaults(engine, get_settings())
+    i = inheriting
+    await watch.assert_bumped(i["default"], i["rate"], i["concurrent"], i["body"])
+    assert await _recorded() == config_defaults(get_settings())
+
+
+@pytest.mark.parametrize(
+    ("setting", "value", "inherits"),
+    [
+        ("workspace_rate_limit_per_min", 42, "rate"),
+        ("workspace_max_concurrent", 42, "concurrent"),
+        ("max_request_body", ByteSize(4096), "body"),
+    ],
+)
+async def test_a_changed_default_bumps_only_the_workspaces_that_inherit_it(
+    inheriting: dict[str, uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    value: int,
+    inherits: str,
+) -> None:
+    watch = await Watch().start()
+    monkeypatch.setattr(get_settings(), setting, value)
+
+    await apply_config_defaults(engine, get_settings())
+
+    # `default` has no limits and no routes: it inherits the two limits only.
+    await watch.assert_bumped(
+        inheriting[inherits], *([inheriting["default"]] if inherits != "body" else [])
+    )
+    # A gateway asking from before gets the new value in the answer.
+    _, answer = await read_answer(engine, since=watch.seq - 1, slugs=None, cache=WorkspaceCache())
+    [changed] = [w for w in answer.workspaces if w.id == inheriting[inherits]]
+    applied = {
+        "rate": changed.limits.rate_limit_per_min,
+        "concurrent": changed.limits.max_concurrent,
+        "body": changed.routes[0].max_body_bytes if changed.routes else None,
+    }
+    assert applied[inherits] == value

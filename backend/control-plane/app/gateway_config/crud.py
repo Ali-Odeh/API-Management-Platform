@@ -3,17 +3,18 @@
 (Writing the sequence and the versions is the database triggers' job, see models.py.)
 """
 
+import json
 import uuid
 from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
-from sqlalchemy import Row, select
+from sqlalchemy import Row, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from app.consumers.models import Consumer
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.gateway_config.models import SINGLETON_ID, ConfigSeq, WorkspaceConfig
 from app.gateway_config.schemas import (
     ConfigAnswer,
@@ -75,6 +76,32 @@ async def read_cursor(engine: AsyncEngine) -> ConfigCursor:
     """A cheap query, run on every gateway request."""
     async with engine.connect() as conn:
         return ConfigCursor(*(await conn.execute(_CURSOR_QUERY)).one())
+
+
+def config_defaults(settings: Settings) -> dict[str, int]:
+    """The platform defaults that end up in config answers (see _build)."""
+    return {
+        "rate_limit_per_min": settings.workspace_rate_limit_per_min,
+        "max_concurrent": settings.workspace_max_concurrent,
+        "max_body_bytes": int(settings.max_request_body),
+    }
+
+
+async def apply_config_defaults(engine: AsyncEngine, settings: Settings) -> None:
+    """Bump the workspaces that inherit a default which changed since the
+    last start, so running gateways get them on their next poll.
+
+    The defaults come from the environment and change no row, so no trigger
+    sees them; without this a gateway asking `since=N` would keep the old
+    values until something else in that workspace changed, while a newly
+    started gateway gets the new ones. The database function (migration
+    "config defaults") compares, bumps and stores in one transaction.
+    """
+    async with engine.begin() as conn:
+        await conn.execute(
+            text("SELECT apply_config_defaults(CAST(:defaults AS jsonb))"),
+            {"defaults": json.dumps(config_defaults(settings))},
+        )
 
 
 async def read_answer(
