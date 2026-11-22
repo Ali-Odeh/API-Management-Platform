@@ -19,6 +19,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/upstream"
 )
 
 // received is what a fake backend saw.
@@ -56,6 +57,23 @@ type testRoute struct {
 
 // newGateway is the router plus the forwarder, as main wires them, with one
 // route. logs collects the forwarder's log lines.
+// serviceOf is a service with one target at upstream, without health checks.
+func serviceOf(upstream *url.URL, timeout time.Duration) *config.Service {
+	return &config.Service{
+		ID: "s1", WorkspaceID: "ws-default", Timeout: timeout,
+		Targets:     []config.Target{{ID: "t1", URL: upstream, Weight: 100}},
+		Fingerprint: upstream.String(),
+	}
+}
+
+// testRegistry is a target registry whose (unused) checkers end with the test.
+func testRegistry(t *testing.T) *upstream.Registry {
+	t.Helper()
+	r := upstream.NewRegistry(t.Context(), testBackends, slog.New(slog.DiscardHandler))
+	t.Cleanup(r.Close)
+	return r
+}
+
 // testBackends allows the loopback addresses httptest backends listen on.
 // Without it the egress policy would refuse them, as it should in production.
 var testBackends = mustPolicy("127.0.0.0/8", "::1")
@@ -79,10 +97,10 @@ func newGateway(t *testing.T, tr testRoute) (http.Handler, *strings.Builder) {
 	}
 	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{{
 		ID: "r1", PathPrefix: tr.prefix, Methods: []string{"GET", "POST"},
-		StripPrefix: tr.strip, Upstream: upstream, Timeout: tr.timeout,
+		StripPrefix: tr.strip, Service: serviceOf(upstream, tr.timeout),
 	}}})
 	logs := &strings.Builder{}
-	f := NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), testBackends)
+	f := NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), testBackends, testRegistry(t))
 	return routed(snap, f), logs
 }
 
@@ -276,7 +294,7 @@ func TestForwardWithoutMatchIs500(t *testing.T) {
 	logs := &strings.Builder{}
 	rec := httptest.NewRecorder()
 
-	NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), testBackends).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/x", nil))
+	NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), testBackends, testRegistry(t)).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/x", nil))
 
 	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "internal_error" {
 		t.Errorf("got %d %q, want 500 internal_error", rec.Code, rec.Body.String())
@@ -357,10 +375,10 @@ func TestForwardRefusesInternalUpstreams(t *testing.T) {
 	defer backend.Close()
 	upstream, _ := url.Parse(backend.URL)
 	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{{
-		ID: "r1", PathPrefix: "/v1", Methods: []string{"GET"}, Upstream: upstream, Timeout: 5 * time.Second,
+		ID: "r1", PathPrefix: "/v1", Methods: []string{"GET"}, Service: serviceOf(upstream, 5*time.Second),
 	}}})
 	logs := &strings.Builder{}
-	gw := routed(snap, NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), nil)) // the deny list alone
+	gw := routed(snap, NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), nil, testRegistry(t))) // the deny list alone
 
 	rec := httptest.NewRecorder()
 	gw.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/x", nil))

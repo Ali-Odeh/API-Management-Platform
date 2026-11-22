@@ -51,3 +51,32 @@ func TestStoreConcurrentReadsDuringSwaps(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestStoreChangedIsClosedByTheNextSwap(t *testing.T) {
+	var s Store
+	changed := s.Changed()
+	if s.Changed() != changed {
+		t.Error("two waiters before a swap got different channels")
+	}
+	select {
+	case <-changed:
+		t.Fatal("closed before any swap")
+	default:
+	}
+
+	s.swap(&Snapshot{Seq: 1})
+
+	select {
+	case <-changed:
+	default:
+		t.Fatal("not closed by the swap")
+	}
+	next := s.Changed()
+	select {
+	case <-next:
+		t.Fatal("a channel asked for after the swap is already closed")
+	default:
+	}
+	s.swap(&Snapshot{Seq: 2}) // also fine with nobody waiting afterwards
+	s.swap(&Snapshot{Seq: 3})
+}

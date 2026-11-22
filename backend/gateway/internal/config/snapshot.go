@@ -41,8 +41,37 @@ type Route struct {
 	Methods      []string
 	StripPrefix  bool
 	AuthRequired bool
-	Upstream     *url.URL      // the service's target, parsed once here, not on every request
-	Timeout      time.Duration // the service's timeout_ms
+	Service      *Service // its service, shared with the workspace's other routes
+}
+
+// Service is one active service with its usable targets (MT.10).
+type Service struct {
+	ID          string
+	WorkspaceID string
+	Timeout     time.Duration // the whole answer, start to last byte
+	Targets     []Target      // at least one, in the control plane's order
+	Health      Health
+	// Fingerprint identifies the targets and health settings. The gateway
+	// keeps a service's balancer and health state across config versions
+	// while it stays the same, and starts fresh when it changes.
+	Fingerprint string
+}
+
+// Target is one backend instance of a service.
+type Target struct {
+	ID     string
+	URL    *url.URL // parsed once here, not on every request
+	Weight int      // its share of the requests, relative to the others (1-1000)
+}
+
+// Health is how a service's targets are checked (decision 14).
+type Health struct {
+	Path            string        // GET <target><Path> must answer 2xx or 3xx
+	Interval        time.Duration // between active checks; 0: no active checks
+	Unhealthy       int           // failed checks in a row that take a target out
+	Healthy         int           // passed checks in a row that bring it back
+	PassiveFailures int           // failed requests in a row that set a target aside; 0: never
+	PassiveEject    time.Duration // how long it is set aside
 }
 
 // Key is one non-revoked API key. The raw key is never known to the gateway.
@@ -64,14 +93,15 @@ type Limits struct {
 // Snapshot it is never changed after it is built, so a new snapshot can
 // share it with the previous one.
 type Workspace struct {
-	ID      string
-	Slug    string
-	Status  WorkspaceStatus
-	Version int64
-	Hosts   []string // host labels it is served on (its slug; custom domains later)
-	Limits  Limits
-	Routes  []Route        // longest PathPrefix first, so the first match is the most specific
-	Keys    map[string]Key // by SHA-256 key_hash, for one lookup per request
+	ID       string
+	Slug     string
+	Status   WorkspaceStatus
+	Version  int64
+	Hosts    []string // host labels it is served on (its slug; custom domains later)
+	Limits   Limits
+	Services []*Service     // the usable services, in the control plane's order
+	Routes   []Route        // longest PathPrefix first, so the first match is the most specific
+	Keys     map[string]Key // by SHA-256 key_hash, for one lookup per request
 }
 
 // Snapshot is the gateway's whole config at one sequence number. It is never
