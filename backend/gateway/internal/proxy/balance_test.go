@@ -3,6 +3,8 @@ package proxy
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -45,7 +47,7 @@ func balanced(t *testing.T, health config.Health, backends []*counting, weights 
 		svc.Targets = append(svc.Targets, config.Target{ID: string(rune('a' + i)), URL: b.url, Weight: weights[i]})
 	}
 	snap := snapshotOf(&config.Workspace{Version: 1, Services: []*config.Service{svc}, Routes: []config.Route{{
-		ID: "r1", ServiceID: "s1", PathPrefix: "/v1", Methods: []string{"GET"}, Service: svc,
+		ID: "r1", ServiceID: "s1", PathPrefix: "/v1", Methods: []string{"GET", "POST"}, Service: svc,
 	}}})
 	logs := &strings.Builder{}
 	f := NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), testBackends, testRegistry(t))
@@ -162,3 +164,35 @@ func TestAClientHangingUpIsNotATargetFailure(t *testing.T) {
 		t.Error("a client hanging up set the target aside")
 	}
 }
+
+// A body cut at the route's limit while it was uploaded (MT.11) is the
+// client's fault: 413 for the client, and the target isn't blamed.
+func TestABodyCutAtTheLimitIs413AndNotATargetFailure(t *testing.T) {
+	a := newCounting(t)
+	gw, _ := balanced(t, config.Health{PassiveFailures: 1, PassiveEject: time.Minute}, []*counting{a}, []int{1})
+	// The body-limit step (another package) marks the request and cuts the
+	// body; here a reader does both.
+	cut := func(info *reqctx.Info) io.Reader {
+		return readerFunc(func([]byte) (int, error) {
+			info.BodyLimit.Store(1024)
+			return 0, errors.New("http: request body too large")
+		})
+	}
+
+	info := &reqctx.Info{}
+	req := httptest.NewRequest("POST", "/v1/x", cut(info))
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req.WithContext(reqctx.With(req.Context(), info)))
+
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), "request_too_large") {
+		t.Fatalf("got %d %q, want 413 request_too_large", rec.Code, rec.Body.String())
+	}
+	if rec, _ := get(gw); rec.Code != 200 {
+		t.Errorf("next request: %d, want 200 (the target is not set aside)", rec.Code)
+	}
+}
+
+type readerFunc func([]byte) (int, error)
+
+func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
