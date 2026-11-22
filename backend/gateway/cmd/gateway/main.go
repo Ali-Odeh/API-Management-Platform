@@ -108,12 +108,17 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // apiHandler builds the path of every API request, outermost first:
 //
 //	request ID → logger → recover → tenant (503/404/403) → router (400/404/405)
-//	  → auth (401/403) → rate limit (429) → in flight (503) → forwarder (502/504)
+//	  → CORS (preflight 204) → body limit (413) → auth (401/403)
+//	  → rate limit (429) → in flight (503) → forwarder (502/503/504)
 //
 // The forwarder sends each request to one of its service's healthy targets,
 // by weight (503 when none is left), and connects only to upstreams the
 // egress policy allows (SSRF protection): an internal address not on
 // UPSTREAM_ALLOW gets 502.
+//
+// CORS comes right after the router: a browser's preflight carries no API
+// key, so it is answered before auth, and costs no rate-limit token. The body
+// limit comes before anything is forwarded.
 //
 // Recover sits inside the logger, so a panic's 500 shows in the request log.
 // Tenant finds the workspace from the Host before anything else: matching,
@@ -128,6 +133,8 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 func apiHandler(source tenant.SnapshotSource, baseDomain string, upstreams *egress.Policy, targets *upstream.Registry, limiter middleware.Allower, log *slog.Logger) http.Handler {
 	afterMatch := middleware.Chain(
 		proxy.NewForwarder(log, upstreams, targets),
+		middleware.CORS(log),
+		middleware.BodyLimit(log),
 		middleware.Auth(log),
 		middleware.RateLimit(limiter, log),
 		middleware.InFlight(&inflight.Limiter{}, log),

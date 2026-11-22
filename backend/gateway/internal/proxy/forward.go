@@ -80,7 +80,7 @@ func (t timedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // policy refused, says nothing about the target and isn't reported.
 func report(pick upstream.Pick, ctx context.Context, resp *http.Response, err error) {
 	switch {
-	case errors.Is(ctx.Err(), context.Canceled), isBlocked(err):
+	case errors.Is(ctx.Err(), context.Canceled), isBlocked(err), reqctx.From(ctx).BodyLimit.Load() > 0:
 		return
 	case err != nil:
 		pick.Done(true)
@@ -188,6 +188,12 @@ func orRoot(p string) string {
 
 // handleError answers when the backend call fails before an answer started.
 func (f *Forwarder) handleError(w http.ResponseWriter, r *http.Request, err error) {
+	if reqctx.From(r.Context()).BodyLimit.Load() > 0 {
+		// The client's unannounced body went over the route's limit (MT.11):
+		// its fault, not the backend's.
+		respond.Error(w, http.StatusRequestEntityTooLarge, "request_too_large")
+		return
+	}
 	status, code := classify(r.Context().Err(), err)
 	m, _ := FromContext(r.Context())
 

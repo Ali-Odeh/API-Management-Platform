@@ -440,3 +440,93 @@ func TestAPIHandlerSlowWorkspaceCantStarveTheOthers(t *testing.T) {
 		t.Errorf("after the slow answers: %d, want 200 (slots given back)", rec.Code)
 	}
 }
+
+// countingLimiter allows everything and counts the checks.
+type countingLimiter struct{ calls atomic.Int64 }
+
+func (c *countingLimiter) Allow(_ context.Context, req ratelimit.Request) (ratelimit.Result, error) {
+	c.calls.Add(1)
+	return ratelimit.Result{Allowed: true, Limit: req.WorkspaceLimit, Remaining: 1}, nil
+}
+
+// MT.11 through the whole chain: a browser's preflight to a protected route
+// is answered by the gateway, without a key, without touching the backend
+// or the rate limit; bodies over the route's limit never reach the backend
+// as a success, announced or not.
+func TestAPIHandlerCORSAndBodyLimit(t *testing.T) {
+	var backendCalls atomic.Int64
+	var received atomic.Int64
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		backendCalls.Add(1)
+		n, _ := io.Copy(io.Discard, r.Body)
+		received.Store(n)
+	}))
+	defer backend.Close()
+	upstream, _ := url.Parse(backend.URL)
+	cors, err := config.NewCORS([]string{"https://app.example.com"}, []string{"GET", "POST"}, []string{"X-API-Key"}, false, 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := serviceOf(upstream, 5*time.Second)
+	svc.Health = config.Health{PassiveFailures: 1, PassiveEject: time.Minute} // one failure would set it aside
+	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{{
+		ID: "r1", PathPrefix: "/v1", Methods: []string{"GET", "POST"}, AuthRequired: true,
+		Service: svc, MaxBodyBytes: 1024, CORS: cors,
+	}}, Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive, RateLimitPerMin: 60}}})
+	limiter := &countingLimiter{}
+	var logs bytes.Buffer
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, testRegistry(t), limiter, slog.New(slog.NewJSONHandler(&logs, nil)))
+	do := func(req *http.Request) *httptest.ResponseRecorder {
+		logs.Reset()
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// The preflight: no key, yet 204 with the allow headers.
+	req := httptest.NewRequest(http.MethodOptions, "/v1/orders", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := do(req)
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example.com" {
+		t.Fatalf("preflight: %d %v", rec.Code, rec.Header())
+	}
+	if backendCalls.Load() != 0 || limiter.calls.Load() != 0 {
+		t.Errorf("preflight reached the backend (%d) or the rate limit (%d)", backendCalls.Load(), limiter.calls.Load())
+	}
+
+	// A real call from the page: through, with CORS headers.
+	req = httptest.NewRequest(http.MethodPost, "/v1/orders", strings.NewReader("small"))
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("X-API-Key", testKey)
+	if rec := do(req); rec.Code != 200 || rec.Header().Get("Access-Control-Allow-Origin") != "https://app.example.com" {
+		t.Fatalf("call: %d %v", rec.Code, rec.Header())
+	}
+
+	// An announced body over the limit: 413 before auth, nothing forwarded.
+	before := backendCalls.Load()
+	req = httptest.NewRequest(http.MethodPost, "/v1/orders", bytes.NewReader(make([]byte, 2048)))
+	if rec := do(req); rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(logs.String(), `"body_limit":1024`) {
+		t.Fatalf("announced: %d, log %s", rec.Code, logs.String())
+	}
+	if backendCalls.Load() != before {
+		t.Error("an announced oversized body reached the backend")
+	}
+
+	// An unannounced body over the limit: cut while uploading, 413 for the
+	// client, and the target isn't blamed (it would be set aside otherwise).
+	req = httptest.NewRequest(http.MethodPost, "/v1/orders", io.MultiReader(bytes.NewReader(make([]byte, 4096))))
+	req.ContentLength = -1
+	req.Header.Set("X-API-Key", testKey)
+	if rec := do(req); rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(logs.String(), `"body_limit":1024`) {
+		t.Fatalf("unannounced: %d %q, log %s", rec.Code, rec.Body.String(), logs.String())
+	}
+	if received.Load() > 1024 {
+		t.Errorf("the backend received %d bytes, more than the limit", received.Load())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/orders", nil)
+	req.Header.Set("X-API-Key", testKey)
+	if rec := do(req); rec.Code != 200 {
+		t.Errorf("after the cut body: %d, want 200 (the target is not set aside)", rec.Code)
+	}
+}

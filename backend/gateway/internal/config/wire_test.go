@@ -328,3 +328,62 @@ func TestFingerprint(t *testing.T) {
 		}
 	}
 }
+
+// The body limit and CORS settings of a route (MT.11).
+func TestParseRouteBodyLimitAndCORS(t *testing.T) {
+	parse := func(route string) (*Route, []error) {
+		body := `{"seq": 1, "full": true, "deleted": [], "workspaces": [{"id": "w", "slug": "acme", "status": "active",
+			"limits": {"rate_limit_per_min": 60, "max_concurrent": 10},
+			"services": [{"id": "s", "timeout_ms": 100, "targets": [{"id": "t", "url": "http://a:1", "weight": 1}]}],
+			"routes": [` + route + `], "keys": []}]}`
+		a, skipped, err := parseAnswer(strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("parseAnswer: %v", err)
+		}
+		if routes := a.Workspaces[0].Routes; len(routes) == 1 {
+			return &routes[0], skipped
+		}
+		return nil, skipped
+	}
+
+	r, _ := parse(`{"id": "r", "service_id": "s", "path_prefix": "/x", "methods": ["GET", "POST"],
+		"max_body_bytes": 2048, "cors": {"origins": ["https://App.example.com", "http://localhost:5173"],
+		"methods": ["GET", "POST"], "headers": ["Content-Type", "X-API-Key"], "credentials": true, "max_age": 600}}`)
+	if r == nil || r.MaxBodyBytes != 2048 || r.CORS == nil {
+		t.Fatalf("route = %+v", r)
+	}
+	c := r.CORS
+	if !c.AllowsOrigin("https://app.example.com") || !c.AllowsOrigin("http://localhost:5173") || c.AllowsOrigin("https://evil.example") || c.AllowsOrigin("") {
+		t.Errorf("origins = %v", c.Origins)
+	}
+	if !c.AllowsMethod("POST") || c.AllowsMethod("DELETE") {
+		t.Error("methods wrong")
+	}
+	if c.Methods != "GET, POST" || c.Headers != "Content-Type, X-API-Key" || !c.Credentials || c.MaxAge != "600" || c.AnyOrigin {
+		t.Errorf("CORS = %+v", c)
+	}
+
+	// Older control planes: no limit, no CORS. No origin: CORS off.
+	for _, route := range []string{
+		`{"id": "r", "service_id": "s", "path_prefix": "/x", "methods": ["GET"]}`,
+		`{"id": "r", "service_id": "s", "path_prefix": "/x", "methods": ["GET"], "max_body_bytes": 5,
+		  "cors": {"origins": [], "methods": ["GET"], "headers": [], "credentials": false, "max_age": 600}}`,
+	} {
+		if r, _ := parse(route); r == nil || r.CORS != nil {
+			t.Errorf("%s: route %+v, want CORS off", route, r)
+		}
+	}
+
+	// Unusable settings leave the route out, with a reason.
+	for want, route := range map[string]string{
+		"negative":    `{"id": "r", "service_id": "s", "path_prefix": "/x", "methods": ["GET"], "max_body_bytes": -1}`,
+		"credentials": `{"id": "r", "service_id": "s", "path_prefix": "/x", "methods": ["GET"], "cors": {"origins": ["*"], "methods": ["GET"], "credentials": true}}`,
+		"methods":     `{"id": "r", "service_id": "s", "path_prefix": "/x", "methods": ["GET"], "cors": {"origins": ["https://a"], "methods": []}}`,
+		"max_age":     `{"id": "r", "service_id": "s", "path_prefix": "/x", "methods": ["GET"], "cors": {"origins": ["https://a"], "methods": ["GET"], "max_age": -1}}`,
+	} {
+		r, skipped := parse(route)
+		if r != nil || len(skipped) != 1 || !strings.Contains(skipped[0].Error(), want) {
+			t.Errorf("%s: route %+v, skipped %v", want, r, skipped)
+		}
+	}
+}

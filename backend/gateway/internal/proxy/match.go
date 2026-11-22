@@ -3,6 +3,7 @@
 package proxy
 
 import (
+	"net/http"
 	"slices"
 	"strings"
 
@@ -53,4 +54,24 @@ func prefixFits(prefix, path string) bool {
 	}
 	// Either the whole path, or the prefix ends exactly at a "/".
 	return len(path) == len(prefix) || path[len(prefix)] == '/'
+}
+
+// matchPath finds the most specific route whose prefix fits the path,
+// whatever its methods. A CORS preflight is matched this way (decision 15):
+// it asks about another method, and its own (OPTIONS) is the browser's.
+func matchPath(routes []config.Route, path string) *config.Route {
+	for i := range routes {
+		if prefixFits(routes[i].PathPrefix, path) {
+			return &routes[i]
+		}
+	}
+	return nil
+}
+
+// IsPreflight reports whether r is a browser's CORS preflight: OPTIONS with
+// an Origin and the method it wants to use.
+func IsPreflight(r *http.Request) bool {
+	return r.Method == http.MethodOptions &&
+		r.Header.Get("Origin") != "" &&
+		r.Header.Get("Access-Control-Request-Method") != ""
 }

@@ -58,12 +58,22 @@ type wireTarget struct {
 }
 
 type wireRoute struct {
-	ID           string   `json:"id"`
-	ServiceID    string   `json:"service_id"`
-	PathPrefix   string   `json:"path_prefix"`
-	Methods      []string `json:"methods"`
-	StripPrefix  bool     `json:"strip_prefix"`
-	AuthRequired bool     `json:"auth_required"`
+	ID           string    `json:"id"`
+	ServiceID    string    `json:"service_id"`
+	PathPrefix   string    `json:"path_prefix"`
+	Methods      []string  `json:"methods"`
+	StripPrefix  bool      `json:"strip_prefix"`
+	AuthRequired bool      `json:"auth_required"`
+	MaxBodyBytes int64     `json:"max_body_bytes"`
+	CORS         *wireCORS `json:"cors"`
+}
+
+type wireCORS struct {
+	Origins     []string `json:"origins"`
+	Methods     []string `json:"methods"`
+	Headers     []string `json:"headers"`
+	Credentials bool     `json:"credentials"`
+	MaxAge      int      `json:"max_age"`
 }
 
 type wireKey struct {
@@ -357,6 +367,13 @@ func (w wireRoute) toRoute(services map[string]*Service) (Route, error) {
 	if !ok {
 		return Route{}, fmt.Errorf("service %s is not in the config, or not usable", w.ServiceID)
 	}
+	if w.MaxBodyBytes < 0 {
+		return Route{}, fmt.Errorf("max_body_bytes %d is negative", w.MaxBodyBytes)
+	}
+	cors, err := w.CORS.toCORS()
+	if err != nil {
+		return Route{}, err
+	}
 	return Route{
 		ID:           w.ID,
 		ServiceID:    w.ServiceID,
@@ -365,7 +382,17 @@ func (w wireRoute) toRoute(services map[string]*Service) (Route, error) {
 		StripPrefix:  w.StripPrefix,
 		AuthRequired: w.AuthRequired,
 		Service:      service,
+		MaxBodyBytes: w.MaxBodyBytes,
+		CORS:         cors,
 	}, nil
+}
+
+// toCORS checks a route's CORS settings; unusable ones leave the route out.
+func (w *wireCORS) toCORS() (*CORS, error) {
+	if w == nil {
+		return nil, nil
+	}
+	return NewCORS(w.Origins, w.Methods, w.Headers, w.Credentials, w.MaxAge)
 }
 
 func (w wireKey) toKey() (Key, error) {

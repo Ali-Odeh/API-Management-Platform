@@ -8,7 +8,11 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,6 +46,71 @@ type Route struct {
 	StripPrefix  bool
 	AuthRequired bool
 	Service      *Service // its service, shared with the workspace's other routes
+	// MaxBodyBytes is the largest request body let through (MT.11): the
+	// route's own limit or the platform default. 0: no limit (a control
+	// plane older than MT.11).
+	MaxBodyBytes int64
+	CORS         *CORS // nil: CORS off for this route
+}
+
+// CORS is a route's CORS settings (MT.11, decision 15), with the answer
+// headers prepared once here instead of on every request.
+type CORS struct {
+	AnyOrigin   bool            // "*": every origin (never with Credentials)
+	Origins     map[string]bool // exact origins, lowercase, as browsers send them
+	Methods     string          // Access-Control-Allow-Methods, e.g. "GET, POST"
+	Headers     string          // Access-Control-Allow-Headers; "" when none
+	Credentials bool
+	MaxAge      string // Access-Control-Max-Age, in seconds
+
+	methods map[string]bool
+}
+
+// NewCORS builds a route's CORS settings. No origin means CORS off (nil,
+// no error). Origins are exact ("https://app.example.com") or "*" for any,
+// which can't go with credentials: browsers refuse that answer.
+func NewCORS(origins, methods, headers []string, credentials bool, maxAge int) (*CORS, error) {
+	if len(origins) == 0 {
+		return nil, nil
+	}
+	if len(methods) == 0 {
+		return nil, errors.New("cors without methods")
+	}
+	if maxAge < 0 {
+		return nil, fmt.Errorf("cors max_age %d is negative", maxAge)
+	}
+	c := &CORS{
+		Origins:     make(map[string]bool, len(origins)),
+		Methods:     strings.Join(methods, ", "),
+		Headers:     strings.Join(headers, ", "),
+		Credentials: credentials,
+		MaxAge:      strconv.Itoa(maxAge),
+		methods:     make(map[string]bool, len(methods)),
+	}
+	for _, origin := range origins {
+		if origin == "*" {
+			c.AnyOrigin = true
+			continue
+		}
+		c.Origins[strings.ToLower(origin)] = true
+	}
+	if c.AnyOrigin && c.Credentials {
+		return nil, errors.New("cors allows credentials for any origin")
+	}
+	for _, m := range methods {
+		c.methods[m] = true
+	}
+	return c, nil
+}
+
+// AllowsOrigin reports whether a browser page from origin may call the route.
+func (c *CORS) AllowsOrigin(origin string) bool {
+	return origin != "" && (c.AnyOrigin || c.Origins[strings.ToLower(origin)])
+}
+
+// AllowsMethod reports whether a browser may use method on the route.
+func (c *CORS) AllowsMethod(method string) bool {
+	return c.methods[method]
 }
 
 // Service is one active service with its usable targets (MT.10).
