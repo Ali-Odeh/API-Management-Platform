@@ -1,6 +1,6 @@
 """Field types and base models shared by every feature's schemas."""
 
-from typing import Annotated, Self
+from typing import Annotated, ClassVar, Self
 
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
@@ -17,12 +17,16 @@ class PartialUpdate(BaseModel):
     """Base for PATCH bodies: every field optional, only sent fields change.
 
     Leaving a field out means "don't change it". Sending null would mean
-    "erase it", which none of our columns allow, so it is rejected (422).
+    "erase it", which none of our columns allow, so it is rejected (422);
+    except for the fields a subclass names in `nullable`, where null means
+    "back to the platform default".
     """
+
+    nullable: ClassVar[frozenset[str]] = frozenset()
 
     @model_validator(mode="after")
     def _no_explicit_nulls(self) -> Self:
-        for field in self.model_fields_set:
+        for field in self.model_fields_set - self.nullable:
             if getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null")
         return self

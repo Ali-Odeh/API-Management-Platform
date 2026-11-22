@@ -42,10 +42,18 @@ class ServiceConfig(BaseModel):
     targets: list[TargetConfig]  # oldest first
 
 
-class RouteConfig(BaseModel):
-    """An active route on an active service."""
+class CorsConfig(BaseModel):
+    """A route's CORS settings (decision 15); off while `origins` is empty."""
 
-    model_config = ConfigDict(from_attributes=True)
+    origins: list[str]
+    methods: list[str]  # effective: the route's own methods when none were set
+    headers: list[str]
+    credentials: bool
+    max_age: int
+
+
+class RouteConfig(BaseModel):
+    """An active route on an active service with an active target."""
 
     id: uuid.UUID
     service_id: uuid.UUID
@@ -53,6 +61,8 @@ class RouteConfig(BaseModel):
     methods: list[str]
     strip_prefix: bool
     auth_required: bool
+    max_body_bytes: int  # effective: the route's own limit or MAX_REQUEST_BODY
+    cors: CorsConfig
 
 
 class KeyConfig(BaseModel):

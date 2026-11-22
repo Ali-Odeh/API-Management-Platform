@@ -27,6 +27,12 @@ AUDIT_FIELDS = (
     "strip_prefix",
     "auth_required",
     "is_active",
+    "max_body_bytes",
+    "cors_origins",
+    "cors_methods",
+    "cors_headers",
+    "cors_credentials",
+    "cors_max_age",
 )
 
 
@@ -72,7 +78,12 @@ async def create_route(
 ) -> Route:
     await _ensure_service_exists(db, workspace_id=workspace_id, service_id=data.service_id)
     await check_quota(db, workspace_id, "max_routes")
-    route = Route(id=uuid.uuid4(), workspace_id=workspace_id, **data.model_dump())
+    route = Route(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        **data.model_dump(exclude={"cors"}),
+        **data.cors.columns(),
+    )
     db.add(route)
     _record(db, audit, route, "route.create", created(snapshot(route, AUDIT_FIELDS)))
     await commit_or_raise(db, _errors(data.path_prefix))
@@ -89,7 +100,9 @@ async def update_route(
     audit: AuditContext,
 ) -> Route:
     route = await get_route(db, workspace_id=workspace_id, route_id=route_id)
-    sent = data.model_dump(exclude_unset=True)
+    sent = data.model_dump(exclude_unset=True, exclude={"cors"})
+    if data.cors is not None:  # replaces the CORS settings as a whole
+        sent |= data.cors.columns()
     if "service_id" in sent:
         await _ensure_service_exists(db, workspace_id=workspace_id, service_id=sent["service_id"])
     before = snapshot(route, AUDIT_FIELDS)

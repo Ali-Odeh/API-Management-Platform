@@ -65,6 +65,13 @@ async def test_path_prefix_unique_per_workspace(
         ({"path_prefix": "/v1/orders/"}, "ck_routes_path_prefix_no_trailing_slash"),
         ({"methods": []}, "ck_routes_methods_not_empty"),
         ({"methods": ["GET", "FETCH"]}, "ck_routes_methods_known"),
+        ({"max_body_bytes": 0}, "ck_routes_max_body_bytes"),
+        ({"cors_methods": ["FETCH"]}, "ck_routes_cors_methods_known"),
+        ({"cors_max_age": 86_401}, "ck_routes_cors_max_age"),
+        (
+            {"cors_origins": ["*"], "cors_credentials": True},
+            "ck_routes_cors_no_wildcard_credentials",
+        ),
     ],
 )
 async def test_check_rules(
@@ -112,6 +119,15 @@ async def test_create_returns_201_with_secure_defaults(
     assert body["auth_required"] is True
     assert body["strip_prefix"] is False
     assert body["is_active"] is True
+    # MT.11: the platform's body limit (null), CORS off.
+    assert body["max_body_bytes"] is None
+    assert body["cors"] == {
+        "origins": [],
+        "methods": [],
+        "headers": [],
+        "credentials": False,
+        "max_age": 600,
+    }
 
 
 @pytest.mark.parametrize(
@@ -380,3 +396,97 @@ async def test_other_workspace_routes_are_invisible(
     assert (await client.get(path, headers=auth_headers)).status_code == 404
     assert (await client.patch(path, json=patch, headers=auth_headers)).status_code == 404
     assert (await client.delete(path, headers=auth_headers)).status_code == 404
+
+
+# ---- Body size limit and CORS (MT.11)
+
+
+async def test_body_limit_and_cors_are_saved_and_shown(
+    client: AsyncClient, auth_headers: Headers, service: Service
+) -> None:
+    cors = {
+        "origins": [
+            "HTTPS://App.Example.com:443/",
+            "http://localhost:5173",
+            "https://app.example.com",
+        ],
+        "methods": ["get", "post"],
+        "headers": ["Content-Type", "X-API-Key", "content-type"],
+        "credentials": True,
+        "max_age": 3600,
+    }
+    r = await create(client, auth_headers, service, max_body_bytes=1_048_576, cors=cors)
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["max_body_bytes"] == 1_048_576
+    # Origins as browsers send them (lowercase, no default port, no slash), once each.
+    assert body["cors"] == {
+        "origins": ["https://app.example.com", "http://localhost:5173"],
+        "methods": ["GET", "POST"],
+        "headers": ["Content-Type", "X-API-Key"],
+        "credentials": True,
+        "max_age": 3600,
+    }
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"max_body_bytes": 0},
+        {"max_body_bytes": 100 * 1024**2 + 1},  # over MAX_REQUEST_BODY_CEILING
+        {"cors": {"origins": ["*"], "credentials": True}},  # browsers refuse that
+        {"cors": {"origins": ["*", "https://a.example.com"]}},  # '*' stands alone
+        {"cors": {"origins": ["app.example.com"]}},  # no scheme
+        {"cors": {"origins": ["ftp://a.example.com"]}},
+        {"cors": {"origins": ["https://a.example.com/path"]}},
+        {"cors": {"origins": ["https://a.example.com:99999"]}},
+        {"cors": {"origins": [f"https://a{i}.example.com" for i in range(51)]}},
+        {"cors": {"methods": ["FETCH"]}},
+        {"cors": {"headers": ["X Bad"]}},
+        {"cors": {"max_age": -1}},
+        {"cors": {"max_age": 86_401}},
+    ],
+)
+async def test_invalid_body_limit_or_cors_is_422(
+    client: AsyncClient, auth_headers: Headers, service: Service, overrides: dict[str, Any]
+) -> None:
+    r = await create(client, auth_headers, service, **overrides)
+    assert r.status_code == 422, r.text
+
+
+async def test_any_origin_without_credentials_is_fine(
+    client: AsyncClient, auth_headers: Headers, service: Service
+) -> None:
+    r = await create(client, auth_headers, service, cors={"origins": ["*"]})
+    assert r.status_code == 201, r.text
+    assert r.json()["cors"]["origins"] == ["*"]
+
+
+async def test_patch_cors_replaces_it_and_null_restores_the_default_limit(
+    client: AsyncClient, auth_headers: Headers, service: Service
+) -> None:
+    created = (
+        await create(
+            client,
+            auth_headers,
+            service,
+            max_body_bytes=2048,
+            cors={"origins": ["https://a.example.com"], "headers": ["X-A"]},
+        )
+    ).json()
+    path = f"{URL}/{created['id']}"
+
+    r = await client.patch(
+        path, json={"cors": {"origins": ["https://b.example.com"]}}, headers=auth_headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["cors"]["origins"] == ["https://b.example.com"]
+    assert r.json()["cors"]["headers"] == []  # replaced as a whole
+    assert r.json()["max_body_bytes"] == 2048  # untouched
+
+    r = await client.patch(path, json={"max_body_bytes": None}, headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["max_body_bytes"] is None  # back to the platform default
+    # Other fields still refuse null.
+    r = await client.patch(path, json={"cors": None}, headers=auth_headers)
+    assert r.status_code == 422

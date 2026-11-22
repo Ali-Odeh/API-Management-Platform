@@ -15,6 +15,10 @@ x-control-plane-environment: &control-plane-environment
   WORKSPACE_MAX_ROUTES: ${WORKSPACE_MAX_ROUTES:-500}
   WORKSPACE_MAX_CONSUMERS: ${WORKSPACE_MAX_CONSUMERS:-5000}
   PURGE_AFTER_DAYS: ${PURGE_AFTER_DAYS:-30}
+  # Request bodies (MT.11): a route's limit unless it sets its own, and the
+  # most it may set. The gateway gets each route's limit in its config.
+  MAX_REQUEST_BODY: ${MAX_REQUEST_BODY:-10MiB}
+  MAX_REQUEST_BODY_CEILING: ${MAX_REQUEST_BODY_CEILING:-100MiB}
   # Internal upstreams the Platform Admin allows (MT.9); the gateway gets the
   # same value. The control plane refuses other internal IP literals and
   # names (localhost, *.internal) with 422 when a service is saved.
