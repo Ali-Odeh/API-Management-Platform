@@ -24,6 +24,7 @@ from app.consumers import models as consumer_models  # noqa: F401
 from app.gateway_config import models as gateway_config_models  # noqa: F401
 from app.keys import models as key_models  # noqa: F401
 from app.members import models as member_models  # noqa: F401
+from app.plans import models as plan_models  # noqa: F401
 from app.routes import models as route_models  # noqa: F401
 from app.services import models as service_models  # noqa: F401
 from app.usage import models as usage_models  # noqa: F401
@@ -42,6 +43,20 @@ target_metadata = Base.metadata
 DATABASE_URL = os.environ["MIGRATION_DATABASE_URL"]
 
 
+def include_object(
+    obj: object, name: str | None, type_: str, reflected: bool, compare_to: object
+) -> bool:
+    """Leave the request log's month partitions alone (V2.1): the worker makes
+    and drops them at run time; they are not part of the models."""
+    return not (type_ in ("table", "index") and reflected and _is_partition(obj, name))
+
+
+def _is_partition(obj: object, name: str | None) -> bool:
+    table = getattr(obj, "table", obj)  # an index belongs to a table
+    table_name = getattr(table, "name", name) or ""
+    return table_name.startswith("request_logs_y")
+
+
 def run_migrations_offline() -> None:
     """`alembic upgrade head --sql`: print the SQL instead of running it."""
     context.configure(
@@ -55,7 +70,9 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection, target_metadata=target_metadata, include_object=include_object
+    )
     with context.begin_transaction():
         context.run_migrations()
 

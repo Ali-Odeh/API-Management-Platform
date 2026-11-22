@@ -28,6 +28,7 @@ from app.gateway_config.schemas import (
     WorkspaceConfigOut,
 )
 from app.keys.models import ApiKey
+from app.plans.models import Plan
 from app.routes.models import Route
 from app.services.models import Service, ServiceTarget
 from app.workspaces.limits import default_limit
@@ -84,6 +85,8 @@ def config_defaults(settings: Settings) -> dict[str, int]:
         "rate_limit_per_min": settings.workspace_rate_limit_per_min,
         "max_concurrent": settings.workspace_max_concurrent,
         "max_body_bytes": int(settings.max_request_body),
+        "ip_rate_limit_per_min": settings.public_rate_limit_per_ip_per_min,
+        "auth_fail_limit": settings.auth_fail_limit_per_ip,
     }
 
 
@@ -250,9 +253,12 @@ async def _build(
                 ApiKey.key_hash,
                 ApiKey.consumer_id,
                 Consumer.status.label("consumer_status"),
-                Consumer.rate_limit_per_min,
+                Consumer.plan_id,
+                Plan.rate_limit_per_min,
+                Plan.monthly_quota,
             )
             .join(Consumer, ApiKey.consumer_id == Consumer.id)
+            .join(Plan, Consumer.plan_id == Plan.id)
             .where(ApiKey.workspace_id.in_(workspace_ids), ApiKey.revoked_at.is_(None))
             .order_by(ApiKey.id)
         )
@@ -268,6 +274,8 @@ async def _build(
             limits=GatewayLimits(
                 rate_limit_per_min=_effective(workspace.rate_limit_per_min, "rate_limit_per_min"),
                 max_concurrent=_effective(workspace.max_concurrent, "max_concurrent"),
+                ip_rate_limit_per_min=get_settings().public_rate_limit_per_ip_per_min,
+                auth_fail_limit=get_settings().auth_fail_limit_per_ip,
             ),
             services=[
                 ServiceConfig(

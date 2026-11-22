@@ -101,11 +101,19 @@ async def test_admin_flow_as_seen_by_the_gateway(
         }
     ]
 
-    # 3. A consumer app gets a key. The gateway sees only the key's hash.
+    # 3. A consumer app on a plan gets a key. The gateway sees only the key's
+    # hash, with its plan's limits (V2.2).
+    plan = (
+        await gateway.post(
+            f"{API}/workspaces/default/plans",
+            json={"name": "Gold", "rate_limit_per_min": 120, "monthly_quota": 5000},
+            headers=admin,
+        )
+    ).json()
     consumer = (
         await gateway.post(
             f"{API}/workspaces/default/consumers",
-            json={"name": "mobile-app", "email": "dev@example.com", "rate_limit_per_min": 120},
+            json={"name": "mobile-app", "email": "dev@example.com", "plan_id": plan["id"]},
             headers=admin,
         )
     ).json()
@@ -122,7 +130,11 @@ async def test_admin_flow_as_seen_by_the_gateway(
     seen = after_key["keys"][0]
     assert seen["id"] == key["id"]
     assert seen["consumer_status"] == "active"
-    assert seen["rate_limit_per_min"] == 120
+    assert (seen["plan_id"], seen["rate_limit_per_min"], seen["monthly_quota"]) == (
+        plan["id"],
+        120,
+        5000,
+    )
     assert key["key"] not in str(after_key)  # never the raw key
 
     # 4. Block the consumer: the key stays, marked blocked (gateway -> 403).

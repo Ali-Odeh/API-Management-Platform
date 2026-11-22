@@ -291,14 +291,15 @@ _CONFIG_CHANGES = [
     ("routes", "cors_headers", "ARRAY['X-A']"),
     ("routes", "cors_credentials", "NOT cors_credentials"),
     ("routes", "cors_max_age", "cors_max_age + 1"),
-    ("consumers", "rate_limit_per_min", "7"),
+    ("plans", "rate_limit_per_min", "rate_limit_per_min + 1"),
+    ("plans", "monthly_quota", "1000"),
     ("api_keys", "key_hash", "repeat('b', 64)"),
     ("api_keys", "revoked_at", "now()"),
     ("workspaces", "slug", "'acme-two'"),
     ("workspaces", "rate_limit_per_min", "7"),
     ("workspaces", "max_concurrent", "7"),
 ]
-_THROUGH_THE_API = {("routes", "service_id"), ("consumers", "status"),
+_THROUGH_THE_API = {("routes", "service_id"), ("consumers", "status"), ("consumers", "plan_id"),
                     ("api_keys", "consumer_id"), ("workspaces", "status"),
                     ("service_targets", "service_id")}  # fmt: skip
 # Config columns with only one allowed value so far: nothing to change them
@@ -322,6 +323,9 @@ _NOT_CONFIG = [
     ("workspaces", "max_routes", "7"),
     ("workspaces", "max_consumers", "7"),
     ("workspaces", "updated_at", "now() + interval '1 hour'"),
+    ("plans", "name", "name || ' renamed'"),
+    ("plans", "is_default", "false"),
+    ("plans", "updated_at", "now() + interval '1 hour'"),
 ]
 # Lifecycle details: they change only together with `status`, which bumps.
 _WITH_STATUS = {("workspaces", c) for c in ("status_reason", "deleted_at", "purge_after")}
@@ -517,8 +521,9 @@ async def test_unknown_recorded_defaults_bump_everything_that_inherits(
     await _forget_recorded_defaults()
     watch = await Watch().start()
     await apply_config_defaults(engine, get_settings())
+    # The per-IP limits (V2.2) have no workspace value: every served one moves.
     i = inheriting
-    await watch.assert_bumped(i["default"], i["rate"], i["concurrent"], i["body"])
+    await watch.assert_bumped(i["default"], i["rate"], i["concurrent"], i["body"], i["none"])
     assert await _recorded() == config_defaults(get_settings())
 
 
@@ -555,3 +560,24 @@ async def test_a_changed_default_bumps_only_the_workspaces_that_inherit_it(
         "body": changed.routes[0].max_body_bytes if changed.routes else None,
     }
     assert applied[inherits] == value
+
+
+@pytest.mark.parametrize(
+    ("setting", "field"),
+    [
+        ("public_rate_limit_per_ip_per_min", "ip_rate_limit_per_min"),
+        ("auth_fail_limit_per_ip", "auth_fail_limit"),
+    ],
+)
+async def test_a_changed_per_ip_limit_bumps_every_served_workspace(
+    inheriting: dict[str, uuid.UUID], monkeypatch: pytest.MonkeyPatch, setting: str, field: str
+) -> None:
+    watch = await Watch().start()
+    monkeypatch.setattr(get_settings(), setting, 7)
+
+    await apply_config_defaults(engine, get_settings())
+
+    i = inheriting
+    await watch.assert_bumped(i["default"], i["rate"], i["concurrent"], i["body"], i["none"])
+    _, answer = await read_answer(engine, since=watch.seq - 1, slugs=None, cache=WorkspaceCache())
+    assert {getattr(w.limits, field) for w in answer.workspaces} == {7}

@@ -6,10 +6,8 @@ from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field
 
-from app.consumers.models import DEFAULT_RATE_LIMIT_PER_MIN, ConsumerStatus
+from app.consumers.models import ConsumerStatus
 from app.core.schemas import PartialUpdate, SlugName
-
-MAX_RATE_LIMIT_PER_MIN = 100_000
 
 # A valid address, stored lowercase so "Dev@Example.com" and "dev@example.com" match.
 ContactEmail = Annotated[
@@ -17,9 +15,9 @@ ContactEmail = Annotated[
     AfterValidator(str.lower),
     Field(description="Who to contact about this app", examples=["dev@example.com"]),
 ]
-RateLimit = Annotated[
-    int,
-    Field(ge=1, le=MAX_RATE_LIMIT_PER_MIN, description="Requests per minute, all keys together"),
+PlanId = Annotated[
+    uuid.UUID,
+    Field(description="The plan that sets the consumer's rate limit and monthly quota"),
 ]
 ConsumerName = Annotated[SlugName, Field(examples=["mobile-app"])]
 
@@ -28,7 +26,7 @@ class ConsumerCreate(BaseModel):
     name: ConsumerName
     email: ContactEmail
     status: ConsumerStatus = ConsumerStatus.ACTIVE
-    rate_limit_per_min: RateLimit = DEFAULT_RATE_LIMIT_PER_MIN
+    plan_id: PlanId | None = None  # none: the workspace's default plan
 
 
 class ConsumerUpdate(PartialUpdate):
@@ -37,7 +35,7 @@ class ConsumerUpdate(PartialUpdate):
     name: ConsumerName | None = None
     email: ContactEmail | None = None
     status: ConsumerStatus | None = None
-    rate_limit_per_min: RateLimit | None = None
+    plan_id: PlanId | None = None  # applies with the next config update
 
 
 class ConsumerOut(BaseModel):
@@ -47,6 +45,6 @@ class ConsumerOut(BaseModel):
     name: str
     email: str
     status: ConsumerStatus
-    rate_limit_per_min: int
+    plan_id: uuid.UUID
     created_at: datetime
     updated_at: datetime

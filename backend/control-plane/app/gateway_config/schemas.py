@@ -74,7 +74,10 @@ class KeyConfig(BaseModel):
     key_hash: str
     consumer_id: uuid.UUID
     consumer_status: ConsumerStatus
+    # The consumer's plan and its limits (V2.2): the gateway never needs the plans.
+    plan_id: uuid.UUID
     rate_limit_per_min: int
+    monthly_quota: int | None  # null: no monthly quota
 
 
 class GatewayLimits(BaseModel):
@@ -83,6 +86,10 @@ class GatewayLimits(BaseModel):
 
     rate_limit_per_min: int
     max_concurrent: int
+    # Platform-wide (V2.2): requests per minute from one client IP on a public
+    # route, and failed key attempts from one IP before it is refused a while.
+    ip_rate_limit_per_min: int
+    auth_fail_limit: int
 
 
 class WorkspaceConfigOut(BaseModel):

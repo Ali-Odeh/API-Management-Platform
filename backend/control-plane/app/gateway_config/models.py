@@ -52,7 +52,8 @@ CONFIG_COLUMNS: dict[str, tuple[str, ...]] = {
         "cors_credentials",
         "cors_max_age",
     ),
-    "consumers": ("status", "rate_limit_per_min"),
+    "consumers": ("status", "plan_id"),
+    "plans": ("rate_limit_per_min", "monthly_quota"),
     "api_keys": ("consumer_id", "key_hash", "revoked_at"),
     "workspaces": ("slug", "status", "rate_limit_per_min", "max_concurrent"),
 }

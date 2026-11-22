@@ -32,6 +32,7 @@ TENANT_TABLES = (
     "service_targets",
     "services",
     "consumers",
+    "plans",  # after the consumers on them
     "workspace_members",
     "audit_events",
 )

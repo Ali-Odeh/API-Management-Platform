@@ -15,6 +15,7 @@ from app.core.request_log import bind_workspace
 from app.gotrue.client import GoTrueAdmin
 from app.members import crud as members_crud
 from app.members.models import WorkspaceMember
+from app.plans import crud as plans_crud
 from app.users import crud as users_crud
 from app.workspaces.models import (
     DEFAULT_WORKSPACE_SLUG,
@@ -98,6 +99,8 @@ async def get_or_create_default_workspace(db: AsyncSession) -> Workspace:
         db.add(workspace)
         _record_created(db, AuditContext.system(), workspace, owner_email=None, invited=False)
         await db.flush()  # send the INSERT now so workspace.id is usable
+        plans_crud.add_default_plan(db, workspace.id)
+        await db.flush()
     return workspace
 
 
@@ -164,6 +167,7 @@ async def create_workspace(
     members_crud.add_member(
         db, workspace.id, user_id=owner.id, role=Role.OWNER, added_by=created_by
     )
+    plans_crud.add_default_plan(db, workspace.id)
     # One event for the workspace and its first Owner, platform-level (PLAN.md section 6).
     _record_created(db, audit_ctx, workspace, owner_email=owner.email, invited=invited)
     await db.commit()

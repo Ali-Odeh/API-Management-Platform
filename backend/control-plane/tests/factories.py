@@ -21,6 +21,8 @@ from app.core.permissions import Role
 from app.core.security import generate_api_key, hash_api_key
 from app.keys.models import KEY_PREFIX_LENGTH, ApiKey
 from app.members.models import WorkspaceMember
+from app.plans.crud import add_default_plan, get_default_plan
+from app.plans.models import Plan
 from app.routes.models import Route
 from app.services.models import Service, ServiceTarget
 from app.users.models import User
@@ -36,7 +38,26 @@ async def _save(db: AsyncSession, obj: T) -> T:
 
 
 async def make_workspace(db: AsyncSession, slug: str = "other", **fields: Any) -> Workspace:
-    return await _save(db, Workspace(name=slug.title(), slug=slug, **fields))
+    """A workspace with its default plan, in one transaction (as the API makes one)."""
+    workspace = Workspace(id=uuid.uuid4(), name=slug.title(), slug=slug, **fields)
+    db.add(workspace)
+    await db.flush()
+    add_default_plan(db, workspace.id)
+    await db.commit()
+    return workspace
+
+
+async def make_plan(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    name: str = "Pro",
+    rate_limit_per_min: int = 600,
+    **fields: Any,
+) -> Plan:
+    return await _save(
+        db,
+        Plan(workspace_id=workspace_id, name=name, rate_limit_per_min=rate_limit_per_min, **fields),
+    )
 
 
 async def make_user(
@@ -97,7 +118,10 @@ async def make_route(
 async def make_consumer(
     db: AsyncSession, workspace_id: uuid.UUID, name: str = "mobile-app", **fields: Any
 ) -> Consumer:
+    """On the workspace's default plan unless `plan_id` is given."""
     fields.setdefault("email", "dev@example.com")
+    if "plan_id" not in fields:
+        fields["plan_id"] = (await get_default_plan(db, workspace_id)).id
     return await _save(db, Consumer(workspace_id=workspace_id, name=name, **fields))
 
 
