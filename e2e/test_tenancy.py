@@ -38,7 +38,7 @@ def _make_tenant(admin: httpx.Client, slug: str) -> Tenant:
     base = f"/workspaces/{slug}"
     r = admin.post(
         f"{base}/services",
-        json={"name": "orders", "upstream_url": f"{MOCK_BACKEND_URL}/from-{slug}"},
+        json={"name": "orders", "targets": [{"url": f"{MOCK_BACKEND_URL}/from-{slug}"}]},
     )
     assert r.status_code == 201, r.text
     r = admin.post(

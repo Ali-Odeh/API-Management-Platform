@@ -1,6 +1,7 @@
 """The audit log: change records, append-only privileges, request ids, and the
 events outside the endpoints (startup, first sign-in, scripts)."""
 
+import json
 import os
 import uuid
 from datetime import UTC, datetime
@@ -28,7 +29,14 @@ from app.main import app
 from app.users import crud as users_crud
 from app.users.models import User
 from app.workspaces.models import Workspace
-from tests.factories import make_api_key, make_consumer, make_route, make_service, make_user
+from tests.factories import (
+    make_api_key,
+    make_consumer,
+    make_route,
+    make_service,
+    make_target,
+    make_user,
+)
 from tests.fakes import FakeGoTrue, bearer, make_token
 
 Headers = dict[str, str]
@@ -135,7 +143,7 @@ async def test_the_retention_login_may_only_read_and_delete_events() -> None:
 async def test_a_safe_request_id_is_kept_and_recorded(
     client: AsyncClient, db: AsyncSession, auth_headers: Headers
 ) -> None:
-    body = {"name": "orders", "upstream_url": "http://mock-backend:9000"}
+    body = {"name": "orders", "targets": [{"url": "http://mock-backend:9000"}]}
     headers = {**auth_headers, "X-Request-ID": "trace-42.a_b"}
     seen = await _ids(db)
 
@@ -174,30 +182,32 @@ async def test_an_unexpected_error_echoes_the_request_id() -> None:
     assert r.headers["X-Request-ID"] == "trace-500"
 
 
-async def test_upstream_credentials_of_older_services_stay_out_of_audit_events(
+async def test_target_credentials_of_older_services_stay_out_of_audit_events(
     client: AsyncClient, db: AsyncSession, auth_headers: Headers, workspace: Workspace
 ) -> None:
-    # The API refuses such URLs now, but services saved before that may hold
-    # one: an update or delete must not copy the password into the log.
+    # The API refuses such URLs now, but services saved before MT.3 may hold
+    # one (MT.10 moved it into their target): a change or removal of that
+    # target must not copy the password into the log.
     old_url = "http://fixture-user:fixture-password@mock-backend:9000/v1"
-    updated_one = await make_service(db, workspace.id, name="updated", upstream_url=old_url)
-    deleted_one = await make_service(db, workspace.id, name="deleted", upstream_url=old_url)
+    service = await make_service(db, workspace.id, upstream_url=old_url)
+    spare = await make_target(db, workspace.id, service.id, url="http://mock-backend:9000/v2")
+    old = service.targets[0]
     seen = await _ids(db)
 
     r = await client.patch(
-        f"{SERVICES}/{updated_one.id}",
-        json={"upstream_url": "https://[2001:db8::1]:8000/v2"},
-        headers=auth_headers,
+        f"{SERVICES}/{service.id}/targets/{old.id}", json={"weight": 5}, headers=auth_headers
     )
     assert r.status_code == 200
-    r = await client.delete(f"{SERVICES}/{deleted_one.id}", headers=auth_headers)
+    r = await client.delete(f"{SERVICES}/{service.id}/targets/{old.id}", headers=auth_headers)
     assert r.status_code == 204
 
-    events = {e.action: e.changes["upstream_url"] for e in await _events(db, seen)}
-    assert events == {
-        "service.update": ["http://mock-backend:9000/v1", "https://[2001:db8::1]:8000/v2"],
-        "service.delete": ["http://mock-backend:9000/v1", None],
-    }
+    events = {e.action: e for e in await _events(db, seen)}
+    assert set(events) == {"target.update", "target.delete"}
+    assert events["target.delete"].changes["url"] == ["http://mock-backend:9000/v1", None]
+    for event in events.values():
+        assert event.target_name == "http://mock-backend:9000/v1"
+        assert "fixture-password" not in json.dumps([event.changes, event.target_name])
+    assert spare.id  # the service kept a target
 
 
 # ---- A request that changes nothing writes no event

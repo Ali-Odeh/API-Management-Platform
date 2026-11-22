@@ -38,7 +38,7 @@ async def test_admin_flow_as_seen_by_the_gateway(
             f"{API}/workspaces/default/services",
             json={
                 "name": "orders",
-                "upstream_url": "http://mock-backend:9000/",
+                "targets": [{"url": "http://mock-backend:9000/"}],
                 "timeout_ms": 2000,
             },
             headers=admin,
@@ -63,8 +63,23 @@ async def test_admin_flow_as_seen_by_the_gateway(
         {
             "id": service["id"],
             "timeout_ms": 2000,
-            # Its one target until MT.10: the upstream URL, cleaned up by the API.
-            "targets": [{"id": service["id"], "url": "http://mock-backend:9000", "weight": 100}],
+            "lb_algorithm": "round_robin",
+            "health": {
+                "path": "/health",
+                "interval_s": 10,
+                "unhealthy": 3,
+                "healthy": 2,
+                "passive_failures": 5,
+                "passive_eject_s": 30,
+            },
+            # The URL cleaned up by the API.
+            "targets": [
+                {
+                    "id": service["targets"][0]["id"],
+                    "url": "http://mock-backend:9000",
+                    "weight": 100,
+                }
+            ],
         }
     ]
     assert after_route["routes"] == [

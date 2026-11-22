@@ -42,6 +42,7 @@ from tests.factories import (
     make_member,
     make_route,
     make_service,
+    make_target,
     make_user,
     make_workspace,
 )
@@ -242,12 +243,14 @@ def _headers(user: User, *, mfa: bool = False) -> dict[str, str]:
 async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     """Workspace `acme` with one object of each kind: path parameter -> its id.
 
-    The service has no routes (so it can be deleted); the route uses another one.
+    The service has no routes (so it can be deleted) and two targets (so one
+    can be removed); the route uses another one.
     `user_id` is a Viewer to change or remove; `candidate@acme.test` is a user
     who isn't a member yet, to add.
     """
     workspace = await make_workspace(db, slug="acme")
     service = await make_service(db, workspace.id, name="spare")
+    target = await make_target(db, workspace.id, service.id)
     routed = await make_service(db, workspace.id, name="routed")
     route = await make_route(db, workspace.id, routed.id)
     consumer = await make_consumer(db, workspace.id)
@@ -258,6 +261,7 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     return {
         "workspace_id": workspace.id,
         "service_id": service.id,
+        "target_id": target.id,
         "route_id": route.id,
         "consumer_id": consumer.id,
         "key_id": key.id,
@@ -269,9 +273,15 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
 # request must really succeed (2xx), not just get past the check.
 _VALID_BODIES: dict[Endpoint, Callable[[dict[str, uuid.UUID]], dict[str, Any]]] = {
     ("POST", "/api/v1/workspaces/{slug}/services"): lambda ids: {
-        "name": "new", "upstream_url": "http://mock-backend:9000",
+        "name": "new", "targets": [{"url": "http://mock-backend:9000"}],
     },
     ("PATCH", "/api/v1/workspaces/{slug}/services/{service_id}"): lambda ids: {"timeout_ms": 3000},
+    ("POST", "/api/v1/workspaces/{slug}/services/{service_id}/targets"): lambda ids: {
+        "url": "http://mock-backend-3:9000",
+    },
+    ("PATCH", "/api/v1/workspaces/{slug}/services/{service_id}/targets/{target_id}"): lambda ids: {
+        "weight": 50,
+    },
     ("POST", "/api/v1/workspaces/{slug}/routes"): lambda ids: {
         "service_id": str(ids["service_id"]), "path_prefix": "/v1/new", "methods": ["GET"],
     },
@@ -378,12 +388,14 @@ async def tenants(db: AsyncSession) -> Tenants:
 
     service = await make_service(db, globex.id)
     route = await make_route(db, globex.id, service.id)
+    target = await make_target(db, globex.id, service.id)
     consumer = await make_consumer(db, globex.id)
     key = await make_api_key(db, globex.id, consumer.id)
     their_member = await make_user(db, email="member@globex.test")
     await make_member(db, globex.id, their_member.id, Role.VIEWER)
     theirs = {
         "service_id": service.id,
+        "target_id": target.id,
         "route_id": route.id,
         "consumer_id": consumer.id,
         "key_id": key.id,
@@ -395,6 +407,9 @@ async def tenants(db: AsyncSession) -> Tenants:
 # Bodies valid apart from the object they name, so only isolation can refuse them.
 _BODIES: dict[Endpoint, dict[str, Any]] = {
     ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): {"name": "k"},
+    ("POST", "/api/v1/workspaces/{slug}/services/{service_id}/targets"): {
+        "url": "http://mock-backend-3:9000"
+    },
 }
 
 
@@ -407,7 +422,7 @@ ENDPOINTS_WITH_IDS = [e for e in WORKSPACE_ENDPOINTS if _path_ids(e[1])]
 
 def test_isolation_knows_every_kind_of_id() -> None:
     # A new kind of object in a URL must get an object of `globex` in `tenants`.
-    known = {"service_id", "route_id", "consumer_id", "key_id", "user_id"}
+    known = {"service_id", "target_id", "route_id", "consumer_id", "key_id", "user_id"}
     assert {p for e in WORKSPACE_ENDPOINTS for p in _path_ids(e[1])} <= known
 
 
@@ -517,6 +532,15 @@ _ACTIONS: dict[Endpoint, str] = {
     ("POST", "/api/v1/workspaces/{slug}/services"): "service.create",
     ("PATCH", "/api/v1/workspaces/{slug}/services/{service_id}"): "service.update",
     ("DELETE", "/api/v1/workspaces/{slug}/services/{service_id}"): "service.delete",
+    ("POST", "/api/v1/workspaces/{slug}/services/{service_id}/targets"): "target.create",
+    (
+        "PATCH",
+        "/api/v1/workspaces/{slug}/services/{service_id}/targets/{target_id}",
+    ): "target.update",
+    (
+        "DELETE",
+        "/api/v1/workspaces/{slug}/services/{service_id}/targets/{target_id}",
+    ): "target.delete",
     ("POST", "/api/v1/workspaces/{slug}/routes"): "route.create",
     ("PATCH", "/api/v1/workspaces/{slug}/routes/{route_id}"): "route.update",
     ("DELETE", "/api/v1/workspaces/{slug}/routes/{route_id}"): "route.delete",
@@ -668,6 +692,7 @@ _TABLES = {
     "workspace": "workspaces",
     "user": "users",
     "service": "services",
+    "target": "service_targets",
     "route": "routes",
     "consumer": "consumers",
     "key": "api_keys",

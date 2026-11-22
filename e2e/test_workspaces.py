@@ -54,7 +54,7 @@ def test_the_bare_host_serves_only_default(
     tenant = f"/workspaces/{TENANT}"
     service = owner.post(
         f"{tenant}/services",
-        json={"name": world.name("tenant-backend"), "upstream_url": MOCK_BACKEND_URL},
+        json={"name": world.name("tenant-backend"), "targets": [{"url": MOCK_BACKEND_URL}]},
     )
     assert service.status_code == 201, service.text
     route = owner.post(

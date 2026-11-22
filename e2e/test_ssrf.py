@@ -33,7 +33,7 @@ def test_a_service_pointing_at_redis_is_refused_by_the_gateway(
 def test_a_plainly_internal_upstream_is_refused_on_save(world: World, upstream_url: str) -> None:
     r = world.admin.post(
         f"{world.base}/services",
-        json={"name": world.name("internal"), "upstream_url": upstream_url},
+        json={"name": world.name("internal"), "targets": [{"url": upstream_url}]},
     )
 
     assert r.status_code == 422

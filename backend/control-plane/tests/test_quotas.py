@@ -52,7 +52,7 @@ async def _limit(acme: Workspace, **limits: int | None) -> None:
 
 
 async def _service(client: AsyncClient, owner: Headers, name: str) -> Any:
-    body = {"name": name, "upstream_url": "http://mock-backend:9000"}
+    body = {"name": name, "targets": [{"url": "http://mock-backend:9000"}]}
     return await client.post(f"{ACME}/services", json=body, headers=owner)
 
 

@@ -224,7 +224,7 @@ async def test_a_stranger_never_waits_on_the_workspace_lock(
     # workspace's writers, and its timing can't reveal that the workspace
     # exists (a busy one would make it wait, an unknown slug wouldn't).
     stranger = _headers(await make_user(db, email="stranger@example.com"))
-    body = {"name": "x", "upstream_url": "http://mock-backend:9000"}
+    body = {"name": "x", "targets": [{"url": "http://mock-backend:9000"}]}
     async with SessionLocal() as holder:
         await holder.execute(select(Workspace.id).where(Workspace.id == acme.id).with_for_update())
 

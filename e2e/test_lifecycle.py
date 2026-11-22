@@ -38,7 +38,7 @@ def lifecycle(admin: httpx.Client, person: Session) -> Iterator[tuple[str, httpx
 
 def _service(owner: httpx.Client, slug: str, name: str) -> httpx.Response:
     return owner.post(
-        f"/workspaces/{slug}/services", json={"name": name, "upstream_url": MOCK_BACKEND_URL}
+        f"/workspaces/{slug}/services", json={"name": name, "targets": [{"url": MOCK_BACKEND_URL}]}
     )
 
 
