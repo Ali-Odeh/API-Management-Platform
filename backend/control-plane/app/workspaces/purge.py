@@ -26,6 +26,7 @@ logger = logging.getLogger("workspace_purge")
 # checks it against every model with a workspace_id, so a new table can't be
 # forgotten (a purge that left rows behind would never fail on its own).
 TENANT_TABLES = (
+    "request_logs",  # no foreign keys: first or last, either works
     "api_keys",
     "routes",
     "service_targets",

@@ -160,6 +160,9 @@ services:
       MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:?set MIGRATION_DATABASE_URL in .env}
       AUDIT_RETENTION_DATABASE_URL: ${AUDIT_RETENTION_DATABASE_URL:?set AUDIT_RETENTION_DATABASE_URL in .env}
       PURGE_DATABASE_URL: ${PURGE_DATABASE_URL:?set PURGE_DATABASE_URL in .env}
+      INGEST_DATABASE_URL: ${INGEST_DATABASE_URL:?set INGEST_DATABASE_URL in .env}
+      # The usage-ingest tests read a real stream, in Redis database 15 (V2.1).
+      REDIS_TEST_URL: redis://redis:6379/15
     command: sh -c "python -m scripts.prepare_database && alembic upgrade head"
     volumes:
       - ./backend/control-plane:/code
@@ -225,6 +228,26 @@ services:
       - ./backend/control-plane:/code
     depends_on:
       control-plane:
+        condition: service_healthy
+
+  # Reads the gateway's usage events from the Redis stream into the request
+  # log (V2.1), and drops request log months older than
+  # REQUEST_LOG_RETENTION_DAYS. Its own login (apim_ingest) may only insert
+  # request log rows and set keys' last_used_at. Several copies can run side
+  # by side (one consumer group).
+  usage-ingest:
+    build: ./backend/control-plane
+    command: python -m scripts.usage_ingest
+    environment:
+      INGEST_DATABASE_URL: ${INGEST_DATABASE_URL:?set INGEST_DATABASE_URL in .env}
+      REDIS_URL: ${REDIS_URL:?set REDIS_URL in .env}
+      REQUEST_LOG_RETENTION_DAYS: ${REQUEST_LOG_RETENTION_DAYS:-90}
+    volumes:
+      - ./backend/control-plane:/code
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   gateway:
