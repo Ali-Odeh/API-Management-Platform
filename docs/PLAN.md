@@ -180,7 +180,7 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 | --- | --- | --- |
 | Workspaces (tenant-ready) | Every record belongs to a workspace; one `default` workspace is seeded | MVP |
 | Admin auth | Email and password login, JWT access token (replaced by GoTrue in MT) | MVP |
-| Services CRUD | Name, upstream URL, timeout | MVP |
+| Services CRUD | Name, upstream URL, timeout (targets and health settings since MT.10) | MVP |
 | Routes CRUD | Path prefix, methods, service, auth flag | MVP |
 | Consumers CRUD | Name, email, status, rate limit | MVP |
 | API keys | Generate, list, revoke; shown once, stored hashed | MVP |
@@ -383,9 +383,9 @@ The agent writes the Alembic migrations to match this exactly; column lengths an
 
 **How the config sequence is bumped**
 
-Statement-level triggers run after every `INSERT`, `UPDATE` and `DELETE` statement on `services`, `service_targets`, `routes`, `consumers`, `api_keys` and `workspaces`. They use the statement's **transition tables** (`NEW TABLE`, `OLD TABLE`) to collect the distinct `workspace_id`s that changed. Then, once per statement, `bump_config()` adds 1 to `config_seq`, and for each of those workspaces adds 1 to `workspace_config.version` and sets `workspace_config.seq` to the new sequence, and sends `NOTIFY config_changed` with the new sequence. Because it runs inside the same transaction, a failed change bumps nothing and notifies nobody, and database cascades are covered too. `users`, `workspace_members` and `audit_events` don't bump: the gateway doesn't use them.
+Statement-level triggers run after every `INSERT`, `UPDATE` and `DELETE` statement on `services`, `service_targets`, `routes`, `consumers`, `api_keys` and `workspaces`. They use the statement's **transition tables** (`NEW TABLE`, `OLD TABLE`) to collect the distinct `workspace_id`s that changed. Then, once per transaction (since MT.10; once per statement before), `bump_workspaces()` adds 1 to `config_seq`, and for each of those workspaces adds 1 to `workspace_config.version` and sets `workspace_config.seq` to the new sequence, and sends `NOTIFY config_changed` with the new sequence. Later statements of the same transaction (a service created with its targets, a cascade, the purge) reuse that sequence, and each workspace's version moves once; a transaction-local setting (`apim.bumped_seq`) remembers it, so one change wakes the gateways once. Because it runs inside the same transaction, a failed change bumps nothing and notifies nobody, and database cascades are covered too. `users`, `workspace_members` and `audit_events` don't bump: the gateway doesn't use them.
 
-The config columns per table (MT.6), the only ones whose change bumps: `services` (`upstream_url`, `timeout_ms`, `is_active`), `routes` (`service_id`, `path_prefix`, `methods`, `strip_prefix`, `auth_required`, `is_active`), `consumers` (`status`, `rate_limit_per_min`), `api_keys` (`consumer_id`, `key_hash`, `revoked_at`), `workspaces` (`slug`, `status`, `rate_limit_per_min`, `max_concurrent`). A test lists every other column as "not config", so a new column must be decided. `bump_workspaces(uuid[])` does the bump; it is `SECURITY DEFINER`, so the logins whose writes fire the triggers need no rights on `config_seq` or `workspace_config`. `workspaces` has insert and update triggers only: its rows are never deleted.
+The config columns per table (MT.6, MT.10), the only ones whose change bumps: `services` (`timeout_ms`, `is_active`, `lb_algorithm` and the health settings `hc_*`, `passive_*`), `service_targets` (`service_id`, `url`, `weight`, `is_active`), `routes` (`service_id`, `path_prefix`, `methods`, `strip_prefix`, `auth_required`, `is_active`), `consumers` (`status`, `rate_limit_per_min`), `api_keys` (`consumer_id`, `key_hash`, `revoked_at`), `workspaces` (`slug`, `status`, `rate_limit_per_min`, `max_concurrent`). A test lists every other column as "not config", so a new column must be decided. `bump_workspaces(uuid[])` does the bump; it is `SECURITY DEFINER`, so the logins whose writes fire the triggers need no rights on `config_seq` or `workspace_config`. `workspaces` has insert and update triggers only: its rows are never deleted.
 
 Postgres rules this design must follow (checked against the Postgres 16 docs):
 
@@ -475,6 +475,8 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | GET, PATCH, DELETE | `/api/v1/workspaces/{slug}/services/{id}` | same | Read, update, delete |
 | GET, POST | `/api/v1/workspaces/{slug}/services/{id}/targets` | same | List, add a target |
 | PATCH, DELETE | `/api/v1/workspaces/{slug}/services/{id}/targets/{target_id}` | `services:write` | Update weight or state, remove |
+
+**Services and targets (MT.10):** a service is created with `targets` (1 to 50, each URL once, weight 1–1000, default 100) and optional settings with the plan's defaults: `lb_algorithm` (`round_robin`), `hc_path` (a path, default `/health`), `hc_interval_s` (1–300, default 10), `hc_unhealthy_threshold` and `hc_healthy_threshold` (1–10; 3 and 2), `passive_failures` (1–100, 5), `passive_eject_s` (1–3600, 30). `PATCH` on the service changes the settings, not the targets. A target's URL follows the upstream URL rules (scheme, no query, no credentials, the early SSRF check); a duplicate URL in one service is `409`, the 51st target `409`, and removing the last target `409` (switch it off with `is_active: false`, or delete the service). A target's `PATCH` changes `weight` and `is_active` only. Audit events: `target.create`, `target.update`, `target.delete`; `service.create` lists the targets it was made with.
 | GET, POST | `/api/v1/workspaces/{slug}/routes` | `routes:*` | List, create |
 | GET, PATCH, DELETE | `/api/v1/workspaces/{slug}/routes/{id}` | `routes:*` | Read, update, delete |
 | GET, POST | `/api/v1/workspaces/{slug}/consumers` | `consumers:*` | List, create |
@@ -604,7 +606,7 @@ ETag: "1046"
 - `limits` and `max_body_bytes` are **effective** values: the workspace's or route's own setting, or the platform default. The gateway never needs the defaults itself.
 - Missing or wrong `X-Internal-Token` → `401`. A user's JWT does not work here.
 - The answer carries every workspace (MT.6). Until the gateway tells workspaces apart by Host (MT.7), it serves every request from `default` only, so another workspace's routes and keys never work on its bare host.
-- Until service targets exist (MT.10), each service has exactly one target: its `upstream_url`, with the service's id as the target id and weight 100. Health-check, load-balancing, CORS and body-limit fields arrive with the steps that add them (MT.10, MT.11); the gateway ignores fields it doesn't know.
+- Each service carries its active targets (oldest first), `lb_algorithm` and `health` (MT.10). Migrated services kept their `upstream_url` as one target whose id is the service's id (the id the gateway used before MT.10). CORS and body-limit fields arrive with MT.11; the gateway ignores fields it doesn't know, and a service without `health` (an older control plane) gets no checks.
 - `304` carries `ETag: "<since>"`; a `200` carries `ETag: "<seq>"`. `?workspaces=` takes slugs; unknown ones are ignored.
 - Only active routes on active services with at least one active target, and non-revoked keys. Keys of blocked consumers stay in with `consumer_status: "blocked"`, so the gateway can answer `403`. Lists are sorted (routes by `path_prefix`, keys by `id`).
 - The generation, sequence and data are read in one `REPEATABLE READ` transaction. A generation change discards the cached workspace versions. The control plane streams complete workspaces in the JSON envelope and the gateway decodes them one at a time. It advances the cursor after the complete answer has been read and validated. An incomplete answer triggers a full resync.
@@ -669,14 +671,17 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 
 **Load balancing and health checks (MT)**
 
-- A service has one or more **targets** (`url`, `weight`). The gateway picks among the **healthy** targets with **smooth weighted round robin** (as nginx does): over time each target gets its share of requests in proportion to its weight, without bursts to one target.
+- A service has one or more **targets** (`url`, `weight` 1–1000, at most 50 per service). The gateway picks among the **healthy** targets with **smooth weighted round robin** (as nginx does): over time each target gets its share of requests in proportion to its weight, without bursts to one target.
 - Balancer state (the round-robin counters, health) lives per service inside the gateway and survives config updates when the service's targets haven't changed; a changed target list starts fresh.
 - **Active checks:** a goroutine per target calls `GET <target><hc_path>` every `hc_interval_s` (default 10 s) with a short timeout. `hc_unhealthy_threshold` (3) failures in a row → unhealthy; `hc_healthy_threshold` (2) successes in a row → healthy again. Any 2xx or 3xx counts as healthy.
 - **Passive checks:** from real traffic, `passive_failures` (5) connection errors or 5xx answers in a row → the target is skipped for `passive_eject_s` (30 s); then it is tried again (and the active checks confirm it).
 - New targets start healthy. Each gateway instance checks on its own; there is no shared health state.
 - No healthy target: `503 {"error":"no_healthy_upstream"}`.
 - Health checks go through the same SSRF dialer as traffic. Checkers stop when a target or its workspace leaves the config.
-- The log line records `target_id`; v2 metrics expose target health.
+- The log line records `target_id`; v2 metrics expose target health. Health changes are logged: `target unhealthy` (with the reason), `target healthy again`, `target set aside after failed requests`.
+- How (MT.10): the `upstream` package keeps one **balancer per service** in a registry that follows the config store. A service's **fingerprint** (its targets' ids, URLs and weights in order, and its health settings) decides whether a new config version keeps the balancer (round-robin position and health) or starts a fresh one; a replaced or removed balancer's checkers stop before the registry moves on. Services of suspended workspaces aren't checked. A request still on an older config than the registry's gets a balancer of its own that the registry doesn't keep, so nothing outlives its service.
+- A pick takes the balancer's lock for a loop over the targets: about 25 ns for 1 to 3 targets, 35 ns for 10, no allocations.
+- Passive checks count a connection error, a timeout (connect or the route's) and a 5xx answer; a success resets the count. A client that hung up and a connection the egress policy refused count for nothing. Active checks follow the same rule for policy refusals, so a refused target keeps answering `502 upstream_not_allowed`, not `503 no_healthy_upstream`. One check's timeout is the interval, at most 5 s; a 3xx is healthy and not followed; the first check of each target waits a random part of the interval, so checks don't fire together.
 
 **SSRF protection (MT)**
 
@@ -1035,7 +1040,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.7 Gateway tenancy: workspace from the Host, key and status checks, `X-Workspace-ID`, `workspace_id` in logs [1, 10, 17]
 - [x] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
 - [x] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
-- [ ] MT.10 Load balancing: targets, weighted round robin, active and passive health checks [14]
+- [x] MT.10 Load balancing: targets, weighted round robin, active and passive health checks [14]
 - [ ] MT.11 CORS and body size limit [15, 16]
 - [ ] MT.12 MT end to end: e2e stories, load test, README and developer docs [all]
 

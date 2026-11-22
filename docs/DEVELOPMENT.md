@@ -353,7 +353,9 @@ The gateway refuses to connect to internal addresses (private, loopback,
 link-local, Docker's own networks): a service pointing there gets
 `502 upstream_not_allowed`, and the control plane refuses plainly internal URLs
 (`http://127.0.0.1`, `http://localhost`) with 422 on save. The local stack
-allows only the mock backend (`UPSTREAM_ALLOW=mock-backend`). To try your own
+allows only the two mock backends (`UPSTREAM_ALLOW=mock-backend,mock-backend-2`;
+an older `.env` that says only `mock-backend` must add the second, or the
+load-balancing e2e stories get `502 upstream_not_allowed`). To try your own
 backend container, add its name to `UPSTREAM_ALLOW` in `.env`
 (comma-separated: names, addresses, networks such as `10.20.0.0/16`; an
 entry that could never match stops both services at start, naming it) and
