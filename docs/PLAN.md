@@ -974,26 +974,18 @@ Secrets go in a `.env` file that is listed in `.gitignore`. A committed `.env.ex
 
 ## 10. Roadmap
 
-The MVP takes about five weeks of part-time work: one week of Go basics, then four weeks of building. Week counts are estimates and assume a few sessions per week.
+The MVP takes about four weeks of part-time work. Week counts are estimates and assume a few sessions per week.
 
 | Milestone | Weeks | Outcome | Who |
 | --- | --- | --- | --- |
-| Step 0: Go basics | 1 | Ali can read and write simple Go HTTP code | Ali |
-| M1: Skeleton | 2 | Repo and Compose stack run; control plane has auth and services CRUD | Together |
-| M2: Control plane done | 3 | All MVP endpoints, tests, config snapshot | Together |
-| M3: Gateway proxies | 4 | Requests flow through the gateway with key auth | Together |
-| M4: MVP done | 5 | Rate limiting, logging, load test, README | Together |
+| M1: Skeleton | 1 | Repo and Compose stack run; control plane has auth and services CRUD | Together |
+| M2: Control plane done | 2 | All MVP endpoints, tests, config snapshot | Together |
+| M3: Gateway proxies | 3 | Requests flow through the gateway with key auth | Together |
+| M4: MVP done | 4 | Rate limiting, logging, load test, README | Together |
 | MT: Multi-tenancy and login | after M4 | GoTrue login, workspaces, roles, audit, per-workspace gateway, load balancing, SSRF, CORS, body limit | Ali with an AI agent |
 | v2: Plans and analytics (backend) | after MT | Plans and quotas, usage events, analytics endpoints, Prometheus metrics | Ali with an AI agent |
 | v3: Portal and extras (backend) | after v2 | Developer accounts and portal API, JWT auth, transforms, caching, LLM gateway mode | Ali with an AI agent |
 | FE: Frontend | **last** | The whole React app at once: dashboard, platform pages and developer portal (section 8) | Claude |
-
-**Step 0: Go basics**
-
-- [ ] Install Go and finish [A Tour of Go](https://go.dev/tour/)
-- [ ] Write a small HTTP server with `net/http` that returns JSON
-- [ ] Write one middleware function that logs each request
-- [ ] Try `httputil.NewSingleHostReverseProxy` against any local server
 
 **M1: Skeleton**
 
@@ -1088,7 +1080,7 @@ The main risk is scope: the full feature list is months of work, so nothing from
 
 | Risk | What we do about it |
 | --- | --- |
-| Go learning curve slows the gateway | Step 0 first; standard library only; small pieces with tests |
+| Go learning curve slows the gateway | Standard library only; small pieces with tests |
 | Rate limiter is wrong under concurrency | All logic in one Lua script; a test with parallel clients |
 | Config changes must reach the gateway fast | Long polling woken by Postgres `NOTIFY`: milliseconds in normal operation |
 | Revoked keys keep working while the gateway can't reach the control plane | The gateway keeps its last snapshot by design; documented in the README. Changes apply as soon as it reconnects |

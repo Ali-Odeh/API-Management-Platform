@@ -8,7 +8,6 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Milestone | Progress | Status |
 | --- | --- | --- |
-| Step 0: Go basics | ⬜⬜⬜⬜ 0/4 | 🔄 Ali, in parallel (A Tour of Go) |
 | M1: Skeleton | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
@@ -60,15 +59,6 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
 | End-to-end tests | **56 stories pass in about 22 s**, including the MT definition of done as one setup (two workspaces made with MFA, each with its own Owner, one person API Admin in one and Viewer in the other, `/v1/orders` on two targets each with an exact 10 / 10 split, keys, members and references never crossing, every change in its own workspace's log only, suspend, delete and restore seen at the gateway), a CORS preflight from an allowed and a refused origin, a credentialed call from a page, 413 with and without `Content-Length`, traffic over two targets by weight (exactly 30 and 10 of 40), traffic moving off a stopped target within its thresholds and back, `503 no_healthy_upstream`, a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**, in its own workspace on its subdomain with two targets (MT.12): the gateway adds **0.81–0.86 ms median / 1.10–1.20 ms p95** over three runs (0.78 / 0.83 ms at MT.8, 0.77 / 0.95 ms at step 4.4). The gateway's own work is unchanged (0.36–0.38 ms median in its log); the direct baseline's p95 was lower this time (1.34–1.41 ms against 1.71 ms), which widens the p95 difference; `docker compose run --rm loadtest` |
-
-## Step 0: Go basics (Ali, in parallel)
-
-| # | Step | Status |
-| --- | --- | --- |
-| 0.1 | Install Go and finish [A Tour of Go](https://go.dev/tour/) | 🔄 Go 1.27.4 installed |
-| 0.2 | Small `net/http` server that returns JSON | ⬜ |
-| 0.3 | One logging middleware | ⬜ |
-| 0.4 | `httputil.NewSingleHostReverseProxy` against the mock backend | ⬜ |
 
 ## M1: Skeleton ✅
 
