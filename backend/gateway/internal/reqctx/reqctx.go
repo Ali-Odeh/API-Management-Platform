@@ -9,6 +9,7 @@ package reqctx
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
@@ -16,7 +17,8 @@ import (
 
 // Info is the "notes card" of one request. All writes and the final read
 // happen in the request's own goroutine (the proxy calls the backend
-// synchronously), so it needs no lock.
+// synchronously), so it needs no lock; the one field written elsewhere
+// (BodyLimit) is atomic.
 type Info struct {
 	RequestID  string
 	Workspace  *config.Workspace // set by tenant: the Host's workspace; nil if none was found
@@ -26,6 +28,10 @@ type Info struct {
 	KeyID      string            // which of the consumer's keys was used (never the key itself)
 	RateLimit  string            // "" (not checked), "ok", "limited", "limited_workspace" or "unavailable" (Redis down, let through)
 	Upstream   time.Duration     // time until the backend's response headers; 0 if not called
+	// BodyLimit is the route's body limit, set when the request body went
+	// over it (MT.11); 0 otherwise. Atomic: an unannounced body is read by
+	// the transport's own goroutine while it is uploaded.
+	BodyLimit atomic.Int64
 }
 
 type key struct{}

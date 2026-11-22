@@ -44,7 +44,13 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	route, allowed := match(ws.Routes, r.URL.Path, r.Method)
+	var route *config.Route
+	var allowed []string
+	if IsPreflight(r) {
+		route = matchPath(ws.Routes, r.URL.Path) // answered by the CORS step, never forwarded
+	} else {
+		route, allowed = match(ws.Routes, r.URL.Path, r.Method)
+	}
 	if route == nil {
 		if len(allowed) > 0 {
 			w.Header().Set("Allow", strings.Join(allowed, ", "))

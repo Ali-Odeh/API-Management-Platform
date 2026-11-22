@@ -476,6 +476,8 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | GET, POST | `/api/v1/workspaces/{slug}/services/{id}/targets` | same | List, add a target |
 | PATCH, DELETE | `/api/v1/workspaces/{slug}/services/{id}/targets/{target_id}` | `services:write` | Update weight or state, remove |
 
+**Routes: body limit and CORS (MT.11):** `max_body_bytes` (1 to `MAX_REQUEST_BODY_CEILING`; `null`, the default, means `MAX_REQUEST_BODY`; `PATCH` with `null` puts a route back on the default) and `cors`: `origins` (at most 50, each exact `http(s)://host[:port]` stored as browsers send it, lowercase without a default port, or `*` alone), `methods` (empty: the route's own), `headers` (at most 50 header names), `credentials` (never with `*`, `422`) and `max_age` (0–86,400 s, default 600). `PATCH` replaces `cors` as a whole. Each rule also has a CHECK in the database. The settings take sizes as bytes or with a unit (`10MiB` binary, `10MB` decimal), and the default may not be above the ceiling.
+
 **Services and targets (MT.10):** a service is created with `targets` (1 to 50, each URL once, weight 1–1000, default 100) and optional settings with the plan's defaults: `lb_algorithm` (`round_robin`), `hc_path` (a path, default `/health`), `hc_interval_s` (1–300, default 10), `hc_unhealthy_threshold` and `hc_healthy_threshold` (1–10; 3 and 2), `passive_failures` (1–100, 5), `passive_eject_s` (1–3600, 30). `PATCH` on the service changes the settings, not the targets. A target's URL follows the upstream URL rules (scheme, no query, no credentials, the early SSRF check); a duplicate URL in one service is `409`, the 51st target `409`, and removing the last target `409` (switch it off with `is_active: false`, or delete the service). A target's `PATCH` changes `weight` and `is_active` only. Audit events: `target.create`, `target.update`, `target.delete`; `service.create` lists the targets it was made with.
 | GET, POST | `/api/v1/workspaces/{slug}/routes` | `routes:*` | List, create |
 | GET, PATCH, DELETE | `/api/v1/workspaces/{slug}/routes/{id}` | `routes:*` | Read, update, delete |
@@ -606,7 +608,7 @@ ETag: "1046"
 - `limits` and `max_body_bytes` are **effective** values: the workspace's or route's own setting, or the platform default. The gateway never needs the defaults itself.
 - Missing or wrong `X-Internal-Token` → `401`. A user's JWT does not work here.
 - The answer carries every workspace (MT.6). Until the gateway tells workspaces apart by Host (MT.7), it serves every request from `default` only, so another workspace's routes and keys never work on its bare host.
-- Each service carries its active targets (oldest first), `lb_algorithm` and `health` (MT.10). Migrated services kept their `upstream_url` as one target whose id is the service's id (the id the gateway used before MT.10). CORS and body-limit fields arrive with MT.11; the gateway ignores fields it doesn't know, and a service without `health` (an older control plane) gets no checks.
+- Each service carries its active targets (oldest first), `lb_algorithm` and `health` (MT.10). Migrated services kept their `upstream_url` as one target whose id is the service's id (the id the gateway used before MT.10). Each route carries its effective `max_body_bytes` and `cors` (MT.11: methods default to the route's own). The gateway ignores fields it doesn't know; a service without `health` or a route without these fields (an older control plane) gets no checks, no body limit and no CORS.
 - `304` carries `ETag: "<since>"`; a `200` carries `ETag: "<seq>"`. `?workspaces=` takes slugs; unknown ones are ignored.
 - Only active routes on active services with at least one active target, and non-revoked keys. Keys of blocked consumers stay in with `consumer_status: "blocked"`, so the gateway can answer `403`. Lists are sorted (routes by `path_prefix`, keys by `id`).
 - The generation, sequence and data are read in one `REPEATABLE READ` transaction. A generation change discards the cached workspace versions. The control plane streams complete workspaces in the JSON envelope and the gateway decodes them one at a time. It advances the cursor after the complete answer has been read and validated. An incomplete answer triggers a full resync.
@@ -703,12 +705,14 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 
 - Off for a route unless `cors.origins` is set. An origin matches exactly; `*` is allowed only without credentials.
 - **Preflight** (`OPTIONS` with `Origin` and `Access-Control-Request-Method`): matched by path regardless of the route's methods, answered by the gateway with `204` and the `Access-Control-Allow-*` and `Max-Age` headers, before auth (a browser never sends an API key on a preflight). Not forwarded and not rate-limited. A preflight for a route without CORS or from an unknown origin gets `204` without allow headers, so the browser blocks the call.
-- **Normal requests** with an allowed `Origin`: the answer gets `Access-Control-Allow-Origin` (the origin itself), `Vary: Origin`, and `Access-Control-Allow-Credentials` when set.
+- **Normal requests** with an allowed `Origin`: the answer gets `Access-Control-Allow-Origin` (the origin itself, or `*` for any origin without credentials), `Vary: Origin`, and `Access-Control-Allow-Credentials` when set.
+- How (MT.11): a `cors` step right after the router. A preflight (`OPTIONS` with `Origin` and `Access-Control-Request-Method`) is matched by path only, so a route without `OPTIONS` among its methods still gets its preflight; a plain `OPTIONS` is an ordinary request. Allow headers come only for an allowed origin **and** method. On a route with CORS on, the gateway owns `Access-Control-Allow-Origin` and `-Credentials`: a backend's own are replaced (a browser rejects two), also on the gateway's own errors (401, 429), so a page can read them. Origins match without case.
 
 **Body size limit (MT)**
 
 - Platform default `MAX_REQUEST_BODY` (10 MB, a control-plane setting); a route may set `max_body_bytes` up to `MAX_REQUEST_BODY_CEILING` (100 MB, checked by the control plane with 422). The snapshot carries each route's effective limit.
-- A `Content-Length` over the limit → `413 {"error":"request_too_large"}` at once, without reading the body. Bodies without a length are wrapped in `http.MaxBytesReader`; going over cuts the request with `413` if nothing was sent upstream yet, otherwise the upstream request is aborted and logged.
+- A `Content-Length` over the limit → `413 {"error":"request_too_large"}` at once, without reading the body. Bodies without a length are wrapped in `http.MaxBytesReader`; going over cuts the upload and the client gets `413` (unless the backend's answer had already started). The request log gets `body_limit`. A cut body doesn't count as a failure of the target (passive checks).
+- How (MT.11): a `bodylimit` step after CORS, before auth: a refused body costs no rate-limit token. The flag that the limit was hit is atomic on the request's notes card, because the transport reads an unannounced body in its own goroutine.
 
 **Config store**
 
@@ -1041,7 +1045,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.8 Workspace limits in the gateway: workspace bucket, in-flight limit [6]
 - [x] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
 - [x] MT.10 Load balancing: targets, weighted round robin, active and passive health checks [14]
-- [ ] MT.11 CORS and body size limit [15, 16]
+- [x] MT.11 CORS and body size limit [15, 16]
 - [ ] MT.12 MT end to end: e2e stories, load test, README and developer docs [all]
 
 **v2 and v3 (backend):** planned in detail after MT.

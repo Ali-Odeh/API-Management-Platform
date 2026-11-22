@@ -112,6 +112,14 @@ async def test_services_routes_and_keys(db: AsyncSession, workspace: Workspace) 
             "methods": ["GET", "POST"],
             "strip_prefix": True,
             "auth_required": False,
+            "max_body_bytes": 10 * 1024**2,  # the platform default (MAX_REQUEST_BODY)
+            "cors": {
+                "origins": [],  # CORS off
+                "methods": ["GET", "POST"],  # the route's own methods
+                "headers": [],
+                "credentials": False,
+                "max_age": 600,
+            },
         }
     ]
     assert [k.model_dump() for k in default.keys] == [

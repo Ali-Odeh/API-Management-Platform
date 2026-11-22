@@ -90,6 +90,14 @@ async def test_admin_flow_as_seen_by_the_gateway(
             "methods": ["GET", "POST"],
             "strip_prefix": False,
             "auth_required": True,  # secure by default
+            "max_body_bytes": 10 * 1024**2,  # the platform default (MAX_REQUEST_BODY)
+            "cors": {
+                "origins": [],  # CORS off
+                "methods": ["GET", "POST"],  # the route's own methods
+                "headers": [],
+                "credentials": False,
+                "max_age": 600,
+            },
         }
     ]
 

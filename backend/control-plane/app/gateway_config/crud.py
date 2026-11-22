@@ -13,9 +13,11 @@ from sqlalchemy import Row, select
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession
 
 from app.consumers.models import Consumer
+from app.core.config import get_settings
 from app.gateway_config.models import SINGLETON_ID, ConfigSeq, WorkspaceConfig
 from app.gateway_config.schemas import (
     ConfigAnswer,
+    CorsConfig,
     GatewayLimits,
     HealthConfig,
     KeyConfig,
@@ -196,6 +198,12 @@ async def _build(
                 Route.methods,
                 Route.strip_prefix,
                 Route.auth_required,
+                Route.max_body_bytes,
+                Route.cors_origins,
+                Route.cors_methods,
+                Route.cors_headers,
+                Route.cors_credentials,
+                Route.cors_max_age,
             )
             .join(Service, Route.service_id == Service.id)
             .where(
@@ -251,7 +259,7 @@ async def _build(
                 )
                 for s in services[workspace.id]
             ],
-            routes=[RouteConfig.model_validate(r) for r in routes[workspace.id]],
+            routes=[_route_config(r) for r in routes[workspace.id]],
             keys=[KeyConfig.model_validate(k) for k in keys[workspace.id]],
         )
     return built
@@ -262,6 +270,27 @@ def _grouped(rows: Iterable[Row[Any]]) -> defaultdict[uuid.UUID, list[Row[Any]]]
     for row in rows:
         by_workspace[row.workspace_id].append(row)
     return by_workspace
+
+
+def _route_config(r: Row[Any]) -> RouteConfig:
+    return RouteConfig(
+        id=r.id,
+        service_id=r.service_id,
+        path_prefix=r.path_prefix,
+        methods=r.methods,
+        strip_prefix=r.strip_prefix,
+        auth_required=r.auth_required,
+        max_body_bytes=(
+            r.max_body_bytes if r.max_body_bytes is not None else get_settings().max_request_body
+        ),
+        cors=CorsConfig(
+            origins=r.cors_origins,
+            methods=r.cors_methods or r.methods,
+            headers=r.cors_headers,
+            credentials=r.cors_credentials,
+            max_age=r.cors_max_age,
+        ),
+    )
 
 
 def _effective(own: int | None, column: str) -> int:

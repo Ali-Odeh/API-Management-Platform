@@ -151,3 +151,43 @@ func TestRouterWithoutTenantIs500(t *testing.T) {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
 }
+
+// A CORS preflight is matched by path alone (MT.11): it asks about another
+// method, so the route's own methods don't decide. A plain OPTIONS (no
+// Origin or no requested method) is an ordinary request.
+func TestPreflightsAreMatchedByPathOnly(t *testing.T) {
+	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{
+		{ID: "orders", PathPrefix: "/v1/orders", Methods: []string{"POST"}},
+		{ID: "v1", PathPrefix: "/v1", Methods: []string{"GET"}},
+	}})
+	var matched string
+	h := routed(snap, http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		m, _ := FromContext(r.Context())
+		matched = m.Route.ID
+	}))
+	send := func(origin, requested, path string) int {
+		req := httptest.NewRequest(http.MethodOptions, path, nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if requested != "" {
+			req.Header.Set("Access-Control-Request-Method", requested)
+		}
+		matched = ""
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := send("https://a.example", "PUT", "/v1/orders/7"); code != 200 || matched != "orders" {
+		t.Errorf("preflight: %d, matched %q; want the longest prefix, orders", code, matched)
+	}
+	if code := send("https://a.example", "GET", "/v2"); code != http.StatusNotFound {
+		t.Errorf("preflight without a route: %d, want 404", code)
+	}
+	for _, tc := range []struct{ origin, requested string }{{"", "PUT"}, {"https://a.example", ""}} {
+		if code := send(tc.origin, tc.requested, "/v1/orders"); code != http.StatusMethodNotAllowed {
+			t.Errorf("OPTIONS (origin %q, method %q): %d, want 405 like any other method", tc.origin, tc.requested, code)
+		}
+	}
+}

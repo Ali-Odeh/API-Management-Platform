@@ -96,13 +96,16 @@ class World:
         methods: tuple[str, ...] = ("GET",),
         strip_prefix: bool = False,
         auth_required: bool = True,
+        **settings: Any,
     ) -> dict[str, Any]:
+        """`settings` are other route fields, such as `cors` or `max_body_bytes` (MT.11)."""
         body = {
             "service_id": service["id"],
             "path_prefix": self.prefix(label),
             "methods": list(methods),
             "strip_prefix": strip_prefix,
             "auth_required": auth_required,
+            **settings,
         }
         route = self._create("/routes", body)
         self._routes.append(route["id"])

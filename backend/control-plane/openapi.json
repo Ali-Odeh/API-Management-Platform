@@ -345,6 +345,110 @@
         "title": "ConsumerUpdate",
         "type": "object"
       },
+      "Cors": {
+        "description": "A route's CORS settings: off while `origins` is empty.",
+        "properties": {
+          "credentials": {
+            "default": false,
+            "description": "Allow cookies and authorization headers (not with '*')",
+            "title": "Credentials",
+            "type": "boolean"
+          },
+          "headers": {
+            "default": [],
+            "description": "Request headers a browser may send",
+            "examples": [
+              [
+                "Content-Type",
+                "X-API-Key"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Headers",
+            "type": "array"
+          },
+          "max_age": {
+            "default": 600,
+            "description": "Seconds a browser may cache a preflight answer",
+            "maximum": 86400.0,
+            "minimum": 0.0,
+            "title": "Max Age",
+            "type": "integer"
+          },
+          "methods": {
+            "default": [],
+            "description": "Methods a browser may use; empty: the route's own methods",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 7,
+            "title": "Methods",
+            "type": "array"
+          },
+          "origins": {
+            "default": [],
+            "examples": [
+              [
+                "https://app.example.com"
+              ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Origins",
+            "type": "array"
+          }
+        },
+        "title": "Cors",
+        "type": "object"
+      },
+      "CorsConfig": {
+        "description": "A route's CORS settings (decision 15); off while `origins` is empty.",
+        "properties": {
+          "credentials": {
+            "title": "Credentials",
+            "type": "boolean"
+          },
+          "headers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Headers",
+            "type": "array"
+          },
+          "max_age": {
+            "title": "Max Age",
+            "type": "integer"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "origins": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Origins",
+            "type": "array"
+          }
+        },
+        "required": [
+          "origins",
+          "methods",
+          "headers",
+          "credentials",
+          "max_age"
+        ],
+        "title": "CorsConfig",
+        "type": "object"
+      },
       "ErrorOut": {
         "description": "The plan's error format (section 6): {\"detail\": \"...\"}.",
         "properties": {
@@ -1240,16 +1344,23 @@
         "type": "string"
       },
       "RouteConfig": {
-        "description": "An active route on an active service.",
+        "description": "An active route on an active service with an active target.",
         "properties": {
           "auth_required": {
             "title": "Auth Required",
             "type": "boolean"
           },
+          "cors": {
+            "$ref": "#/components/schemas/CorsConfig"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "max_body_bytes": {
+            "title": "Max Body Bytes",
+            "type": "integer"
           },
           "methods": {
             "items": {
@@ -1278,7 +1389,9 @@
           "path_prefix",
           "methods",
           "strip_prefix",
-          "auth_required"
+          "auth_required",
+          "max_body_bytes",
+          "cors"
         ],
         "title": "RouteConfig",
         "type": "object"
@@ -1291,10 +1404,36 @@
             "title": "Auth Required",
             "type": "boolean"
           },
+          "cors": {
+            "$ref": "#/components/schemas/Cors",
+            "default": {
+              "credentials": false,
+              "headers": [],
+              "max_age": 600,
+              "methods": [],
+              "origins": []
+            }
+          },
           "is_active": {
             "default": true,
             "title": "Is Active",
             "type": "boolean"
+          },
+          "max_body_bytes": {
+            "anyOf": [
+              {
+                "description": "Largest request body the gateway lets through, in bytes (null: the platform default)",
+                "examples": [
+                  1048576
+                ],
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Body Bytes"
           },
           "methods": {
             "examples": [
@@ -1347,6 +1486,9 @@
             "title": "Auth Required",
             "type": "boolean"
           },
+          "cors": {
+            "$ref": "#/components/schemas/Cors"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1360,6 +1502,17 @@
           "is_active": {
             "title": "Is Active",
             "type": "boolean"
+          },
+          "max_body_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Body Bytes"
           },
           "methods": {
             "items": {
@@ -1395,6 +1548,8 @@
           "strip_prefix",
           "auth_required",
           "is_active",
+          "max_body_bytes",
+          "cors",
           "created_at",
           "updated_at"
         ],
@@ -1402,6 +1557,7 @@
         "type": "object"
       },
       "RouteUpdate": {
+        "description": "`max_body_bytes: null` puts the route back on the platform default;\n`cors` replaces the route's CORS settings as a whole.",
         "properties": {
           "auth_required": {
             "anyOf": [
@@ -1414,6 +1570,16 @@
             ],
             "title": "Auth Required"
           },
+          "cors": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Cors"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "is_active": {
             "anyOf": [
               {
@@ -1424,6 +1590,22 @@
               }
             ],
             "title": "Is Active"
+          },
+          "max_body_bytes": {
+            "anyOf": [
+              {
+                "description": "Largest request body the gateway lets through, in bytes (null: the platform default)",
+                "examples": [
+                  1048576
+                ],
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Body Bytes"
           },
           "methods": {
             "anyOf": [

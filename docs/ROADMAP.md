@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 22, 2026 · **Current step:** MT.10 done (load balancing and health checks); next: MT.11
+**Last updated:** Nov 22, 2026 · **Current step:** MT.11 done (CORS and body size limit); next: MT.12
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅⬜⬜ 10/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅⬜ 11/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1408 passing (about 6 min), including service targets (the 50 limit, the last target kept under parallel deletes, URLs once per service), health settings, one config bump per transaction, internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
+| Tests | 1436 passing (about 6–7 min), including route CORS settings (origins normalized, `*` never with credentials) and body limits within the ceiling, service targets (the 50 limit, the last target kept under parallel deletes, URLs once per service), health settings, one config bump per transaction, internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
 | Coverage | 99% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -36,10 +36,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 542 passing (tests, table cases and fuzz seeds), including smooth weighted round robin (nginx's order for 5/1/1, exact shares over many picks), active checks against real servers with exact thresholds, passive ejection and return, balancers kept or replaced across config versions, internal upstreams refused before connecting (also through a name, and through DNS rebinding with a fake DNS server), the SSRF warning throttled per workspace and host, the workspace and consumer buckets spent together or not at all by 100 parallel requests, a slow workspace held to its in-flight share while another keeps answering, two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
-| Coverage | **98.1%** total (minimum 90%, enforced): inflight, tenant, proxy, middleware and 3 more packages at 100%, egress 98.9%, upstream 98.6%, config 95.8%, server 97.4%, ratelimit 97.9%, main 87.0% |
+| Tests | 562 passing (tests, table cases and fuzz seeds), including CORS preflights and answers (allowed and refused origins and methods, backend headers replaced), 413 for announced and streamed bodies through the real forwarder, smooth weighted round robin (nginx's order for 5/1/1, exact shares over many picks), active checks against real servers with exact thresholds, passive ejection and return, balancers kept or replaced across config versions, internal upstreams refused before connecting (also through a name, and through DNS rebinding with a fake DNS server), the SSRF warning throttled per workspace and host, the workspace and consumer buckets spent together or not at all by 100 parallel requests, a slow workspace held to its in-flight share while another keeps answering, two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
+| Coverage | **98.3%** total (minimum 90%, enforced): inflight, tenant, proxy, middleware and 3 more packages at 100%, egress 98.9%, upstream 98.6%, config 95.8%, server 97.4%, ratelimit 97.9%, main 87.0% |
 | Fuzz tests | 9 (paths, matching, prefix stripping, request IDs, config answers, Host parsing: about 800,000 Hosts in the first 15 s run, the SSRF deny list: 2.6 million addresses in 15 s against an independent reading, and the `UPSTREAM_ALLOW` parser: 738,000 lists in 15 s), 10 s each in CI |
-| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 11 µs** with the tenant and in-flight steps (10.7–11.9 µs over 3 runs; 9.9–13.2 µs at MT.7, 8.5 µs at step 3.7); a target pick **23–36 ns** for 1 to 10 targets (no allocations); an in-flight slot **23 ns** (no allocations; 79 ns with 8 goroutines on one workspace); one rate-limit check with both buckets **≈ 0.4 ms** (0.38–0.49 ms; one bucket 0.39–0.40 ms on the same machine; Windows → Docker's Redis, so a round trip dominates) |
+| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 11 µs** with the tenant, CORS, body-limit and in-flight steps (10.3–11.5 µs over 3 runs at MT.11; 10.7–11.9 µs at MT.8; 9.9–13.2 µs at MT.7, 8.5 µs at step 3.7); a target pick **23–36 ns** for 1 to 10 targets (no allocations); an in-flight slot **23 ns** (no allocations; 79 ns with 8 goroutines on one workspace); one rate-limit check with both buckets **≈ 0.4 ms** (0.38–0.49 ms; one bucket 0.39–0.40 ms on the same machine; Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back. Workspace limit 3/min (MT.8): a public route 3 × 200 then 429, and a consumer with its own budget 429 too (`limited_workspace` in the log); in-flight limit 1: `503 workspace_overloaded` with `Retry-After: 1` while a 2 s request runs, another workspace answering |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **45 stories pass in about 21 s**, including traffic over two targets by weight (exactly 30 and 10 of 40), traffic moving off a stopped target within its thresholds and back, `503 no_healthy_upstream`, a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **51 stories pass in about 20 s**, including a CORS preflight from an allowed and a refused origin, a credentialed call from a page, 413 with and without `Content-Length`, traffic over two targets by weight (exactly 30 and 10 of 40), traffic moving off a stopped target within its thresholds and back, `503 no_healthy_upstream`, a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.78 ms median / 0.83 ms p95** (since MT.8 public and protected routes both make the Redis call; the gateway's own work with Redis ≈ 0.38 ms in its log; 0.77 / 0.95 ms at step 4.4); `default`'s rate limit is raised for the run and put back; `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -138,7 +138,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.8 | Workspace limits in the gateway | ✅ |
 | MT.9 | SSRF protection | ✅ |
 | MT.10 | Load balancing and health checks | ✅ |
-| MT.11 | CORS and body size limit | ⬜ |
+| MT.11 | CORS and body size limit | ✅ |
 | MT.12 | MT end to end, load test, docs | ⬜ |
 
 The order follows dependencies: identity before roles, roles before audit and members, the config protocol before the gateway's tenancy, targets after SSRF (both live in the gateway's transport).
@@ -299,6 +299,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Route `max_body_bytes` with platform default and ceiling (control-plane settings; effective value in the snapshot); `413 request_too_large` from `Content-Length`; `MaxBytesReader` for bodies without a length
 
 **Done when:** e2e covers a preflight from an allowed and a refused origin, a credentialed call, and a 413 both with and without `Content-Length`.
+
+**Status:** ✅ Done (Nov 22). Commits `7f526cd` (control plane: route `max_body_bytes` and `cors`, the two settings, the config answer, the routes' trigger), `9bd5020` (gateway: the `cors` and `bodylimit` steps, path-only matching for preflights, `body_limit` in the log), `90b218b` (e2e), `1623334` (a proxy test for the cut body), then the docs. e2e: a preflight from the allowed origin is answered by the gateway without a key (204, the allow headers, nothing forwarded), one from another origin gets no allow headers, a credentialed call gets `Access-Control-Allow-Origin` and `-Credentials`, and a body over the limit gets 413 with and without `Content-Length` while one at the limit passes. The migration was run down and up on the local database.
 
 ### MT.12 MT end to end [all]
 
@@ -526,3 +528,10 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.10 | Passive checks count connection errors, timeouts and 5xx; client hang-ups and egress refusals count for nothing, for active checks too | A refused target must keep answering `502 upstream_not_allowed` (MT.9), not hide behind `503 no_healthy_upstream` |
 | Nov 22 | MT.10 | One active check times out at the interval, at most 5 s; a 3xx is healthy and not followed; each target's first check waits a random part of the interval | "A short timeout" made concrete; checks of many targets (and a restarted gateway's) don't fire at once |
 | Nov 22 | MT.10 | The mock backend names its instance in the echo and can be made to act down (`PUT /_mock/state`); Compose runs `mock-backend-2`, and `UPSTREAM_ALLOW` defaults to both | e2e stops a target without Docker access; it runs only in the test stack |
+| Nov 22 | MT.11 | The API shows a route's CORS settings as one `cors` object (stored in five columns); `PATCH` replaces it as a whole; origins are normalized as browsers send them; `*` stands alone and never with credentials | One setting the dashboard edits in one place; a browser compares origins exactly, so `HTTPS://App.example.com:443/` must be stored as `https://app.example.com`; browsers refuse `*` on a credentialed call |
+| Nov 22 | MT.11 | `max_body_bytes: null` in a `PATCH` puts the route back on the platform default (`PartialUpdate` lets a schema name such fields); the config answer carries the effective value | The same meaning of null as `PATCH /limits`; the gateway never needs the default |
+| Nov 22 | MT.11 | `MAX_REQUEST_BODY` and `MAX_REQUEST_BODY_CEILING` take bytes or a size with a unit (`10MiB` binary, `10MB` decimal; pydantic's `ByteSize`); defaults 10 MiB and 100 MiB; a default above the ceiling stops the start | "10MB" in the plan; binary units keep the plan's example value (10,485,760) |
+| Nov 22 | MT.11 | A preflight is matched by path only and answered `204` even when refused (no allow headers); a plain `OPTIONS` without `Origin` or a requested method stays an ordinary request (`405` if the route doesn't allow it) | The plan's rule; the browser decides from the headers, and other OPTIONS uses keep their behavior |
+| Nov 22 | MT.11 | On a route with CORS on, the gateway replaces a backend's own `Access-Control-Allow-Origin` and `-Credentials`, and sets them on the gateway's own errors too | Two such headers make a browser reject the answer; a page must be able to read a 401 or 429 |
+| Nov 22 | MT.11 | Order after the router: CORS, then the body limit, then auth | A preflight carries no key; a too-large body is refused before it costs a rate-limit token or a slot |
+| Nov 22 | MT.11 | A body cut at the limit while uploaded is the client's `413`, not a target failure, and the log gets `body_limit` | It says nothing about the backend; the decision said the limit shows in the log line |

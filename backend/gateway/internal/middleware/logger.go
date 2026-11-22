@@ -63,6 +63,9 @@ func logRequest(log *slog.Logger, r *http.Request, info *reqctx.Info, sw *status
 		slog.String("client_ip", clientIP(r)),
 		slog.Int64("bytes", sw.bytes),
 	}
+	if limit := info.BodyLimit.Load(); limit > 0 {
+		attrs = append(attrs, slog.Int64("body_limit", limit)) // refused for its size
+	}
 	if aborted {
 		// The backend failed in the middle of its answer; the client got a
 		// cut-off response.

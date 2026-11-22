@@ -41,6 +41,25 @@ def test_settings_refuse_an_unreadable_upstream_allow_list(
         Settings(_env_file=None)
 
 
+def test_settings_read_body_sizes_with_units(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAX_REQUEST_BODY", "2MiB")
+    monkeypatch.setenv("MAX_REQUEST_BODY_CEILING", "50MB")  # decimal: 50,000,000
+    settings = Settings(_env_file=None)
+    assert (settings.max_request_body, settings.max_request_body_ceiling) == (
+        2 * 1024**2,
+        50_000_000,
+    )
+
+
+def test_settings_refuse_a_default_body_limit_over_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_REQUEST_BODY", "20MiB")
+    monkeypatch.setenv("MAX_REQUEST_BODY_CEILING", "10MiB")
+    with pytest.raises(ValidationError, match="MAX_REQUEST_BODY must not be larger"):
+        Settings(_env_file=None)
+
+
 async def test_get_db_session_can_query_postgres() -> None:
     # Use the real dependency the endpoints will use, against real Postgres.
     session_gen = get_db()

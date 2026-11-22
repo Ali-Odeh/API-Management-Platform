@@ -9,8 +9,9 @@ In Docker Compose the API receives only the settings it needs from .env.
 """
 
 from functools import lru_cache
+from typing import Self
 
-from pydantic import Field, field_validator
+from pydantic import ByteSize, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.egress import AllowList, parse_allow_list
@@ -48,6 +49,18 @@ class Settings(BaseSettings):
     # A deleted workspace can be restored this long; then the purge job
     # deletes its data (decision 10).
     purge_after_days: int = Field(default=30, ge=1)
+
+    # Request bodies (decision 16): the limit of a route without its own, and
+    # the most a route may set. Bytes, or a size such as "10MiB" (binary) or
+    # "10MB" (decimal).
+    max_request_body: ByteSize = Field(default=ByteSize(10 * 1024**2), gt=0)
+    max_request_body_ceiling: ByteSize = Field(default=ByteSize(100 * 1024**2), gt=0)
+
+    @model_validator(mode="after")
+    def _default_within_ceiling(self) -> Self:
+        if self.max_request_body > self.max_request_body_ceiling:
+            raise ValueError("MAX_REQUEST_BODY must not be larger than MAX_REQUEST_BODY_CEILING")
+        return self
 
     # Internal hosts and networks tenants' services may point at anyway
     # (decision 3, SSRF): names, addresses, networks, comma-separated. The
