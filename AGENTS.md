@@ -145,6 +145,6 @@ The owner is a backend engineer (FastAPI, Spring Boot, Node) and **new to Go**; 
 
 Raise these with the owner when the milestone starts (details in PLAN.md section 12, "Patterns to apply later"):
 
-- **v2 usage events:** use the **inbox** pattern (batch ids, skip repeats) so retried batches aren't counted twice.
-- **v3 webhooks:** use the **outbox** pattern (outbox row in the same transaction, a worker delivers with retries).
-- **v2 `last_used_at`:** the gateway never writes to Postgres; the column stays null until usage events exist, and it is not config (it must not bump the config sequence).
+- **V2.1 usage events:** they go over a Redis Stream (decided Nov 22, 2026, replacing the inbox pattern): the gateway appends them off the request's path (buffered, pipelined `XADD`), so a request still makes at most one Redis round trip; the `usage-ingest` worker acks only after its commit, and `event_id` makes a re-read entry insert once.
+- **V2.1 `last_used_at`:** the gateway never writes to Postgres; the worker fills the column from the usage events, and it is not config (it must not bump the config sequence).
+- **Webhooks** (*out of plan*): if they ever come, use the **outbox** pattern (outbox row in the same transaction, a worker delivers with retries).

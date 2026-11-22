@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 22, 2026 · **Current step:** MT.12 done: **the MT milestone is complete**; next: planning v2
+**Last updated:** Nov 22, 2026 · **Current step:** MT done; v2 and the Portal planned (5 steps); **next: V2.1**
 
 ## Overview
 
@@ -13,13 +13,16 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
 | MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅✅ 12/12 | ✅ Done |
-| v2: Plans and analytics (backend) | not planned yet | ⏳ Next (to be planned) |
-| v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
-| FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
+| v2: Usage, plans and metrics (backend) | ⬜⬜⬜ 0/3 | ⏳ **Next** |
+| Portal: developer portal (backend) | ⬜⬜ 0/2 | ⏳ After v2; **the backend is complete after it** |
+| FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ After the Portal |
+| *Out of plan* | — | Kept for reference, not scheduled (see "Out of plan" below) |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
 
 **MT:** 12 of 12 steps done (100%). 🎉 Multi-tenancy and login are complete: the MT definition of done (PLAN.md section 1) is an e2e story run on every push.
+
+**Backend to finish:** 5 steps (V2.1–V2.3, P.1–P.2), each a large, self-contained step for the AI agent (planned Nov 22, 2026).
 
 ## Quality today
 
@@ -307,13 +310,92 @@ The order follows dependencies: identity before roles, roles before audit and me
 
 **Status:** ✅ Done (Nov 22). Commits `2bc9f7c` (the flaky `TestSyncDropsWhatLeftTheConfig` counts checks where they leave the gateway), `a08eb60` (a changed platform default reaches running gateways), `21a5ed4` (the MT definition of done as an e2e module), `ee70859` (k6 in its own workspace on two targets), then the docs. Every item of PLAN.md section 11 "MT adds" has an e2e story: login and MFA (`test_identity`), two workspaces on one path and the wrong host's key (`test_tenancy`, `test_mt_done`), roles (`test_members`, `test_mt_done`), last-owner rules (`test_members`), suspend and restore (`test_lifecycle`, `test_tenancy`, `test_mt_done`), audit entries for each change (`test_audit`, `test_mt_done`), the workspace rate limit (`test_workspace_limits`), SSRF (`test_ssrf`), two targets and a stopped one (`test_load_balancing`, `test_mt_done`), CORS and 413 (`test_cors_body_limit`), invitations through Mailpit's API (`test_members`). All 56 stories pass in about 22 s. k6: 0.81–0.86 ms median and 1.10–1.20 ms p95 added at 300 requests/s, three runs, 0 errors. The flaky test passed 200 runs in a row after the fix. The platform-defaults fix was checked live: restarting the control plane with `WORKSPACE_MAX_CONCURRENT=150` sent the running gateway a partial answer with the two workspaces that inherit it.
 
-## v2 and v3: backend (after MT)
+## v2: Usage, plans and metrics
 
-Plans and analytics (v2), then the developer portal API and extras (v3). Planned in detail, step by step, once MT is done. Backend only: their pages are built in FE.
+**What and how:** PLAN.md (sections 1 and 3–11; marked V2.x). **Why:** the decisions log below (the "Plan" rows of Nov 22). Backend only: the pages come in FE.
 
-## FE: Frontend (last)
+**How these steps are worked:** fewer, larger steps than MT, because an AI agent builds them. Each step is one self-contained piece of work across the gateway, the control plane, migrations, tests, e2e and docs. The agent plans its own sub-tasks, commits logically along the way, and hands back only when every "done when" item holds and both `check.ps1` scripts and the e2e tests are green. Rules in `AGENTS.md`.
 
-**The whole frontend is built last, all at once**, after every backend milestone, by Claude, against the final control-plane API and its committed `openapi.json`. Pages and areas are listed in PLAN.md section 8. The app is called by its three areas: **Dashboard** (workspace members, by role), **Platform** (Platform Admin) and **Developer portal**; not "Admin UI", because most of its users are not admins.
+| # | Step | Status |
+| --- | --- | --- |
+| V2.1 | Usage and analytics | ⬜ |
+| V2.2 | Plans and protection | ⬜ |
+| V2.3 | Metrics and v2 end to end | ⬜ |
+
+### V2.1 Usage and analytics
+
+**Outcome:** every request through the gateway is recorded, and a workspace's members see who calls what, how often, how many errors and how fast.
+
+- Gateway `usage` package: one event per proxied request (the log line's fields plus an `event_id`), buffered briefly and written with pipelined `XADD usage:events MAXLEN ~`; never delays a request; Redis down → events dropped and counted, throttled warning
+- `request_logs` partitioned by month (PLAN.md section 5), primary key (`event_id`, `ts`); retention by dropping partitions (`REQUEST_LOG_RETENTION_DAYS`, default 90); the purge job covers it
+- `usage-ingest` container with its own login `apim_ingest`: consumer group, batch insert with `ON CONFLICT DO NOTHING`, `last_used_at` (at most once a minute per key), commit, then `XACK`; entries pending on a stopped worker claimed again (`XAUTOCLAIM`)
+- `usage:read` (every role); analytics endpoints (requests, errors, latency percentiles over time; by route and by consumer) and the request-log endpoint with filters and paging
+- Decide and record how monthly partitions are created and dropped (it needs the table's owner, never the API's login)
+
+**Done when:** e2e sends known traffic through two workspaces and finds exactly that many rows in each workspace's request log, the same numbers in its analytics, and nothing of the other's; a worker stopped mid-batch and restarted loses and doubles nothing (test); with Redis stopped, requests still answer at normal speed and the dropped events are counted; `last_used_at` moves; the gateway's overhead in the load test stays in its MT.12 range.
+
+### V2.2 Plans and protection
+
+**Outcome:** an API owner sells tiers: each consumer is on a plan with a rate limit and a monthly quota, and abusive clients are held back.
+
+- `plans` per workspace (PLAN.md sections 5 and 6), `plans:read` / `plans:write` (API Admin and Owner write); one default plan per workspace; a plan above the workspace's effective limit → `422`; a plan with consumers can't be deleted (`409`)
+- `consumers.plan_id` replaces `rate_limit_per_min`; the migration makes `Default` and `Legacy <n>/min` plans so no consumer's limit changes; plans and `consumers.plan_id` bump the config; keys in the config carry `plan_id`, `rate_limit_per_min`, `monthly_quota`
+- No per-consumer override (a special customer gets its own plan); the workspace ceiling stays the Platform Admin's (MT.5)
+- Gateway: the monthly quota in the same Lua call as the buckets (`quota:{consumer_id}:{yyyymm}`, UTC months), `429 quota_exceeded` with `Retry-After` and `X-Quota-*`; a per-IP bucket on public routes; failed key attempts per IP → `429 too_many_failed_attempts` for a while; a log reason for each
+- Audit: `plan.create`, `plan.update`, `plan.delete`
+
+**Done when:** e2e: a Free consumer gets `quota_exceeded` after its (small, for the test) quota while a Pro consumer keeps working; moving a consumer to another plan applies within one config update; a plan above the workspace's limit is `422`; one IP hammering a public route gets 429 while another passes; repeated wrong keys from one IP get `too_many_failed_attempts`. Redis tests: the quota is exact under 100 parallel requests and is never spent by a refused request. The populated-database upgrade test shows every consumer's limit unchanged.
+
+### V2.3 Metrics and v2 end to end
+
+**Outcome:** the platform can be watched, and the v2 definition of done is proven on every push.
+
+- Gateway `metrics` package (the official Prometheus Go client) on its own port (`METRICS_ADDR`): requests, latency histograms, rate-limit refusals by reason, target health, in-flight, config sequence and last sync, dropped usage events (PLAN.md section 7); bounded labels
+- Control-plane metrics for `usage-ingest` (lag, batches); a `prometheus` service in Compose scraping both
+- An e2e module playing the v2 definition of done (PLAN.md section 1); k6 again with usage events on, numbers recorded here
+- README, `docs/DEVELOPMENT.md` and this file updated
+
+**Done when:** Prometheus in Compose shows the gateway's counters moving during the e2e run; the v2 module passes in CI on a fresh stack; the gateway overhead with usage events is measured and written down.
+
+## Portal: developer portal
+
+**What and how:** PLAN.md (sections 1, 5 and 6; marked P.x). Worked like v2.
+
+| # | Step | Status |
+| --- | --- | --- |
+| P.1 | Developers and catalog | ⬜ |
+| P.2 | Self-service and Portal end to end | ⬜ |
+
+### P.1 Developers and catalog
+
+**Outcome:** developers sign up on their own and browse what each workspace publishes.
+
+- `auth-portal`: a second GoTrue with its own `auth_portal` database and login, open sign-up with email confirmation (Mailpit); the control plane verifies its tokens separately; a guard test proves a portal token never opens the admin API and an admin token never opens the portal API
+- `developers` (just in time, never mixed with `users`)
+- `apis` with `api_routes`, an optional OpenAPI document (size-limited) and the lifecycle `draft` → `published` → `deprecated`; `apis:read` / `apis:write`; audited
+- Portal catalog endpoints: a workspace's published and deprecated APIs with their docs; drafts `404`
+
+**Done when:** e2e signs a developer up through the confirmation email in Mailpit, logs in, sees a published API and its document, gets `404` for a draft and for another workspace's draft, and is refused by the admin API with the same token.
+
+### P.2 Self-service and Portal end to end
+
+**Outcome:** a developer goes from sign-up to a working key without talking to anyone, and the backend is complete.
+
+- `apps` backed by consumers (PLAN.md section 5): created in a workspace on a portal-visible plan; a plan with `requires_approval` makes the app `pending` (consumer blocked) until an API Admin approves (`apps:write`); deprecated APIs take no new apps
+- Developer keys on their apps (the admin API's key rules), own usage and quota from V2.1 and V2.2
+- Developer writes audited in the workspace's log (`actor_type` `developer`)
+- An e2e module playing the Portal definition of done (PLAN.md section 1)
+- A backup and restore script: dump, restore into a fresh stack, rotate the config generation; tried for real and documented in `docs/DEVELOPMENT.md`
+
+**Done when:** the Portal module passes in CI on a fresh stack; a developer never sees another developer's apps (an isolation guard over the portal endpoints); a restored backup serves the same config at the gateway. With this step the backend is complete.
+
+## Out of plan
+
+Decided Nov 22, 2026: not scheduled, kept in PLAN.md for reference and marked *Out of plan*: JWT auth, transforms, response caching, circuit breaker (half-open), LLM gateway mode, webhooks, OpenTelemetry tracing, a Grafana dashboard, deployment to a server (Caddy, TLS, wildcard DNS) and workspace tiers. The deferred items in MT_ROLES_DECISIONS.md stay as recorded there.
+
+## FE: Frontend (after the Portal)
+
+**The whole frontend is built after the Portal, all at once**, once the backend is complete, by Claude, against the final control-plane API and its committed `openapi.json`. Pages and areas are listed in PLAN.md section 8. The app is called by its three areas: **Dashboard** (workspace members, by role), **Platform** (Platform Admin) and **Developer portal**; not "Admin UI", because most of its users are not admins.
 
 | # | Step | Status |
 | --- | --- | --- |
@@ -534,3 +616,10 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.12 | The upstream health tests count checks at the client's transport (requests started), not at the test server | `stop()` waits for the checkers, so no check can start after it returns, but a check written just before can still arrive afterwards: counting at the server was flaky |
 | Nov 22 | MT.12 | The MT definition of done is one e2e module with a module-scoped setup (`test_mt_done.py`) and two fixed Owner accounts reused by every run; changes are matched in the audit log by their `X-Request-ID` | The definition is one connected story; request ids prove each change is in its own log and not the other's without relying on target ids or timing |
 | Nov 22 | MT.12 | The k6 test runs in its own workspace `lt-<run id>` (made by the Platform Admin with MFA, rate limit raised, deleted at the end) instead of raising `default`'s limit; the direct baseline alternates between the two mock backend instances | Host-based routing and two targets as the step asks, and the test no longer changes a workspace someone else uses. k6 runs init code once per VU, so the run id, workspace and host travel in setup's data |
+| Nov 22 | Plan | The backend is finished in 5 large steps (V2.1–V2.3, P.1–P.2); the frontend follows | An AI agent builds each step whole; fewer, larger steps with clear done criteria instead of many small ones |
+| Nov 22 | Plan | Essential: usage events, request logs and analytics, plans and monthly quotas, metrics, the developer portal with the API lifecycle; plus per-IP limits on public routes and limits on failed key attempts | The test: could an API management platform be shown or sold without it? The two protections close gaps left open since 4.2 and 3.6, and open portal sign-up makes them more urgent |
+| Nov 22 | Plan | Out of plan (kept in PLAN.md, marked, not deleted): JWT auth, transforms, caching, circuit breaker, LLM gateway mode, webhooks, tracing, Grafana, deployment to a server, workspace tiers | Not needed for a complete platform; the plan stays focused |
+| Nov 22 | Plan | Usage events go over a Redis Stream (`XADD` with a cap) to a `usage-ingest` worker (consumer group, ack after commit, `event_id` for idempotency), not HTTP batches with an Inbox | The gateway only appends and moves on, a control-plane outage loses nothing, and Redis is already there. Tyk works the same way (gateway → Redis → Tyk Pump) |
+| Nov 22 | Plan | Limits come from plans that a workspace's Owner or API Admin defines; the workspace ceiling stays the Platform Admin's; a plan above the workspace's limit is `422`; no per-consumer override | Checked against the vendors' docs: AWS (account limits set by AWS, usage plans by the API owner, per-client limits never above the account's), Apigee (API products with quotas), Kong (consumer groups as tiers), Tyk (policies override a key's own settings). A special customer gets its own plan |
+| Nov 22 | Plan | The platform runs locally: the deployment step was dropped; only backup and restore moved into P.2 | The demo is local; a tested restore is still worth having |
+| Nov 22 | Plan | Developers get their own GoTrue (`auth-portal`) and table (`developers`); a developer app is backed by a consumer | Open sign-up must never touch workspace members' accounts (decision 8's v3 note); reusing consumers keeps the gateway, plans, quotas and keys unchanged |

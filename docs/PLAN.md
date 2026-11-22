@@ -1,6 +1,6 @@
 # API Management Platform: plan and architecture
 
-Nov 15, 2026 · @Ali · updated Nov 20, 2026 for multi-tenancy (MT)
+Nov 15, 2026 · @Ali · updated Nov 20, 2026 for multi-tenancy (MT) · updated Nov 22, 2026 for the completion plan (v2 and the Portal)
 
 This file says **what** is built and **how**. The reasons behind the MT design (decisions 0–17, with the options that were not chosen) are in [MT_ROLES_DECISIONS.md](MT_ROLES_DECISIONS.md); progress is in [ROADMAP.md](ROADMAP.md).
 
@@ -23,12 +23,22 @@ An admin registers a service and a route through the admin API, creates a consum
 
 A Platform Admin (with MFA) creates two workspaces, each with its own Owner. Each Owner adds team members with roles (Owner, API Admin, Viewer). Both workspaces publish a route on the same path (`/v1/orders`), each with several backend targets; their consumers call `acme.<gateway>` and `globex.<gateway>` and reach only their own backends. No member, key or request of one workspace can read, change or reach the other's data or backends. Every admin change appears in the workspace's audit log. A suspended workspace's traffic is refused; a deleted one can be restored for 30 days.
 
+**v2 definition of done**
+
+An Owner creates two plans in a workspace (Free: 60 requests/min and 1,000 requests a month; Pro: 600/min, no monthly quota) and puts one consumer on each. Both call through the gateway: Free gets `429 quota_exceeded` after its monthly quota, Pro keeps working. A plan above the workspace's own limit is refused (`422`). Every request appears in the workspace's request log within seconds, the analytics endpoints show requests, errors and latency by route and consumer, and each key's `last_used_at` moves. With Redis stopped, traffic still flows (the usage events of that time are lost and counted). A public route limits each client IP, and an IP that keeps sending wrong keys is refused for a while. The gateway's `/metrics` shows requests by workspace, route and status, and Prometheus scrapes it.
+
+**Portal definition of done**
+
+A developer signs up on the portal with email and password (a separate GoTrue with open sign-up), browses a workspace's catalog and sees only its published APIs with their OpenAPI docs; drafts are hidden, deprecated APIs are marked. They create an app, choose a plan (a plan that needs approval waits for an API Admin), get a key, call the API through the gateway, see their own usage and remaining quota, and revoke the key. They never see another developer's apps or another workspace's unpublished APIs. A database backup restored into a fresh stack serves the same config at the gateway. **After the Portal the backend is complete.**
+
 **Out of scope for now**
 
 - Billing and payments
 - Kubernetes deployment and multi-region setups
 - OAuth2 authorization server, mTLS
 - Postgres Row-Level Security, custom roles, service accounts, SSO, custom domains (all deferred; the design leaves room for them, see MT_ROLES_DECISIONS.md)
+
+**Out of plan** (decided Nov 22, 2026). Kept in this file for reference and marked *Out of plan*; not scheduled: JWT auth, transforms, response caching, circuit breaker (half-open), LLM gateway mode, webhooks, OpenTelemetry tracing, a Grafana dashboard, deployment to a server (Caddy, TLS, wildcard DNS; the platform runs locally) and workspace tiers (ready-made limit packages for workspaces). The backend is complete after v2 and the Portal; the frontend follows.
 
 **How we work**
 
@@ -48,22 +58,25 @@ The agent works through one roadmap step at a time and finishes the whole step o
 | Gateway | Go 1.23+, standard library (`net/http`, `httputil.ReverseProxy`) | Built for network services; no framework hides how the proxy works |
 | Control plane | Python 3.12, FastAPI, SQLAlchemy 2, Alembic, Pydantic v2 | Fastest way to build CRUD; opens the door to AI features later |
 | Database | PostgreSQL 16 | Source of truth for all config |
-| Cache and counters | Redis 7 | Atomic rate-limit counters through Lua scripts |
+| Cache, counters and streams | Redis 7 | Atomic rate-limit and quota counters through Lua scripts; the usage-event stream (v2) |
 | Authentication (MT) | GoTrue (Supabase Auth), self-hosted, own `auth` database | Proven login, refresh rotation, MFA, invitations and recovery; we build authorization |
 | Email (MT) | Mailpit locally and in CI; any SMTP in production | GoTrue's invitation and recovery emails |
+| Developer authentication (Portal) | A second GoTrue, own `auth_portal` database, open sign-up | Developers must never share accounts or sign-up rules with workspace members |
 | Frontend | React, TypeScript, Vite, TanStack Query, React Router, shadcn/ui, Tailwind, Recharts | Standard modern stack with typed API calls |
 | Local environment | Docker Compose | One command starts everything |
 | Load testing | k6 | Scriptable; reports p95 and p99 latency |
-| Metrics (v2) | Prometheus and Grafana | Industry standard |
+| Metrics (v2) | Prometheus (a Grafana dashboard is *out of plan*) | Industry standard |
 
 **Key decisions**
 
 - **Two services, two languages.** The gateway is on the hot path and must be fast. The control plane is CRUD and should be quick to change.
 - **The gateway never touches Postgres.** It pulls config from the control plane over HTTP and keeps it in memory. If the control plane goes down, the gateway keeps serving with its last config.
-- **Long polling for config.** The gateway asks for config and the control plane holds the request open until the config changes (or 30 seconds pass). Changes reach the gateway in milliseconds, idle traffic is one request per 30 seconds, and it is still plain HTTP with no new infrastructure. If anything goes wrong, the timeout makes it behave like ordinary polling. (Decided Nov 17, 2026; it replaces 5-second polling. Streaming over WebSocket or gRPC, as Kong and Envoy do, stays a possible v3 topic.)
+- **Long polling for config.** The gateway asks for config and the control plane holds the request open until the config changes (or 30 seconds pass). Changes reach the gateway in milliseconds, idle traffic is one request per 30 seconds, and it is still plain HTTP with no new infrastructure. If anything goes wrong, the timeout makes it behave like ordinary polling. (Decided Nov 17, 2026; it replaces 5-second polling. Streaming over WebSocket or gRPC, as Kong and Envoy do, stays possible later; it is not in the plan.)
 - **No Go web framework.** The standard library is enough, and it is what teaches the most.
 - **Ready-made authentication, our own authorization (MT).** GoTrue says who a person is; the control plane decides what they may do, from its own tables, on every request. No token exchange.
 - **One shared gateway for all workspaces (MT).** Every gateway instance serves every workspace (pooled model), protected by per-workspace limits. A dedicated gateway per large workspace stays possible later by filtering the snapshot.
+- **Usage events over a Redis Stream (v2).** The gateway appends each request's record to a stream and moves on; a separate worker writes them into Postgres. The gateway still never touches Postgres, a control-plane outage loses nothing, and Redis is already in the stack. Tyk works the same way (the gateway writes analytics to Redis, Tyk Pump moves them on). Decided Nov 22, 2026, over HTTP batches.
+- **Limits come from plans (v2).** A workspace's Owner or API Admin defines plans (rate limit and monthly quota) and puts each consumer on one, as with AWS usage plans, Apigee API products, Kong consumer groups and Tyk policies. The workspace's own ceiling stays the Platform Admin's, like an AWS account's limits. No per-consumer override: a special customer gets a plan of its own. Decided Nov 22, 2026.
 
 ## 3. System architecture
 
@@ -74,28 +87,35 @@ flowchart LR
   subgraph clients[Clients]
     C1[Consumer apps<br/>X-API-Key]
     U[Dashboard users]
+    D[Portal developers]
   end
   subgraph data[Data plane]
     GW[Gateway, Go<br/>several instances]
-    R[(Redis<br/>rate-limit buckets)]
+    R[(Redis<br/>rate limits, quotas,<br/>usage stream)]
   end
   subgraph control[Control plane]
     CP[Control plane, FastAPI]
+    ING[usage-ingest worker]
     PG[(Postgres<br/>apim database)]
     AUTH[GoTrue<br/>auth database]
+    AUTHP[GoTrue for developers<br/>auth_portal database]
     MAIL[Mailpit / SMTP]
   end
   B1[Workspace A backends<br/>targets]
   B2[Workspace B backends<br/>targets]
 
   C1 -- "acme.gw.example.com" --> GW
-  GW -- token buckets --> R
+  GW -- "token buckets, quotas,<br/>usage events" --> R
   GW -- "weighted round robin,<br/>health checks" --> B1
   GW --> B2
   GW -- "long poll<br/>/internal/config?since=seq" --> CP
   U -- login, MFA --> AUTH
   U -- "admin API + GoTrue JWT" --> CP
+  D -- "sign up, login" --> AUTHP
+  D -- "portal API + portal JWT" --> CP
   CP --> PG
+  R -- usage stream --> ING
+  ING -- request_logs --> PG
   CP -- "admin API: invite, ban" --> AUTH
   AUTH --> MAIL
 ```
@@ -105,7 +125,7 @@ Live traffic flows left to right through the gateway. Configuration is written t
 **Data plane (gateway)**
 
 - Handles every API request of every workspace, so it must be fast and stay up
-- Keeps a snapshot of all workspaces in memory (hosts, routes, targets, key hashes, limits); reads Redis only for rate-limit state
+- Keeps a snapshot of all workspaces in memory (hosts, routes, targets, key hashes, limits); uses Redis only for rate-limit and quota state and to append usage events to the stream (v2)
 - Stateless, so several instances run behind a load balancer; each one health-checks the backends on its own
 
 **Control plane**
@@ -113,7 +133,9 @@ Live traffic flows left to right through the gateway. Configuration is written t
 - Owns all configuration in Postgres and exposes the admin API, scoped by workspace in the URL
 - Verifies GoTrue JWTs and checks the member's role on every request
 - Serves the gateway only the workspaces that changed since the gateway's last sequence number
-- Can be down for a while without affecting live traffic
+- Can be down for a while without affecting live traffic; usage events wait in the stream meanwhile
+- Its `usage-ingest` worker reads the usage stream into `request_logs` (v2); the analytics endpoints read from there
+- Serves the developer portal API, with a separate GoTrue for developers (Portal)
 
 **Authentication (GoTrue)**
 
@@ -126,10 +148,10 @@ Live traffic flows left to right through the gateway. Configuration is written t
 1. A client sends `GET https://acme.gw.example.com/v1/orders/7` with `X-API-Key`.
 2. The gateway finds the workspace from the `Host` (no subdomain → `default`). Unknown host → 404; suspended workspace → 403.
 3. It matches the path against **that workspace's** routes only (no match → 404 or 405), answers a CORS preflight, and checks the body size against the route's limit (→ 413).
-4. On a protected route it hashes the key and looks it up; the key's workspace must equal the Host's workspace. Bad key → 401; blocked consumer → 403.
-5. One Redis script checks the consumer's bucket and the workspace's bucket. Empty → 429. The workspace's in-flight limit is checked in memory → 503 when full.
+4. On a protected route it hashes the key and looks it up; the key's workspace must equal the Host's workspace. Bad key → 401; blocked consumer → 403. An IP that keeps sending bad keys is refused with 429 for a while (v2).
+5. One Redis script checks the consumer's bucket (its plan's limit), the consumer's monthly quota and, on a public route, the client IP's bucket (v2), and the workspace's bucket. Empty → 429. The workspace's in-flight limit is checked in memory → 503 when full.
 6. It picks a healthy target by weighted round robin, checks the target's IP against the SSRF policy at connect time, and forwards with the route's timeout.
-7. It returns the response and writes one log line, including `workspace_id`.
+7. It returns the response, writes one log line, including `workspace_id`, and appends one usage event to the Redis stream (v2).
 
 **Config propagation**
 
@@ -142,7 +164,7 @@ Every admin change runs Postgres triggers in the same transaction. They bump the
 
 ## 4. Features by phase
 
-The MVP is the smallest set that makes one request flow end to end. v2 turns it into a product, and v3 adds the stand-out features.
+The MVP is the smallest set that makes one request flow end to end. MT makes it multi-tenant. v2 adds what an API owner needs to see and sell (usage, analytics, plans, metrics), and the Portal lets developers serve themselves; **after these two the backend is complete** (decided Nov 22, 2026). Features marked *Out of plan* stay listed for reference but are not scheduled. The step that builds each feature is named in brackets (V2.1–V2.3, P.1–P.2; ROADMAP.md).
 
 **Gateway (Go)**
 
@@ -165,14 +187,15 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 | CORS | Per route; preflight answered by the gateway | MT |
 | Body size limit | Platform default, per-route override; 413 | MT |
 | Incremental config | Receives only the workspaces that changed | MT |
-| Monthly quotas | Per-plan request limits | v2 |
-| Metrics | `/metrics` for Prometheus | v2 |
-| Usage events | Ships request records to the control plane | v2 |
-| JWT auth | Validates tokens against a JWKS URL | v3 |
-| Transforms | Adds or strips headers, rewrites paths | v3 |
-| Response caching | Caches GET responses in Redis | v3 |
-| Circuit breaker | Stops calling a failing backend | v3 |
-| LLM gateway mode | Tracks tokens and cost per key | v3 |
+| Usage events | One record per proxied request appended to a Redis Stream (`XADD`, capped length); never delays a request | v2 (V2.1) |
+| Plan limits and monthly quotas | Rate limit and monthly quota from the consumer's plan; `429 quota_exceeded` | v2 (V2.2) |
+| Per-IP limits | A bucket per client IP on public routes; an IP with repeated bad keys refused for a while | v2 (V2.2) |
+| Metrics | `/metrics` for Prometheus | v2 (V2.3) |
+| JWT auth | Validates tokens against a JWKS URL | *Out of plan* |
+| Transforms | Adds or strips headers, rewrites paths | *Out of plan* |
+| Response caching | Caches GET responses in Redis | *Out of plan* |
+| Circuit breaker | Stops calling a failing backend | *Out of plan* |
+| LLM gateway mode | Tracks tokens and cost per key | *Out of plan* |
 
 **Control plane (FastAPI)**
 
@@ -185,8 +208,9 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 | Consumers CRUD | Name, email, status, rate limit | MVP |
 | API keys | Generate, list, revoke; shown once, stored hashed | MVP |
 | Gateway config endpoint | One snapshot of everything the gateway needs | MVP |
-| Plans | Rate limit and monthly quota tiers | v2 |
-| Usage analytics | Requests, errors and latency by consumer and route | v2 |
+| Plans | Rate limit and monthly quota per plan, defined per workspace by the Owner or API Admin; every consumer on one plan | v2 (V2.2) |
+| Usage ingest and request logs | The `usage-ingest` worker reads the stream into monthly partitions of `request_logs`; `last_used_at` on keys; retention | v2 (V2.1) |
+| Usage analytics | Requests, errors and latency by workspace, route and consumer; the request log with filters | v2 (V2.1) |
 | GoTrue authentication | Verify GoTrue JWTs; users created just in time; MFA required for the Platform Admin | MT |
 | Workspaces and roles | Several workspaces; Owner, API Admin, Viewer per membership; permission checks on every endpoint | MT |
 | Members | Add by email (GoTrue invite for new people), change role, remove, leave; Owner rules | MT |
@@ -195,8 +219,11 @@ The MVP is the smallest set that makes one request flow end to end. v2 turns it 
 | Audit log | Who changed what, and when; Platform Admin actions included | MT (moved from v3) |
 | Service targets | Several backend URLs per service with weights and health-check settings | MT |
 | Route CORS and body limit | Per-route settings | MT |
-| API lifecycle | Draft, published, deprecated | v3 |
-| Developer accounts | Sign-up and self-service keys for the portal | v3 |
+| APIs and their lifecycle | An API groups routes with its OpenAPI document: draft, published, deprecated | Portal (P.1) |
+| Developer catalog | A workspace's published APIs, with their docs, for signed-in developers | Portal (P.1) |
+| Developer accounts | Sign-up and login through the developers' own GoTrue | Portal (P.1) |
+| Developer apps and keys | Apps on a plan (approval when the plan needs it), own keys, own usage and quota | Portal (P.2) |
+| Backup and restore | A tested script: dump, restore into a fresh stack, rotate the config generation | Portal (P.2) |
 
 ## 5. Database design
 
@@ -329,7 +356,7 @@ erDiagram
   }
 ```
 
-`text_array` is Postgres `text[]` (Mermaid can't write brackets). v2 adds `plans` and `request_logs` (below).
+`text_array` is Postgres `text[]` (Mermaid can't write brackets). v2 and the Portal add the tables listed below (`plans`, `request_logs`, `developers`, `apis`, `api_routes`, `apps`); `consumers.rate_limit_per_min` moves to `plans` in V2.2.
 
 **Constraints and indexes (part of the design, not left to the implementation)**
 
@@ -346,7 +373,7 @@ erDiagram
 | `workspace_config` | PK and FK `workspace_id`; index on `seq` (the `since` query) |
 | `config_seq` | single row: CHECK `id = 1` |
 | `audit_events` | no FK on `workspace_id` (platform rows survive purges); `actor_type` CHECK in (`user`, `platform_admin`, `system`); indexes on (`workspace_id`, `created_at` DESC) and (`created_at`); the app's database user has INSERT and SELECT only |
-| every tenant table | index on `workspace_id`; every query filters by it; the FK to `workspaces` stays ON DELETE RESTRICT (as today), so the purge job deletes children first: `api_keys`, `routes`, `service_targets`, `services`, `consumers`, `workspace_members`, the workspace's `audit_events`. It keeps `workspace_config` (MT.6): its newer `seq` is how a gateway that was away learns the workspace is gone |
+| every tenant table | index on `workspace_id`; every query filters by it; the FK to `workspaces` stays ON DELETE RESTRICT (as today), so the purge job deletes children first: `api_keys`, `routes`, `service_targets`, `services`, `consumers`, `workspace_members`, the workspace's `audit_events`. It keeps `workspace_config` (MT.6): its newer `seq` is how a gateway that was away learns the workspace is gone. The tables added by v2 and the Portal that hold workspace data (`plans`, `request_logs`, `apis`, `api_routes`, `apps`) join this list; the existing guard test makes sure |
 | every table | `updated_at` is set by a `BEFORE UPDATE` trigger (`set_updated_at`), not by the ORM, so updates from triggers, bulk statements and SQL keep it correct; it moves only when the row really changed (MT.1) |
 
 The agent writes the Alembic migrations to match this exactly; column lengths and index names are its choice.
@@ -398,7 +425,7 @@ Postgres rules this design must follow (checked against the Postgres 16 docs):
 
 The application's database user has only `INSERT` and `SELECT` on `audit_events`. A retention job (default 1 year), running as a separate database user, is the only thing that deletes rows. Each change and its audit row are written in the same transaction. Audit events must exclude secrets. The log records keys by prefix and strips userinfo from upstream URLs before recording old and new values.
 
-**Database logins (MT.3, MT.5).** The API can't connect as the owner, a superuser that ignores every grant. Four logins:
+**Database logins (MT.3, MT.5, V2.1).** The API can't connect as the owner, a superuser that ignores every grant. Five logins (the fifth from V2.1):
 
 | Login | Setting | May |
 | --- | --- | --- |
@@ -406,15 +433,30 @@ The application's database user has only `INSERT` and `SELECT` on `audit_events`
 | `apim_app` | `DATABASE_URL` | read and write application tables, with only `INSERT` and `SELECT` on `audit_events`, only `SELECT` on `config_seq` and `workspace_config`, and no access to `alembic_version` |
 | `apim_retention` | `AUDIT_RETENTION_DATABASE_URL` | `SELECT` and `DELETE` on `audit_events`, nothing else |
 | `apim_purge` | `PURGE_DATABASE_URL` | the workspace purge job (MT.5): `SELECT` and `DELETE` on every table with workspace data, audit events included; `INSERT` on `audit_events` (its own `workspace.purged`); `UPDATE` of `workspaces.status` only. The config triggers its deletes run need nothing more: `bump_workspaces` is `SECURITY DEFINER` (MT.6) |
+| `apim_ingest` | `INGEST_DATABASE_URL` | the `usage-ingest` worker (V2.1): `INSERT` on `request_logs` and `UPDATE` of `api_keys.last_used_at` only. Creating and dropping monthly partitions needs the table's owner; V2.1 decides how that upkeep runs (never with the API's login) |
 
-The one-shot `control-plane-db-init` service creates or updates the three logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
+The one-shot `control-plane-db-init` service creates or updates its logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
 
-**v2 tables**
+**v2 tables (V2.1, V2.2)**
 
 | Table | Columns | Notes |
 | --- | --- | --- |
-| `plans` | `workspace_id` (FK), `name`, `rate_limit_per_min`, `monthly_quota` | Replaces the per-consumer limit; `consumers` gets `plan_id` |
-| `request_logs` | `ts`, `workspace_id`, `consumer_id`, `route_id`, `method`, `path`, `status`, `latency_ms` | Partition by month; feeds the analytics pages |
+| `plans` | `workspace_id` (FK), `name`, `rate_limit_per_min`, `monthly_quota` (NULL = none), `is_default`, `portal_visible` and `requires_approval` (Portal) | Defined per workspace by the Owner or API Admin. Unique (`workspace_id`, `name`); exactly one default per workspace (partial unique index). `rate_limit_per_min` 1–100,000 and never above the workspace's effective limit (`422`); `monthly_quota` NULL or > 0. A plan with consumers can't be deleted (`409`), nor can the default plan |
+| `consumers` | + `plan_id` (NOT NULL, composite FK (`plan_id`, `workspace_id`) → `plans`, ON DELETE RESTRICT); `rate_limit_per_min` dropped | A consumer created without a plan gets the workspace's default plan. No per-consumer override: a special customer gets its own plan |
+| `request_logs` | `event_id` (uuid, made by the gateway), `ts`, `workspace_id`, `request_id`, `consumer_id`, `key_id`, `route_id`, `target_id`, `method`, `path`, `status`, `latency_ms`, `upstream_ms`, `bytes`, `client_ip`, `ratelimit` | Partitioned by month on `ts`; primary key (`event_id`, `ts`), so a re-read event is inserted once (`ON CONFLICT DO NOTHING`). No foreign keys (rows outlive what they name). Indexes on (`workspace_id`, `ts` DESC) and (`workspace_id`, `consumer_id`, `ts`). Retention `REQUEST_LOG_RETENTION_DAYS` (default 90) drops whole partitions. Path without the query string, never a key |
+
+**The move to plans (V2.2):** every workspace gets a default plan `Default` (60 requests/min, the MVP's consumer default; no monthly quota). Consumers whose `rate_limit_per_min` differs get one plan per distinct value (`Legacy <n>/min`), so no consumer's limit changes in the upgrade. Plans change the gateway's config: `plans` gets the config triggers with `rate_limit_per_min` and `monthly_quota` as its config columns, and `consumers.plan_id` replaces `consumers.rate_limit_per_min` among the config columns.
+
+**Portal tables (P.1, P.2)**
+
+| Table | Columns | Notes |
+| --- | --- | --- |
+| `developers` | `auth_user_id` (unique, the developers' GoTrue `sub`), `email` (unique, lowercase), `status` (`active`, `blocked`) | Not workspace members and never in `users`: two kinds of people with separate GoTrue instances. Created just in time on the first portal request |
+| `apis` | `workspace_id` (FK), `name`, `slug` (unique per workspace), `description`, `status` (`draft`, `published`, `deprecated`), `openapi` (jsonb, optional, size-limited) | What the catalog shows. Only `published` and `deprecated` reach developers; `deprecated` takes no new apps |
+| `api_routes` | `api_id`, `route_id`, `workspace_id` | The routes that make up an API (composite FKs on `workspace_id`); a route belongs to at most one API |
+| `apps` | `workspace_id` (FK), `developer_id` (FK), `consumer_id` (FK, unique), `name`, `status` (`pending`, `approved`, `rejected`) | A developer's app in one workspace, backed by a consumer, so the gateway, plans, quotas and keys work unchanged. An app on a plan that `requires_approval` starts `pending` with its consumer `blocked` until an API Admin approves |
+
+The exact columns of the Portal tables are confirmed in P.1 and P.2 and recorded in the ROADMAP decisions log; the rules above (separate identities, an app is a consumer, workspace-scoped composite keys) are fixed.
 
 **API key format**
 
@@ -426,7 +468,10 @@ A key looks like `ak_live_` followed by 32 random characters. The control plane 
 | --- | --- | --- | --- |
 | `rl:{consumer_id}` | Hash (`tokens`, `ts`) | Token bucket per consumer, shared by all of its keys | 2 minutes idle |
 | `rlws:{workspace_id}` | Hash (`tokens`, `ts`) | Token bucket per workspace, checked in the same script | 2 minutes idle |
-| `quota:{consumer_id}:{yyyymm}` | Counter | Monthly quota (v2) | 35 days |
+| `quota:{consumer_id}:{yyyymm}` | Counter | Monthly quota from the consumer's plan (V2.2); months are UTC | 35 days |
+| `rlip:{workspace_id}:{ip}` | Hash (`tokens`, `ts`) | Per-IP bucket on public routes (V2.2) | 2 minutes idle |
+| `authfail:{workspace_id}:{ip}` | Counter | Failed key attempts per IP (V2.2) | the refusal window |
+| `usage:events` | Stream | One entry per proxied request (V2.1), read by the `usage-ingest` consumer group; capped with `MAXLEN ~` | trimmed by length |
 
 If Redis Cluster is ever used, the two keys of one script must share a hash slot (e.g. a `{workspace_id}` hash tag in both).
 
@@ -451,6 +496,8 @@ Roles are ordered `owner > api_admin > viewer`. Each endpoint checks a permissio
 | `services:read`, `routes:read`, `consumers:read`, `keys:read`, `members:read`, `workspace:read` | ✅ | ✅ | ✅ |
 | `services:write`, `routes:write`, `consumers:write`, `keys:write` | | ✅ | ✅ |
 | `audit:read` | | ✅ | ✅ |
+| `plans:read`, `usage:read`, `apis:read`, `apps:read` (v2, Portal) | ✅ | ✅ | ✅ |
+| `plans:write`, `apis:write`, `apps:write` (approve, reject, block) (v2, Portal) | | ✅ | ✅ |
 | `members:write`, `workspace:write`, `workspace:delete` | | | ✅ |
 
 The **Platform Admin** (`users.is_platform_admin`) may do everything in every workspace, plus the platform endpoints. Platform endpoints require MFA: a token without `aal: "aal2"` → `403 mfa_required`; anyone else → `403 platform_admin_required`. A 403 carries a short code as `detail` (`user_disabled`, `account_conflict`, `mfa_required`, `platform_admin_required`, `permission_denied`) so the dashboard can act on it.
@@ -487,6 +534,13 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | DELETE | `/api/v1/workspaces/{slug}/keys/{id}` | `keys:write` | Revoke a key |
 | GET | `/api/v1/workspaces/{slug}/audit-events` | `audit:read` | The workspace's audit log |
 | GET | `/api/v1/audit-events` | Platform Admin | All audit events |
+| GET, POST | `/api/v1/workspaces/{slug}/plans` | `plans:read`, `plans:write` | List, create (V2.2) |
+| GET, PATCH, DELETE | `/api/v1/workspaces/{slug}/plans/{id}` | `plans:*` | Read, update, delete (V2.2) |
+| GET | `/api/v1/workspaces/{slug}/analytics/...` | `usage:read` | Requests, errors and latency over time, by route and by consumer (V2.1) |
+| GET | `/api/v1/workspaces/{slug}/request-logs` | `usage:read` | The request log, filtered and paged (V2.1) |
+| GET, POST, PATCH, DELETE | `/api/v1/workspaces/{slug}/apis[/{id}]` | `apis:*` | APIs, their routes, OpenAPI document and status (P.1) |
+| GET, PATCH | `/api/v1/workspaces/{slug}/apps[/{id}]` | `apps:*` | Developers' apps: approve, reject, block (P.2) |
+| various | `/api/v1/portal/...` | developer JWT | The developer portal API (below; P.1, P.2) |
 | PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}`; also bans or unbans them in GoTrue (an account not linked yet is found by exact email). The row is locked across the GoTrue calls. Disabling yourself → `409`. GoTrue failing or timing out (the lookup or the ban) → `502` with the safe side kept: a disable stays (repeat to finish the ban), an enable isn't made |
 | GET | `/internal/config` | internal token | Config for the gateway |
 | GET | `/health` | none | Liveness |
@@ -536,6 +590,28 @@ Transition rules (MT.5):
 **Quotas** (defaults, adjustable per workspace by the Platform Admin): 100 services, 500 routes, 5,000 consumers, 10 active keys per consumer. Over a quota → `409 quota_exceeded`. Creation locks the workspace row (`FOR NO KEY UPDATE`) before counting, so parallel creations can't overshoot. Lowering a quota below what a workspace has refuses new objects and removes nothing.
 
 **Workspace answer:** every workspace response carries `status`, `status_reason`, `deleted_at`, `purge_after`, `limits` (effective values) and `limit_overrides` (the workspace's own, `null` = default); `GET /workspaces/{slug}` adds `usage` (`services`, `routes`, `consumers`). `PATCH /limits` bounds: rate limit 1–1,000,000, in flight 1–10,000, services 1–10,000, routes 1–100,000, consumers 1–1,000,000.
+
+**Plans and quotas (V2.2)**
+
+- Three levels, as in AWS API Gateway (account limits set by AWS, usage plans set by the API owner): the Platform Admin sets each workspace's ceiling (MT.5, unchanged; Owners see it read-only); the workspace's Owner or API Admin defines plans and puts consumers on them; there is no per-consumer override.
+- A plan's `rate_limit_per_min` can't be above the workspace's effective rate limit (`422`): one consumer could never use it. The sum over all consumers may exceed the workspace's limit (oversubscription, as everywhere); the workspace bucket still holds the total. Lowering a workspace's limit below an existing plan's changes no plan; the workspace bucket enforces the lower value.
+- Monthly quota: counted per consumer per calendar month (UTC) in Redis, at the gateway, in the same Lua call as the buckets. Over it: `429 {"error":"quota_exceeded"}` with `Retry-After` until the month ends and `X-Quota-Limit` / `X-Quota-Remaining`. Redis down: fail open, like the rate limit.
+- Moving a consumer to another plan applies with the next config update; the month's count stays.
+- Audit events: `plan.create`, `plan.update`, `plan.delete`; a consumer's plan change is `consumer.update`.
+
+**Usage and analytics (V2.1)**
+
+- The gateway appends one event per proxied request (the log line's fields plus an `event_id`) to `usage:events`, buffered in memory for at most about a second and written with pipelined `XADD ... MAXLEN ~`. Redis slow or down: the events are dropped, counted (a metric in V2.3) and reported in a throttled warning; a request is never delayed.
+- `usage-ingest` (its own container and login) reads with a consumer group, inserts a batch with `ON CONFLICT DO NOTHING`, updates `last_used_at` (at most once a minute per key), commits, then `XACK`s. Entries left pending by a stopped worker are claimed again (`XAUTOCLAIM`); several workers can run side by side.
+- Analytics come from `request_logs` by SQL aggregation, per workspace, in buckets of a minute, an hour or a day, at most 31 days per query. Requests refused before a workspace was known (unknown host) are not stored.
+
+**Developer portal API (P.1, P.2)**
+
+- Developers sign in with their own GoTrue (`auth-portal`, open sign-up, email confirmation through Mailpit). The control plane verifies its tokens with that instance's secret; a portal token never opens the admin API, and an admin token never opens the portal API (a guard test over every endpoint).
+- `/api/v1/portal/workspaces/{slug}/apis` lists published and deprecated APIs with their docs; a draft is `404`.
+- `/api/v1/portal/apps` (create in a workspace on a portal-visible plan, list own), `/apps/{id}/keys` (generate and revoke, the admin API's key rules), `/apps/{id}/usage` (requests over time, quota used). A developer sees only their own apps (`404` otherwise).
+- A plan with `requires_approval` makes a new app `pending` until an API Admin approves it.
+- Developer writes are audited in the workspace's log with `actor_type` `developer` (the CHECK gains it in P.2).
 
 **Generate a key**
 
@@ -590,7 +666,7 @@ ETag: "1046"
       ],
       "keys": [
         { "id": "k1", "key_hash": "9f86d0...", "consumer_id": "c1",
-          "consumer_status": "active", "rate_limit_per_min": 60 }
+          "consumer_status": "active", "plan_id": "p1", "rate_limit_per_min": 60, "monthly_quota": 1000 }
       ]
     }
   ],
@@ -611,6 +687,7 @@ ETag: "1046"
 - Each service carries its active targets (oldest first), `lb_algorithm` and `health` (MT.10). Migrated services kept their `upstream_url` as one target whose id is the service's id (the id the gateway used before MT.10). Each route carries its effective `max_body_bytes` and `cors` (MT.11: methods default to the route's own). The gateway ignores fields it doesn't know; a service without `health` or a route without these fields (an older control plane) gets no checks, no body limit and no CORS.
 - `304` carries `ETag: "<since>"`; a `200` carries `ETag: "<seq>"`. `?workspaces=` takes slugs; unknown ones are ignored.
 - Only active routes on active services with at least one active target, and non-revoked keys. Keys of blocked consumers stay in with `consumer_status: "blocked"`, so the gateway can answer `403`. Lists are sorted (routes by `path_prefix`, keys by `id`).
+- Since V2.2 each key carries its consumer's `plan_id` and that plan's `rate_limit_per_min` and `monthly_quota` (`null` = none), so the gateway never needs the plans themselves. The per-IP limits arrive as effective values with the workspace (V2.2).
 - The generation, sequence and data are read in one `REPEATABLE READ` transaction. A generation change discards the cached workspace versions. The control plane streams complete workspaces in the JSON envelope and the gateway decodes them one at a time. It advances the cursor after the complete answer has been read and validated. An incomplete answer triggers a full resync.
 - Each control-plane process keeps one dedicated Postgres connection for `LISTEN`, reconnecting on its own. After waking or timing out, the sequence is re-read from the database, so a lost notification can delay an update but never hide it.
 - `?workspaces=acme,globex` (optional) limits the answer to those workspaces, for a dedicated gateway later.
@@ -628,10 +705,12 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 5. **Route match**: finds the route among **the workspace's** routes by longest path prefix and method; 404 if no path fits, 405 if a path fits but no route allows the method (a CORS preflight is matched by path only)
 6. **CORS** (MT): answers a preflight for a route with CORS on; adds CORS headers to normal answers
 7. **Body limit** (MT): 413 if `Content-Length` is over the route's limit; wraps the body so an unannounced body is cut at the limit. Matching never reads the body, so checking after it is still before any upload is accepted
-8. **Auth**: hashes `X-API-Key`, looks it up in the workspace's key map; 401 if missing, unknown, revoked or from another workspace; 403 if the consumer is blocked
-9. **Rate limit**: one Redis script checks the consumer bucket and the workspace bucket; 429 if either is empty
+8. **Auth**: hashes `X-API-Key`, looks it up in the workspace's key map; 401 if missing, unknown, revoked or from another workspace; 403 if the consumer is blocked; an IP with too many failed attempts gets 429 before the lookup (V2.2)
+9. **Rate limit**: one Redis script checks the consumer bucket (its plan's limit), the monthly quota and, on public routes, the client IP's bucket (V2.2), and the workspace bucket; 429 if any is empty
 10. **Concurrency** (MT): takes a slot of the workspace's in-flight limit; 503 when full
 11. **Proxy**: picks a healthy target by weighted round robin and forwards with the route's timeout; the dialer refuses internal IPs (SSRF)
+
+When the response is done, the logger's record also goes to the usage stream (V2.1), off the request's path.
 
 **Defaults live in the control plane.** Platform defaults (workspace rate limit, in-flight limit, body size) are control-plane settings; the snapshot carries each workspace's and each route's **effective** values, so the gateway needs no extra settings and a change of default reaches every gateway through the normal config flow. A new default comes from `.env` and changes no row, so no trigger sees it: since MT.12 `config_seq.defaults` records the defaults the answers were built with, and at every start the control plane calls `apply_config_defaults(...)`, which bumps the workspaces that inherit a changed default (a NULL limit of their own, or a route without its own body limit) and stores the new values, in one transaction. Running gateways get those workspaces on their next poll, like any other change. All control-plane instances must run with the same defaults.
 
@@ -660,7 +739,7 @@ The gateway is a chain of middleware around one reverse proxy. Each middleware e
 - No key: `401 missing_api_key`. Unknown, revoked or doubled key: `401 invalid_api_key` (unknown and revoked look the same on purpose). Blocked consumer: `403 consumer_blocked`. Every 401 carries `WWW-Authenticate: ApiKey header="X-API-Key"`.
 - On every route, `X-API-Key` and any client-sent `X-Consumer-ID` and `X-Workspace-ID` are removed before forwarding (Kong's `hide_credentials`, turned on). A valid key adds `X-Consumer-ID` for the backend; every request gets the trusted `X-Workspace-ID`.
 - The log line gets `consumer_id` and `key_id` (also for a blocked consumer); the key itself never appears.
-- Later: limiting failed attempts per IP (after the rate limiter), `last_used_at` (v2 usage events), JWT (v3).
+- Since V2.2 failed attempts are limited per IP; `last_used_at` comes from the usage events (V2.1); JWT auth is *out of plan*.
 
 **Proxy (step 3.4)**
 
@@ -728,7 +807,7 @@ Details (step 3.2):
 
 **Token bucket**
 
-Each consumer has one bucket with capacity equal to its `rate_limit_per_min`, refilled continuously. All of a consumer's keys share that bucket, because the limit is set on the consumer: a bucket per key would let a consumer multiply its limit just by creating more keys (changed Nov 16, 2026). One Lua script does the whole check so two gateway instances cannot both spend the last token:
+Each consumer has one bucket with capacity equal to its `rate_limit_per_min` (its plan's since V2.2), refilled continuously. All of a consumer's keys share that bucket, because the limit is set on the consumer: a bucket per key would let a consumer multiply its limit just by creating more keys (changed Nov 16, 2026). One Lua script does the whole check so two gateway instances cannot both spend the last token:
 
 ```lua
 -- KEYS[1] = rl:{consumer_id}   ARGV[1] = capacity (requests per minute)
@@ -756,11 +835,18 @@ Details (MT.8): when the request is allowed, `remaining` is the consumer's bucke
 
 **Rate-limit middleware (step 4.2)**
 
-- Runs after auth: it needs the consumer and its `rate_limit_per_min` (from the snapshot), and requests refused with 401/403 cost no budget. Public routes (`auth_required = false`) have no consumer; since MT they are limited by the workspace bucket. A per-IP limit for them stays a v2 idea.
+- Runs after auth: it needs the consumer and its `rate_limit_per_min` (from the snapshot), and requests refused with 401/403 cost no budget. Public routes (`auth_required = false`) have no consumer; since MT they are limited by the workspace bucket. Since V2.2 they also have a per-IP bucket.
 - Allowed: `X-RateLimit-Limit` and `X-RateLimit-Remaining` on the response (the consumer's bucket; the workspace's on public routes). Empty bucket: `429 {"error":"rate_limit_exceeded"}` with the same headers and `Retry-After` in whole seconds (rounded up, at least 1).
 - Fail open: if Redis doesn't answer within 50 ms, the request goes through without rate-limit headers. The warning is throttled to one line per 10 s, with a count of the held-back ones, so an outage can't flood the log. After Redis comes back, limiting resumes within about 3 s (go-redis retries dialing in the background instead of on every request).
 - The request log's `ratelimit` field is `""` (not limited), `"ok"`, `"limited"` (429 by the consumer bucket), `"limited_workspace"` (429 by the workspace bucket, MT) or `"unavailable"` (Redis down, let through). The client gets the same `429 rate_limit_exceeded` either way.
 - The Redis client connects lazily (Redis down at startup is fine), has 50 ms read/write/pool timeouts and no retries.
+
+**Metrics (V2.3)**
+
+- `GET /metrics` on its own listen address (`METRICS_ADDR`, default `:9091`), not on the public port, in the Prometheus text format (the official Go client).
+- `gateway_requests_total` by workspace, route and status class; latency histograms (total and upstream) by workspace; rate-limit refusals by reason (consumer, workspace, quota, IP); target health; in-flight per workspace; config sequence and last sync time; dropped usage events.
+- Labels stay bounded: workspace and route ids come from the config, never from the request; unmatched requests share one label.
+- The control plane adds `usage-ingest` lag and batch counts. Compose runs Prometheus to scrape both. A Grafana dashboard is *out of plan*.
 
 **Error responses**
 
@@ -780,6 +866,8 @@ Details (MT.8): when the request is allowed, `remaining` is the consumer's bucke
 | 405 | A route's path fits but none allows the method; `Allow` lists the methods | `{"error":"method_not_allowed"}` |
 | 503 | No config loaded yet (gateway just started); `Retry-After: 1` | `{"error":"config_not_loaded"}` |
 | 429 | Rate limit hit (with `Retry-After` and `X-RateLimit-*`) | `{"error":"rate_limit_exceeded"}` |
+| 429 | Monthly quota of the consumer's plan used up (V2.2; `Retry-After` until the month ends) | `{"error":"quota_exceeded"}` |
+| 429 | Too many failed key attempts from one IP (V2.2) | `{"error":"too_many_failed_attempts"}` |
 | 502 | Upstream refused or reset the connection | `{"error":"bad_gateway"}` |
 | 504 | Upstream exceeded the route timeout | `{"error":"gateway_timeout"}` |
 
@@ -793,7 +881,7 @@ Logs use Go's `log/slog` with the JSON handler. The API key itself never appears
 
 ## 8. Frontend
 
-**The frontend is built last, all at once** (decided Nov 20, 2026): after MT and after the v2 and v3 backend work, Claude builds the whole React app in one milestone (FE) against the final control-plane API and its OpenAPI spec. Until then the backend is driven through Swagger, scripts and the e2e tests.
+**The frontend is built last, all at once** (decided Nov 20, 2026): after MT, v2 and the Portal backend (the order since Nov 22, 2026), Claude builds the whole React app in one milestone (FE) against the final control-plane API and its OpenAPI spec. Until then the backend is driven through Swagger, scripts and the e2e tests.
 
 The app has three areas, each for a different kind of user. "Admin" is not used as a name for the whole app: most of its users are workspace members (Owner, API Admin, Viewer), and the Platform Admin has its own area.
 
@@ -801,7 +889,7 @@ The app has three areas, each for a different kind of user. "Admin" is not used 
 | --- | --- | --- |
 | **Dashboard** | `/w/{slug}/...` | Members of a workspace; what they see and can change depends on their role |
 | **Platform** | `/platform/...` | The Platform Admin only (MFA required) |
-| **Developer portal** | `/portal/...` | External developers who consume the APIs (v3) |
+| **Developer portal** | `/portal/...` | External developers who consume the APIs (Portal milestone) |
 
 Plus the shared account pages: login (GoTrue, with MFA), account and MFA setup, and the workspace switcher.
 
@@ -839,15 +927,15 @@ A Viewer sees every dashboard page read-only; buttons a role can't use are hidde
 | 16 | Users | `/platform/users` | All users, their workspaces, disable and enable | MT |
 | 17 | Platform activity | `/platform/activity` | Audit events across all workspaces | MT |
 
-**Developer portal (v3)**
+**Developer portal (Portal milestone)**
 
 | # | Page | Path | Contains | Data from |
 | --- | --- | --- | --- | --- |
-| 18 | Sign up and login | `/portal/login` | Developer account forms | v3 |
-| 19 | API catalog | `/portal/apis` | Cards for published APIs | v3 |
-| 20 | API docs | `/portal/apis/:id` | Rendered OpenAPI docs, try-it console | v3 |
-| 21 | My keys | `/portal/keys` | Create, list, revoke own keys | v3 |
-| 22 | My usage | `/portal/usage` | Requests over time, quota bar, plan | v3 |
+| 18 | Sign up and login | `/portal/login` | Developer account forms | P.1 |
+| 19 | API catalog | `/portal/apis` | Cards for published APIs | P.1 |
+| 20 | API docs | `/portal/apis/:id` | Rendered OpenAPI docs, try-it console | P.1 |
+| 21 | My keys | `/portal/keys` | Create, list, revoke own keys | P.2 |
+| 22 | My usage | `/portal/usage` | Requests over time, quota bar, plan | P.2 |
 
 "Data from" names the backend milestone that provides a page's data; every page is built in the FE milestone.
 
@@ -882,7 +970,9 @@ api-platform/
 │   │       ├── proxy/            # route matching and reverse proxy
 │   │       ├── upstream/         # targets, weighted round robin, active and passive health checks (MT)
 │   │       ├── egress/           # SSRF policy and the guarded dialer (MT)
-│   │       ├── ratelimit/        # Redis client and Lua script (consumer + workspace buckets)
+│   │       ├── ratelimit/        # Redis client and Lua script (consumer + workspace buckets; quotas and per-IP from V2.2)
+│   │       ├── usage/            # usage events to the Redis Stream (V2.1)
+│   │       ├── metrics/          # Prometheus metrics on their own port (V2.3)
 │   │       ├── inflight/         # in-flight requests per workspace (MT)
 │   │       ├── reqctx/           # per-request facts the log needs (request ID, workspace, route, target, times)
 │   │       ├── server/           # http.Server, timeouts, /health, graceful shutdown
@@ -899,13 +989,16 @@ api-platform/
 │   │   │   ├── consumers/        # same four files
 │   │   │   ├── keys/             # same four files
 │   │   │   ├── audit/            # audit_events, record(), the audit endpoints, retention job
+│   │   │   ├── plans/            # plans and their rules (V2.2)
+│   │   │   ├── usage/            # usage-ingest worker, request logs, analytics (V2.1)
+│   │   │   ├── portal/           # developers, APIs, apps, the portal API (P.1, P.2)
 │   │   │   ├── gateway_config/   # the /internal/config endpoint (incremental)
 │   │   │   ├── gotrue/           # thin client for GoTrue's admin API (invite, ban, create user)
 │   │   │   └── main.py           # creates the app, includes each router
 │   │   ├── alembic/
 │   │   └── tests/                # one test file per feature
 │   └── mock-backend/             # small FastAPI echo service
-├── frontend/                     # React dashboard (v2), organized by feature
+├── frontend/                     # React app: dashboard, platform and portal (FE milestone), organized by feature
 ├── e2e/                          # end-to-end tests (pytest) against the whole Compose stack
 ├── loadtest/                     # k6 load test (gateway.js) and a log helper; results in loadtest/README.md
 ├── docs/
@@ -927,11 +1020,15 @@ The control plane is organized by feature: everything about one feature (endpoin
 | `control-plane-db-init` | — | One-shot job that prepares the Postgres logins and runs migrations before the API starts |
 | `audit-retention` | — | Deletes audit events older than `AUDIT_RETENTION_DAYS`, at start and once a day, as `apim_retention` (MT.3); gets only that login and the period |
 | `workspace-purge` | — | Purges workspaces deleted more than `PURGE_AFTER_DAYS` ago, at start and once a day, as `apim_purge` (MT.5); gets only that login |
+| `usage-ingest` | — | Reads the usage stream into `request_logs` as `apim_ingest` (V2.1) |
+| `auth-portal` | 9998 | GoTrue for developers, own `auth_portal` database and login, open sign-up (P.1) |
+| `prometheus` | 9090 | Scrapes the gateway's and the control plane's metrics (V2.3) |
 | `mailpit` | 1025 (SMTP), 8025 (UI, bound to 127.0.0.1) | Catches every email locally and in CI (MT); its inbox holds invitation and reset links, so it isn't reachable from the network |
-| `redis` | 6379 | Rate-limit state |
+| `redis` | 6379 | Rate-limit and quota state; the usage stream (V2.1) |
 | `control-plane` | 8000 | Admin API and internal config endpoint |
 | `gateway` | 8080 (host 8081) | Public entry point. Mapped to 8081 on the host because another local app already uses 127.0.0.1:8080 |
 | `mock-backend` | 9000 | Echoes requests so there is something to proxy to; `?delay_ms=N` answers late, to see a `504` |
+| `mock-backend-2` | 9000 | A second echo instance, so a service can have two targets (MT.10) |
 | `frontend` | 5173 | The React app: dashboard, platform and portal (FE milestone) |
 
 **Environment variables**
@@ -953,6 +1050,11 @@ The control plane is organized by feature: everything about one feature (endpoin
 | Control plane | `MAX_REQUEST_BODY`, `MAX_REQUEST_BODY_CEILING` | defaults `10MB`, `100MB` |
 | Control plane | `PURGE_AFTER_DAYS`, `AUDIT_RETENTION_DAYS` | defaults `30`, `365` |
 | control-plane-db-init, workspace-purge | `PURGE_DATABASE_URL` | `postgresql+asyncpg://apim_purge:<password>@postgres:5432/apim` (MT.5) |
+| control-plane-db-init, usage-ingest | `INGEST_DATABASE_URL` | `postgresql+asyncpg://apim_ingest:<password>@postgres:5432/apim` (V2.1) |
+| usage-ingest | `REQUEST_LOG_RETENTION_DAYS` | default `90` (V2.1) |
+| Control plane | `PUBLIC_RATE_LIMIT_PER_IP_PER_MIN`, `AUTH_FAIL_LIMIT_PER_IP` | per-IP limits, sent to the gateway as effective values (V2.2) |
+| Control plane | `PORTAL_GOTRUE_URL`, `PORTAL_GOTRUE_JWT_SECRET` | the developers' GoTrue (P.1) |
+| Gateway | `METRICS_ADDR` | default `:9091`, metrics only (V2.3) |
 | GoTrue | `GOTRUE_DB_DATABASE_URL` | the `auth` database, as its own login `gotrue` (password `GOTRUE_DB_PASSWORD`), which can't open `apim` |
 | GoTrue | `GOTRUE_JWT_SECRET`, `GOTRUE_JWT_EXP` | shared with the control plane; `600` (10 minutes) |
 | GoTrue | `GOTRUE_DISABLE_SIGNUP` | `true`: joining is only by being added to a workspace |
@@ -983,9 +1085,10 @@ The MVP takes about four weeks of part-time work. Week counts are estimates and 
 | M3: Gateway proxies | 3 | Requests flow through the gateway with key auth | Together |
 | M4: MVP done | 4 | Rate limiting, logging, load test, README | Together |
 | MT: Multi-tenancy and login | after M4 | GoTrue login, workspaces, roles, audit, per-workspace gateway, load balancing, SSRF, CORS, body limit | Ali with an AI agent |
-| v2: Plans and analytics (backend) | after MT | Plans and quotas, usage events, analytics endpoints, Prometheus metrics | Ali with an AI agent |
-| v3: Portal and extras (backend) | after v2 | Developer accounts and portal API, JWT auth, transforms, caching, LLM gateway mode | Ali with an AI agent |
-| FE: Frontend | **last** | The whole React app at once: dashboard, platform pages and developer portal (section 8) | Claude |
+| v2: Usage, plans and metrics (backend) | after MT | Usage events over a Redis Stream, request logs and analytics, plans and monthly quotas, per-IP limits, Prometheus metrics (3 steps) | Ali with an AI agent |
+| Portal: developer portal (backend) | after v2 | Developer accounts, APIs and their lifecycle, catalog, self-service apps and keys, own usage; backup and restore (2 steps). **The backend is complete after it** | Ali with an AI agent |
+| FE: Frontend | after the Portal | The whole React app at once: dashboard, platform pages and developer portal (section 8) | Claude |
+| *Out of plan* | — | JWT auth, transforms, caching, circuit breaker, LLM gateway mode, webhooks, tracing, Grafana, deployment to a server, workspace tiers (section 1) | — |
 
 **M1: Skeleton**
 
@@ -1038,11 +1141,22 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 - [x] MT.9 SSRF protection: guarded dialer, allow list, early check on save [3]
 - [x] MT.10 Load balancing: targets, weighted round robin, active and passive health checks [14]
 - [x] MT.11 CORS and body size limit [15, 16]
-- [ ] MT.12 MT end to end: e2e stories, load test, README and developer docs [all]
+- [x] MT.12 MT end to end: e2e stories, load test, README and developer docs [all]
 
-**v2 and v3 (backend):** planned in detail after MT.
+**v2: Usage, plans and metrics (planned Nov 22, 2026)**
 
-**FE: Frontend (Claude, last)**
+Fewer, larger steps than MT: each one is a self-contained piece of work that an AI agent finishes completely (code, migrations, tests, e2e, docs, logical commits), planning its own sub-tasks. Outcomes and done criteria are in ROADMAP.md.
+
+- [ ] V2.1 Usage and analytics: usage events over a Redis Stream, the `usage-ingest` worker, `request_logs` by month with retention, `last_used_at`, analytics and request-log endpoints
+- [ ] V2.2 Plans and protection: plans per workspace, consumers on plans (migration), monthly quotas, per-IP limits on public routes, failed-key limits
+- [ ] V2.3 Metrics and v2 end to end: Prometheus metrics, the v2 definition of done as e2e, the load test again
+
+**Portal: developer portal (planned Nov 22, 2026)**
+
+- [ ] P.1 Developers and catalog: the developers' GoTrue, `developers`, APIs with their routes, OpenAPI documents and lifecycle, the catalog
+- [ ] P.2 Self-service and Portal end to end: apps on plans (with approval), own keys and usage, the Portal definition of done as e2e, backup and restore
+
+**FE: Frontend (Claude, after the Portal)**
 
 - [ ] FE.1 Foundation: Vite project, layout, GoTrue login and MFA, workspace switcher, role-aware routing, generated API types
 - [ ] FE.2 Dashboard pages (section 8, pages 4–14)
@@ -1064,15 +1178,18 @@ Each service has its own tests, and one end-to-end script proves the whole stack
 | Balancer and health-check tests (MT) | `go test` with fake targets (`httptest`) | Weighted distribution over many picks, unhealthy targets skipped, recovery, passive ejection and return, all-down 503 |
 | Gateway benchmarks | `go test -bench` (by hand) | Matching vs. number of routes, key lookup vs. number of keys, the whole chain without network |
 | Rate limiter tests | `go test` against a real Redis (Docker locally, database 15; a Redis service in CI); skipped without `REDIS_TEST_URL` | Burst, refill, `retry_after`, separate buckets, lowered limit, expiry, script reload, 100 concurrent requests for 50 tokens; since MT the workspace's bucket: public routes, refusal by either bucket without spending the other, the longer wait named, and 100 concurrent requests from 5 consumers spending both buckets together or not at all |
-| End to end | pytest + httpx in `e2e/`, run in its own container (`docker compose run --rm e2e`) and in CI on a fresh stack | The MVP story: admin API creates service, routes, consumers and keys, then calls through the gateway: 200 (backend sees `X-Consumer-ID`, not the key), 401, 403 after a block, 401 after a revoke, a new route live within 1 s, 404, 405, 429, 502, 504, `strip_prefix`, public routes. Own objects, always cleaned up. **MT adds:** GoTrue login (and MFA for the Platform Admin), two workspaces with the same path reaching different backends, a key used on the wrong workspace's host (401), roles (a Viewer can't write), last-owner rules, suspend (403) and restore, audit entries for each change, the workspace rate limit, SSRF (`upstream_not_allowed`), traffic spread over two targets and moved off a stopped one, CORS preflight, 413. Invitation emails are read from Mailpit's API. Since MT.12 one module plays the MT definition of done (section 1) as a whole: two workspaces with their own Owners, one person with a different role in each, `/v1/orders` on two targets in both, nothing crossing, every change in its own workspace's log only, suspend, delete and restore seen at the gateway |
+| Usage pipeline (V2.1) | pytest against Postgres and Redis; `go test` for the gateway side | Every request becomes exactly one row (a re-read entry inserts once, an entry pending on a stopped worker is claimed again), nothing waits when Redis is down, partitions and retention, analytics numbers against known traffic |
+| Plans and quotas (V2.2) | pytest; Redis tests in Go | Plan rules (above the workspace's limit `422`, the default plan, delete with consumers `409`), the migration keeps every consumer's limit, the quota exact under parallel requests and reset by month, per-IP buckets, the failed-key refusal |
+| Portal (P.1, P.2) | pytest guard tests discovering the portal endpoints | A portal token never opens the admin API and the reverse; a developer never sees another developer's apps or an unpublished API; the approval flow |
+| End to end | pytest + httpx in `e2e/`, run in its own container (`docker compose run --rm e2e`) and in CI on a fresh stack | The MVP story: admin API creates service, routes, consumers and keys, then calls through the gateway: 200 (backend sees `X-Consumer-ID`, not the key), 401, 403 after a block, 401 after a revoke, a new route live within 1 s, 404, 405, 429, 502, 504, `strip_prefix`, public routes. Own objects, always cleaned up. **MT adds:** GoTrue login (and MFA for the Platform Admin), two workspaces with the same path reaching different backends, a key used on the wrong workspace's host (401), roles (a Viewer can't write), last-owner rules, suspend (403) and restore, audit entries for each change, the workspace rate limit, SSRF (`upstream_not_allowed`), traffic spread over two targets and moved off a stopped one, CORS preflight, 413. Invitation emails are read from Mailpit's API. Since MT.12 one module plays the MT definition of done (section 1) as a whole: two workspaces with their own Owners, one person with a different role in each, `/v1/orders` on two targets in both, nothing crossing, every change in its own workspace's log only, suspend, delete and restore seen at the gateway. **v2 and the Portal add** (V2.3, P.2) one module each for their definitions of done (section 1) |
 | Load | k6 in Docker (`docker compose run --rm loadtest`); a 5 s smoke run in CI | Three runs at the same fixed rate: direct to the backend, through the gateway on a public route, and on a protected route (key + Redis). Measured at 300 requests/s: the gateway adds 0.77 ms median and 0.95 ms p95 in total; its own code about 0.08 ms, the Redis rate limit about 0.3 ms, the rest is the extra network hop. 0 errors. Since MT.8 both gateway runs make the Redis call (the workspace's bucket): 0.78 ms median, 0.83 ms p95. Since MT.12 the test runs like a tenant: its own workspace `lt-<run id>` (made by the Platform Admin with MFA, rate limit raised, deleted afterwards), called on its subdomain, with a service on both mock backend instances: 0.81–0.86 ms median, 1.10–1.20 ms p95 over three runs, the gateway's own work unchanged (0.36–0.38 ms median) |
 
 **Observability**
 
 - **MVP:** structured JSON logs from both services, with the request ID carried from the gateway to the backend.
 - **MT:** `workspace_id` on every log line of both services; admin changes in the audit log; login events in GoTrue's own log. Since MT.7 the control plane writes JSON lines: one `request` line per call (method, path without the query string, status, `latency_ms`, `request_id`, `workspace_id`; not `/health`), replacing uvicorn's access log, and every app log line during a request carries `request_id` and `workspace_id`. `httpx` logs at WARNING only (its INFO lines would show GoTrue lookups by email).
-- **v2:** Prometheus metrics from the gateway (`requests_total` by workspace, route and status, a latency histogram, `ratelimited_total`, target health, config sequence and last sync time) and a Grafana dashboard.
-- **v3:** OpenTelemetry traces across gateway and backend.
+- **v2 (V2.1, V2.3):** every request in `request_logs` with analytics on top; Prometheus metrics from the gateway and the control plane (section 7), scraped by Prometheus in Compose. A Grafana dashboard is *out of plan*.
+- *Out of plan:* OpenTelemetry traces across gateway and backend; the request ID carried end to end covers the basics.
 
 ## 12. Risks and open questions
 
@@ -1085,6 +1202,7 @@ The main risk is scope: the full feature list is months of work, so nothing from
 | Config changes must reach the gateway fast | Long polling woken by Postgres `NOTIFY`: milliseconds in normal operation |
 | Revoked keys keep working while the gateway can't reach the control plane | The gateway keeps its last snapshot by design; documented in the README. Changes apply as soon as it reconnects |
 | Request logs grow fast in Postgres (v2) | Monthly partitions and a retention job; consider ClickHouse only if needed |
+| Usage events lost while Redis is down (v2) | Accepted, like the rate limit's fail-open: requests never wait; lost events are counted in a metric and a warning |
 | Frontend drifts from the API | Types generated from the OpenAPI spec on every change |
 | A forgotten `workspace_id` filter leaks data between workspaces (MT) | Every `crud.py` function takes `workspace_id` first; automatic isolation tests over every endpoint; composite foreign keys. RLS stays possible later |
 | A tenant's backend URL reaches internal services (SSRF) (MT) | IP check in the dialer at connect time, deny by default, allow list set by the Platform Admin only |
@@ -1095,10 +1213,10 @@ The main risk is scope: the full feature list is months of work, so nothing from
 
 **Open questions**
 
-- [ ] Should the rate limit live on the consumer (MVP) or move to plans from day one?
+- [x] Should the rate limit live on the consumer (MVP) or move to plans? *Plans (V2.2), defined per workspace by the Owner or API Admin, with no per-consumer override; the workspace ceiling stays the Platform Admin's. Decided Nov 22, 2026.*
 - [x] One admin account, or several admins with roles? *One seeded admin in the MVP. MT: several members per workspace with fixed roles (Owner, API Admin, Viewer) plus a Platform Admin; see MT_ROLES_DECISIONS.md.*
-- [ ] Where will the demo run: local only, or a small cloud VM?
-- [ ] Should usage events go from the gateway over HTTP batches or a Redis stream (v2)?
+- [x] Where will the demo run? *Locally (Docker Compose). Deployment to a server is out of plan. Decided Nov 22, 2026.*
+- [x] Usage events over HTTP batches or a Redis stream? *A Redis Stream with a `usage-ingest` worker (V2.1). Decided Nov 22, 2026.*
 
 **Patterns to apply later (reminder)**
 
@@ -1106,6 +1224,6 @@ Config sync doesn't need these: the change and the sequence bump share one trans
 
 | When | Pattern | What it solves |
 | --- | --- | --- |
-| v2 usage events (gateway → control plane batches) | **Inbox** | Each batch carries an id; the control plane records processed ids and skips repeats, so a retried batch is never counted twice |
-| v3 webhooks (e.g. tell a customer "key revoked") | **Outbox** | The change and an outbox row are written in one transaction; a worker delivers with retries, so a webhook is never lost or sent for a change that rolled back |
+| v2 usage events (V2.1) | **Consumer group + idempotent insert** (replaces the planned Inbox, since events go over a Redis Stream) | The stream keeps unacknowledged entries; the worker acks only after its commit, and `event_id` makes a re-read entry insert once |
+| Webhooks (*out of plan*; e.g. tell a customer "key revoked") | **Outbox** | The change and an outbox row are written in one transaction; a worker delivers with retries, so a webhook is never lost or sent for a change that rolled back |
 | Shipping audit events to an external system (later) | **Outbox** (same idea) | Export to a SIEM or log store without losing events or sending rolled-back ones |

@@ -22,6 +22,7 @@ docker compose ps
 | `gateway` | `gateway:8080` | `localhost:8081` | The Go gateway: every API call goes through it |
 | `control-plane` | `control-plane:8000` | `localhost:8000` | Admin API, Swagger at `/docs` |
 | `mock-backend` | `mock-backend:9000` | `localhost:9000` | Echo service to proxy to (`?delay_ms=` answers late) |
+| `mock-backend-2` | `mock-backend-2:9000` | — (Compose network only) | A second echo instance, so a service can have two targets (MT.10) |
 | `auth` | `auth:9999` | `localhost:9999` | GoTrue: login, MFA, refresh, invitations |
 | `audit-retention` | — | — | Deletes audit events older than `AUDIT_RETENTION_DAYS` (default 365), at start and daily |
 | `workspace-purge` | — | — | Purges workspaces deleted more than `PURGE_AFTER_DAYS` (default 30) ago, at start and daily |
@@ -169,7 +170,7 @@ add them to `.env` only to change them (see `.env.example`).
 
 ## Control plane (FastAPI)
 
-Three database logins (PLAN.md section 5): the API uses `apim_app`
+Four database logins (PLAN.md section 5): the API uses `apim_app`
 (`DATABASE_URL`), which can't change or delete audit events; migrations and
 the startup setup (`scripts/prepare_database.py`) run in the one-shot
 `control-plane-db-init` job with `MIGRATION_DATABASE_URL`. The API container
@@ -340,7 +341,7 @@ reused by every run. They run in their own container, create their own
 objects and always delete them. For MFA they enroll their own factor named
 `e2e` on the Platform Admin and remove it again, so a factor you enrolled is
 left alone; their test person `e2e-person@example.test` and their workspace
-`e2e-tenant` are reused by every run (workspaces can be deleted only from MT.5).
+`e2e-tenant` are reused by every run.
 Each run invites a new `e2e-invitee-...@example.test`; its membership, GoTrue
 account and email are deleted, its row in `users` stays (people are never
 deleted).

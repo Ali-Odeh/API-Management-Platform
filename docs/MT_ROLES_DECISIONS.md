@@ -2,9 +2,9 @@
 
 Working log of the decisions for multi-tenancy (MT) and roles, made before writing the architecture and the plan. Started Nov 20, 2026.
 
-**Status:** 17 decided (15 and 16: feature accepted, details proposed, to confirm with the architecture). Next: write the architecture and the plan.
+**Status:** 17 decided, all built in MT (done Nov 22, 2026). The next work (v2 and the Portal) is planned in PLAN.md and ROADMAP.md; its decisions are in the ROADMAP decisions log.
 
-**Order of work:** all backend work first (MT and login, then the v2 and v3 backend); **the whole frontend comes last, all at once** (milestone FE). Its areas are named Dashboard (workspace members), Platform (Platform Admin) and Developer portal; the page list is in PLAN.md section 8.
+**Order of work:** all backend work first (MT and login, then v2 and the Portal; updated Nov 22, 2026); **the whole frontend comes after them, all at once** (milestone FE). Its areas are named Dashboard (workspace members), Platform (Platform Admin) and Developer portal; the page list is in PLAN.md section 8.
 
 | # | Topic | Status |
 | --- | --- | --- |
@@ -371,7 +371,7 @@ service_targets (service_id, url, weight, is_active)
 
 ## ⬜ Features not placed in the roadmap yet
 
-From comparing with Kong and Apigee; to be placed in phases when writing the plan:
+From comparing with Kong and Apigee. **Nov 22, 2026:** none of these is in the completion plan (v2 and the Portal); they stay here for reference. The production deployment guide is out of plan because the platform runs locally.
 
 | Feature | Importance |
 | --- | --- |
