@@ -130,7 +130,7 @@ func TestLoggerWritesOneLinePerRequest(t *testing.T) {
 		time.Sleep(40 * time.Millisecond)
 		w.WriteHeader(http.StatusCreated)
 		_, _ = io.WriteString(w, "hello")
-	}), RequestID, Logger(logs.logger()))
+	}), RequestID, Logger(logs.logger(), nil))
 
 	req := httptest.NewRequest("POST", "/v1/orders?token=secret", nil)
 	req.Header.Set(RequestIDHeader, "abc-123")
@@ -178,7 +178,7 @@ func TestLoggerRecordsTheStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var logs jsonLogger
-			h := Logger(logs.logger())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { tt.handler(w) }))
+			h := Logger(logs.logger(), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { tt.handler(w) }))
 
 			h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
@@ -192,7 +192,7 @@ func TestLoggerRecordsTheStatus(t *testing.T) {
 func TestLoggerWithoutRequestIDStillWorks(t *testing.T) {
 	var logs jsonLogger
 	var sawInfo bool
-	h := Logger(logs.logger())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := Logger(logs.logger(), nil)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		sawInfo = reqctx.Has(r.Context())
 	}))
 
@@ -210,7 +210,7 @@ func TestLoggerWithoutRequestIDStillWorks(t *testing.T) {
 // still written, marked aborted, and the panic goes on to net/http.
 func TestLoggerLogsAbortedAnswers(t *testing.T) {
 	var logs jsonLogger
-	h := Logger(logs.logger())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	h := Logger(logs.logger(), nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "half an ans")
 		panic(http.ErrAbortHandler)
 	}))
@@ -268,7 +268,7 @@ func TestRecoverTurnsAPanicInto500(t *testing.T) {
 	h := Chain(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		var m map[string]int
 		m["boom"] = 1 // a real bug: writing to a nil map panics
-	}), RequestID, Logger(logs.logger()), Recover(logs.logger()))
+	}), RequestID, Logger(logs.logger(), nil), Recover(logs.logger()))
 	req := httptest.NewRequest("GET", "/v1/x", nil)
 	req.Header.Set(RequestIDHeader, "req-42")
 	rec := httptest.NewRecorder()

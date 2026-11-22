@@ -193,7 +193,7 @@ func TestAuthWithoutRouterIs500(t *testing.T) {
 
 func TestLoggerShowsConsumerAndKey(t *testing.T) {
 	var logs jsonLogger
-	h := Logger(logs.logger())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+	h := Logger(logs.logger(), nil)(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		info := reqctx.From(r.Context())
 		info.ConsumerID, info.KeyID = "c1", "k1"
 	}))

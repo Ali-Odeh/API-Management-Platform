@@ -27,11 +27,17 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/redisconn"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/server"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/tenant"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/upstream"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/usage"
 )
+
+// usageRedisTimeout bounds one batch of usage events (V2.1). Their client is
+// separate from the rate limiter's, whose checks must answer in 50 ms.
+const usageRedisTimeout = usage.DefaultWriteTimeout
 
 func main() {
 	// os.Exit skips deferred calls, so all the work (and its defers) happens
@@ -92,10 +98,34 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 		return 1
 	}
 	defer rdb.Close()
+	usageRDB, err := redisconn.Open(cfg.RedisURL.Reveal(), usageRedisTimeout)
+	if err != nil {
+		log.Error("cannot start", "error", err)
+		return 1
+	}
+	defer usageRDB.Close()
 
-	err = server.New(cfg, apiHandler(store, cfg.BaseDomain, cfg.Egress, targets, ratelimit.New(rdb), log), log).ListenAndServe(ctx)
+	// Usage events are written until the server has stopped, so the last
+	// requests' events are written too: the recorder gets its own context,
+	// ended only after ListenAndServe returns.
+	recorder := usage.NewRecorder(usage.NewStream(usageRDB), log, usage.Options{})
+	usageCtx, stopUsage := context.WithCancel(context.WithoutCancel(ctx))
+	var usageDone sync.WaitGroup
+	usageDone.Go(func() { recorder.Run(usageCtx) })
+
+	err = server.New(cfg, apiHandler(deps{
+		source:     store,
+		baseDomain: cfg.BaseDomain,
+		egress:     cfg.Egress,
+		targets:    targets,
+		limiter:    ratelimit.New(rdb),
+		usage:      recorder,
+		log:        log,
+	}), log).ListenAndServe(ctx)
 	stop()            // if the server failed on its own, stop the poller and checkers too
+	stopUsage()       // no request is running any more: write the last events
 	background.Wait() // never exit while the poller or a health check is still running
+	usageDone.Wait()
 
 	if err != nil {
 		log.Error("gateway stopped with an error", "error", err)
@@ -130,22 +160,37 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // requests on their way to a backend hold one of the workspace's slots.
 // GET /health is answered by the server before this chain, so Docker's
 // health checks don't fill the log.
-func apiHandler(source tenant.SnapshotSource, baseDomain string, upstreams *egress.Policy, targets *upstream.Registry, limiter middleware.Allower, log *slog.Logger) http.Handler {
+//
+// The logger also hands each answered request's usage event to the
+// recorder (V2.1), which writes it to Redis in the background.
+func apiHandler(d deps) http.Handler {
+	log := d.log
 	afterMatch := middleware.Chain(
-		proxy.NewForwarder(log, upstreams, targets),
+		proxy.NewForwarder(log, d.egress, d.targets),
 		middleware.CORS(log),
 		middleware.BodyLimit(log),
 		middleware.Auth(log),
-		middleware.RateLimit(limiter, log),
+		middleware.RateLimit(d.limiter, log),
 		middleware.InFlight(&inflight.Limiter{}, log),
 	)
 	return middleware.Chain(
 		proxy.NewRouter(afterMatch),
 		middleware.RequestID,
-		middleware.Logger(log),
+		middleware.Logger(log, d.usage),
 		middleware.Recover(log),
-		tenant.Middleware(source, baseDomain),
+		tenant.Middleware(d.source, d.baseDomain),
 	)
+}
+
+// deps is what the request chain is built from.
+type deps struct {
+	source     tenant.SnapshotSource // the current config
+	baseDomain string                // GATEWAY_BASE_DOMAIN: workspaces are its subdomains
+	egress     *egress.Policy        // which upstreams may be reached (SSRF)
+	targets    *upstream.Registry    // the services' balancers
+	limiter    middleware.Allower    // the Redis rate limiter
+	usage      middleware.UsageRecorder
+	log        *slog.Logger
 }
 
 // healthcheck is what Docker runs inside the container to ask "are you up?".
