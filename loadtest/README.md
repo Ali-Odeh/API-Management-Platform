@@ -5,21 +5,26 @@ same requests at the same fixed rate three times, one run after the other:
 
 | Run | Path | Shows |
 | --- | --- | --- |
-| `direct` | k6 → mock backend | the baseline: the backend alone |
-| `gateway_public` | k6 → gateway → mock backend (public route) | the gateway itself: routing, logging, the workspace's rate limit (one Redis call, since MT.8), proxying, one more network hop |
-| `gateway_protected` | k6 → gateway → mock backend (key + rate limit) | plus the API key check; the consumer's bucket rides in the same Redis call |
+| `direct` | k6 → mock backends (alternating between the two instances) | the baseline: the backends alone |
+| `gateway_public` | k6 → gateway → mock backends (public route) | the gateway itself: the workspace from the Host, routing, logging, the workspace's rate limit (one Redis call, since MT.8), picking a target, proxying, one more network hop |
+| `gateway_protected` | k6 → gateway → mock backends (key + rate limit) | plus the API key check; the consumer's bucket rides in the same Redis call |
 
-The differences between the runs are what the gateway costs. Before the runs,
-the script creates its own service, routes, consumer and key through the
-admin API (`lt-<run id>-...`), and deletes them afterwards.
+The differences between the runs are what the gateway costs.
 
-All of them live in the `default` workspace, whose own rate limit (6,000
-requests/min by default, MT.8) would refuse most of 300 requests/s. So the
-Platform Admin logs in with password **and MFA** (the script enrolls a TOTP
-factor named `loadtest` through GoTrue, like the e2e tests do), raises
-`default`'s limit for the test, and afterwards puts back what was there and
-removes the factor. That is why the runner also gets
-`GOTRUE_SERVICE_ROLE_KEY`.
+Since MT.12 the test runs like a tenant: before the runs, the Platform
+Admin creates a workspace of its own, `lt-<run id>`, raises its rate limit
+(the platform default, 6,000 requests/min, would refuse most of 300
+requests/s), and creates a service with a target on each mock backend
+instance (round robin), a public and a protected route, and a consumer with
+a key. The gateway runs call `Host: lt-<run id>.localhost`, as a tenant's
+clients call `<slug>.<gateway>`. Afterwards the workspace is deleted (its
+slug is never reused; the purge job removes its data after 30 days), so the
+test never touches `default` or any other workspace.
+
+Creating a workspace and its limits are platform actions, which need MFA:
+the script logs in with password and a TOTP factor named `loadtest`,
+enrolled through GoTrue like the e2e tests do, and removed afterwards. That
+is why the runner also gets `GOTRUE_SERVICE_ROLE_KEY`.
 
 ## Run it
 
@@ -64,6 +69,33 @@ docker compose logs gateway --no-log-prefix --since 10m | py loadtest/gateway_ms
 - **The rate** stays well below what the mock backend can handle (it keeps a
   p95 under 2 ms at 1,000 requests/s), so requests don't queue in the backend
   and get counted as gateway time.
+
+## Results with tenancy and two targets (Nov 22, 2026, MT.12)
+
+300 requests/s, 30 s per run, about 9,000 requests per run, 0 errors, three
+times in a row:
+
+| Run | median | p95 | p99 |
+| --- | --- | --- | --- |
+| direct | 0.91–0.96 ms | 1.34–1.41 ms | 1.56–1.66 ms |
+| gateway_public | 1.77 ms | 2.52–2.56 ms | 3.12–3.21 ms |
+| gateway_protected | 1.77–1.79 ms | 2.48–2.61 ms | 3.02–3.30 ms |
+
+**The gateway adds 0.81–0.86 ms (median) and 1.10–1.20 ms (p95)**, all
+included. The median is as at MT.8 (0.78 ms); the p95 difference is about
+0.3 ms higher, but the gateway's own work is not: its log shows the same
+`gateway_ms` as at MT.8, and this time the direct baseline's p95 was lower
+(1.34–1.41 ms against 1.71 ms), which widens the difference. Finding the
+workspace from the Host and picking one of two targets cost nothing
+measurable. The gateway's own log for the three runs:
+
+| Route | `gateway_ms` median | p95 |
+| --- | --- | --- |
+| public (tenant, route, log, workspace bucket, target pick, proxy) | 0.36 ms | 0.55–0.56 ms |
+| protected (+ key check, consumer bucket) | 0.37–0.38 ms | 0.55–0.58 ms |
+
+Requests were split evenly over the two targets (the smoke run's log:
+101 and 100 requests per target).
 
 ## Results with workspace limits (Nov 22, 2026, MT.8)
 
