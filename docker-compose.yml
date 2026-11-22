@@ -18,7 +18,7 @@ x-control-plane-environment: &control-plane-environment
   # Internal upstreams the Platform Admin allows (MT.9); the gateway gets the
   # same value. The control plane refuses other internal IP literals and
   # names (localhost, *.internal) with 422 when a service is saved.
-  UPSTREAM_ALLOW: ${UPSTREAM_ALLOW-mock-backend}
+  UPSTREAM_ALLOW: ${UPSTREAM_ALLOW-mock-backend,mock-backend-2}
 
 services:
   postgres:
@@ -136,6 +136,18 @@ services:
       timeout: 3s
       retries: 10
 
+  # A second copy (MT.10), so load balancing and health checks can be seen:
+  # a service with both as targets. Reached only inside the Compose network.
+  mock-backend-2:
+    build: ./backend/mock-backend
+    environment:
+      INSTANCE_NAME: mock-backend-2
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   control-plane-db-init:
     build: ./backend/control-plane
     # This one-shot job also provides the environment for the database tests.
@@ -232,7 +244,7 @@ services:
       # protection); every other internal address gets 502
       # upstream_not_allowed. The local stack allows the mock backend; set it
       # empty in .env to allow nothing, as in production.
-      UPSTREAM_ALLOW: ${UPSTREAM_ALLOW-mock-backend}
+      UPSTREAM_ALLOW: ${UPSTREAM_ALLOW-mock-backend,mock-backend-2}
     ports:
       # host 8081 -> container 8080. 127.0.0.1:8080 on the host is taken by
       # another Windows app. Containers still use gateway:8080.
@@ -271,6 +283,8 @@ services:
       gateway:
         condition: service_healthy
       mock-backend:
+        condition: service_healthy
+      mock-backend-2:
         condition: service_healthy
       redis:
         condition: service_healthy
