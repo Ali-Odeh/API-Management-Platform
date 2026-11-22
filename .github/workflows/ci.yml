@@ -134,8 +134,9 @@ jobs:
           echo "total coverage: ${total}%"
           awk -v t="$total" 'BEGIN { exit (t < 90) }' || { echo "Coverage ${total}% is below 90%"; exit 1; }
 
-      # A short run of every fuzz test: random inputs against the path and
-      # request-ID checks. Go fuzzes one test of one package per command.
+      # A short run of every fuzz test: random inputs against the path,
+      # request-ID, Host and SSRF (egress) checks. Go fuzzes one test of one
+      # package per command.
       - name: Fuzz tests (10 s each)
         run: |
           for f in FuzzPrefixFits FuzzIsCleanPath FuzzMatch FuzzStripPrefix; do
@@ -144,6 +145,8 @@ jobs:
           go test -run='^$' -fuzz='^FuzzValidRequestID$' -fuzztime=10s ./internal/middleware
           go test -run='^$' -fuzz='^FuzzParseAnswer$' -fuzztime=10s ./internal/config
           go test -run='^$' -fuzz='^FuzzLabel$' -fuzztime=10s ./internal/tenant
+          go test -run='^$' -fuzz='^FuzzDenied$' -fuzztime=10s ./internal/egress
+          go test -run='^$' -fuzz='^FuzzNewPolicy$' -fuzztime=10s ./internal/egress
 
       - name: Docker image builds
         run: docker build --tag gateway:ci .

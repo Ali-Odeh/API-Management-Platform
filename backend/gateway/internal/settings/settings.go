@@ -15,6 +15,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 )
 
 // Defaults used when an optional variable is unset or empty.
@@ -44,6 +46,9 @@ type Settings struct {
 	ConfigWait      time.Duration // CONFIG_WAIT, how long the control plane may hold a config request
 	RedisURL        Secret        // REDIS_URL, e.g. "redis://redis:6379/0"; a Secret because it may hold a password
 	BaseDomain      string        // GATEWAY_BASE_DOMAIN, e.g. "gw.example.com": workspaces are its subdomains
+	// UPSTREAM_ALLOW, e.g. "mock-backend,10.20.0.0/16": the internal hosts and
+	// networks tenants' services may reach anyway. Empty: none (production).
+	Egress *egress.Policy
 }
 
 // Secret is a string that must never end up in a log or an error message.
@@ -120,6 +125,12 @@ func Load() (Settings, error) {
 			errs = append(errs, fmt.Errorf("GATEWAY_BASE_DOMAIN %q: want a domain name such as \"gw.example.com\" (no scheme, port or path)", v))
 		}
 	}
+
+	policy, err := egress.NewPolicy(strings.Split(os.Getenv("UPSTREAM_ALLOW"), ","))
+	if err != nil {
+		errs = append(errs, fmt.Errorf("UPSTREAM_ALLOW: %w", err))
+	}
+	s.Egress = policy
 
 	if len(errs) > 0 {
 		return Settings{}, errors.Join(errs...)

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/inflight"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
@@ -86,7 +87,7 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 	}
 	defer rdb.Close()
 
-	err = server.New(cfg, apiHandler(store, cfg.BaseDomain, ratelimit.New(rdb), log), log).ListenAndServe(ctx)
+	err = server.New(cfg, apiHandler(store, cfg.BaseDomain, cfg.Egress, ratelimit.New(rdb), log), log).ListenAndServe(ctx)
 	stop()            // if the server failed on its own, stop the poller too
 	background.Wait() // never exit while the poller is still running
 
@@ -103,6 +104,9 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 //	request ID → logger → recover → tenant (503/404/403) → router (400/404/405)
 //	  → auth (401/403) → rate limit (429) → in flight (503) → forwarder (502/504)
 //
+// The forwarder connects only to upstreams the egress policy allows (SSRF
+// protection): an internal address not on UPSTREAM_ALLOW gets 502.
+//
 // Recover sits inside the logger, so a panic's 500 shows in the request log.
 // Tenant finds the workspace from the Host before anything else: matching,
 // keys and limits all happen inside that one workspace. Auth comes after
@@ -113,9 +117,9 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // requests on their way to a backend hold one of the workspace's slots.
 // GET /health is answered by the server before this chain, so Docker's
 // health checks don't fill the log.
-func apiHandler(source tenant.SnapshotSource, baseDomain string, limiter middleware.Allower, log *slog.Logger) http.Handler {
+func apiHandler(source tenant.SnapshotSource, baseDomain string, upstreams *egress.Policy, limiter middleware.Allower, log *slog.Logger) http.Handler {
 	afterMatch := middleware.Chain(
-		proxy.NewForwarder(log),
+		proxy.NewForwarder(log, upstreams),
 		middleware.Auth(log),
 		middleware.RateLimit(limiter, log),
 		middleware.InFlight(&inflight.Limiter{}, log),

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ var defaults = Settings{
 // applies the required values and the case's own values on top.
 func setEnv(t *testing.T, env map[string]string) {
 	t.Helper()
-	for _, k := range []string{"LISTEN_ADDR", "SHUTDOWN_TIMEOUT", "CONTROL_PLANE_URL", "INTERNAL_TOKEN", "CONFIG_WAIT", "REDIS_URL", "GATEWAY_BASE_DOMAIN"} {
+	for _, k := range []string{"LISTEN_ADDR", "SHUTDOWN_TIMEOUT", "CONTROL_PLANE_URL", "INTERNAL_TOKEN", "CONFIG_WAIT", "REDIS_URL", "GATEWAY_BASE_DOMAIN", "UPSTREAM_ALLOW"} {
 		t.Setenv(k, "")
 	}
 	for k, v := range required {
@@ -100,6 +101,8 @@ func TestLoad(t *testing.T) {
 		{name: "base domain too long", env: map[string]string{"GATEWAY_BASE_DOMAIN": strings.Repeat("a.", 127) + "com"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
 		{name: "base domain label too long", env: map[string]string{"GATEWAY_BASE_DOMAIN": strings.Repeat("a", 64) + ".com"}, wantErr: []string{"GATEWAY_BASE_DOMAIN"}},
 		{name: "config wait with a fraction", env: map[string]string{"CONFIG_WAIT": "1500ms"}, wantErr: []string{"whole seconds"}},
+		{name: "upstream allow entry with a scheme", env: map[string]string{"UPSTREAM_ALLOW": "mock-backend,http://redis"}, wantErr: []string{"UPSTREAM_ALLOW", "http://redis"}},
+		{name: "upstream allow network out of range", env: map[string]string{"UPSTREAM_ALLOW": "10.0.0.0/40"}, wantErr: []string{"UPSTREAM_ALLOW"}},
 		{
 			name:    "every problem is reported at once",
 			env:     map[string]string{"LISTEN_ADDR": "x", "CONTROL_PLANE_URL": "", "INTERNAL_TOKEN": ""},
@@ -127,10 +130,40 @@ func TestLoad(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load() unexpected error: %v", err)
 			}
+			if got.Egress == nil {
+				t.Fatal("Load() left Egress nil; the deny list must always apply")
+			}
+			got.Egress = nil // a pointer: checked on its own below
 			if got != tt.want {
 				t.Errorf("Load() = %+v, want %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+// UPSTREAM_ALLOW becomes the egress policy: its names and networks are
+// allowed, everything internal not on it stays refused. Unset, nothing
+// internal is allowed (the production default).
+func TestLoadUpstreamAllow(t *testing.T) {
+	setEnv(t, map[string]string{"UPSTREAM_ALLOW": " mock-backend , 10.20.0.0/16,,"})
+	s, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !s.Egress.AllowsHost("mock-backend") || s.Egress.AllowsHost("redis") {
+		t.Error("the allowed name isn't allowed, or another name is")
+	}
+	if !s.Egress.AllowsAddr(netip.MustParseAddr("10.20.1.2")) || s.Egress.AllowsAddr(netip.MustParseAddr("10.21.1.2")) {
+		t.Error("the allowed network isn't allowed, or another internal address is")
+	}
+
+	setEnv(t, nil)
+	s, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if s.Egress.AllowsHost("mock-backend") || s.Egress.AllowsAddr(netip.MustParseAddr("10.20.1.2")) {
+		t.Error("without UPSTREAM_ALLOW something internal is allowed")
 	}
 }
 

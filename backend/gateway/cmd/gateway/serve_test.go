@@ -83,8 +83,8 @@ func TestServeWholeGateway(t *testing.T) {
 		ListenAddr:      freeAddr(t),
 		ShutdownTimeout: 2 * time.Second,
 		ControlPlaneURL: cp.URL,
-		InternalToken:   "s3cret",
-		ConfigWait:      time.Second,
+		InternalToken:   "s3cret", Egress: testBackends,
+		ConfigWait: time.Second,
 		// Nothing listens here: Redis is "down", so the rate limit fails open
 		// and requests still get through.
 		RedisURL: "redis://127.0.0.1:1/0",
@@ -157,7 +157,7 @@ func TestServeFailsWhenThePortIsTaken(t *testing.T) {
 
 	cfg := settings.Settings{
 		ListenAddr: busy.Addr().String(), ShutdownTimeout: time.Second,
-		ControlPlaneURL: cp.URL, InternalToken: "s3cret", ConfigWait: time.Second,
+		ControlPlaneURL: cp.URL, InternalToken: "s3cret", Egress: testBackends, ConfigWait: time.Second,
 		RedisURL: "redis://127.0.0.1:1/0",
 	}
 	exit := make(chan int, 1)
@@ -212,7 +212,7 @@ func TestServeRateLimitsWithRealRedis(t *testing.T) {
 	defer backend.Close()
 	cfg := settings.Settings{
 		ListenAddr: freeAddr(t), ShutdownTimeout: 2 * time.Second,
-		ControlPlaneURL: fakeControlPlane(t, backend.URL, 3).URL, InternalToken: "s3cret",
+		ControlPlaneURL: fakeControlPlane(t, backend.URL, 3).URL, InternalToken: "s3cret", Egress: testBackends,
 		ConfigWait: time.Second, RedisURL: settings.Secret(redisURL),
 	}
 	ctx, cancel := context.WithCancel(t.Context())

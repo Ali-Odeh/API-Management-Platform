@@ -10,8 +10,10 @@ In Docker Compose the API receives only the settings it needs from .env.
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.core.egress import AllowList, parse_allow_list
 
 
 class Settings(BaseSettings):
@@ -46,6 +48,21 @@ class Settings(BaseSettings):
     # A deleted workspace can be restored this long; then the purge job
     # deletes its data (decision 10).
     purge_after_days: int = Field(default=30, ge=1)
+
+    # Internal hosts and networks tenants' services may point at anyway
+    # (decision 3, SSRF): names, addresses, networks, comma-separated. The
+    # gateway reads the same value; empty allows nothing internal.
+    upstream_allow: str = ""
+
+    @field_validator("upstream_allow")
+    @classmethod
+    def _readable_allow_list(cls, value: str) -> str:
+        parse_allow_list(value)  # a bad entry stops the start, naming it
+        return value
+
+    @property
+    def allowed_upstreams(self) -> AllowList:
+        return parse_allow_list(self.upstream_allow)
 
 
 @lru_cache

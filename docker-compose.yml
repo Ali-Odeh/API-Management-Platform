@@ -15,6 +15,10 @@ x-control-plane-environment: &control-plane-environment
   WORKSPACE_MAX_ROUTES: ${WORKSPACE_MAX_ROUTES:-500}
   WORKSPACE_MAX_CONSUMERS: ${WORKSPACE_MAX_CONSUMERS:-5000}
   PURGE_AFTER_DAYS: ${PURGE_AFTER_DAYS:-30}
+  # Internal upstreams the Platform Admin allows (MT.9); the gateway gets the
+  # same value. The control plane refuses other internal IP literals and
+  # names (localhost, *.internal) with 422 when a service is saved.
+  UPSTREAM_ALLOW: ${UPSTREAM_ALLOW-mock-backend}
 
 services:
   postgres:
@@ -224,6 +228,11 @@ services:
       # Workspaces are its subdomains: acme.localhost reaches workspace `acme`
       # (MT.7); any other name (localhost, gateway) serves `default`.
       GATEWAY_BASE_DOMAIN: ${GATEWAY_BASE_DOMAIN:-localhost}
+      # Internal hosts tenants' services may reach anyway (MT.9, SSRF
+      # protection); every other internal address gets 502
+      # upstream_not_allowed. The local stack allows the mock backend; set it
+      # empty in .env to allow nothing, as in production.
+      UPSTREAM_ALLOW: ${UPSTREAM_ALLOW-mock-backend}
     ports:
       # host 8081 -> container 8080. 127.0.0.1:8080 on the host is taken by
       # another Windows app. Containers still use gateway:8080.

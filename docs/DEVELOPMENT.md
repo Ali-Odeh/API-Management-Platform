@@ -347,6 +347,22 @@ docker compose run --rm e2e
 
 Run them for any change a request touches from end to end.
 
+## Internal upstreams (SSRF protection)
+
+The gateway refuses to connect to internal addresses (private, loopback,
+link-local, Docker's own networks): a service pointing there gets
+`502 upstream_not_allowed`, and the control plane refuses plainly internal URLs
+(`http://127.0.0.1`, `http://localhost`) with 422 on save. The local stack
+allows only the mock backend (`UPSTREAM_ALLOW=mock-backend`). To try your own
+backend container, add its name to `UPSTREAM_ALLOW` in `.env`
+(comma-separated: names, addresses, networks such as `10.20.0.0/16`; an
+entry that could never match stops both services at start, naming it) and
+recreate both services:
+
+```powershell
+docker compose up -d control-plane gateway
+```
+
 ## Load test
 
 k6 in Docker: direct vs. through the gateway, at a fixed rate (about 1 min

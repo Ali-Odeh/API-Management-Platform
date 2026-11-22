@@ -4,16 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
 )
 
@@ -52,6 +56,18 @@ type testRoute struct {
 
 // newGateway is the router plus the forwarder, as main wires them, with one
 // route. logs collects the forwarder's log lines.
+// testBackends allows the loopback addresses httptest backends listen on.
+// Without it the egress policy would refuse them, as it should in production.
+var testBackends = mustPolicy("127.0.0.0/8", "::1")
+
+func mustPolicy(allow ...string) *egress.Policy {
+	p, err := egress.NewPolicy(allow)
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
 func newGateway(t *testing.T, tr testRoute) (http.Handler, *strings.Builder) {
 	t.Helper()
 	upstream, err := url.Parse(tr.upstream)
@@ -66,7 +82,7 @@ func newGateway(t *testing.T, tr testRoute) (http.Handler, *strings.Builder) {
 		StripPrefix: tr.strip, Upstream: upstream, Timeout: tr.timeout,
 	}}})
 	logs := &strings.Builder{}
-	f := NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)))
+	f := NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), testBackends)
 	return routed(snap, f), logs
 }
 
@@ -260,7 +276,7 @@ func TestForwardWithoutMatchIs500(t *testing.T) {
 	logs := &strings.Builder{}
 	rec := httptest.NewRecorder()
 
-	NewForwarder(slog.New(slog.NewJSONHandler(logs, nil))).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/x", nil))
+	NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), testBackends).ServeHTTP(rec, httptest.NewRequest("GET", "/v1/x", nil))
 
 	if rec.Code != http.StatusInternalServerError || errorCode(t, rec) != "internal_error" {
 		t.Errorf("got %d %q, want 500 internal_error", rec.Code, rec.Body.String())
@@ -323,11 +339,60 @@ func TestForwardReportsRouteAndUpstreamTime(t *testing.T) {
 }
 
 func TestTransportLimits(t *testing.T) {
-	tr := newTransport()
+	tr := newTransport(nil)
 	if tr.MaxIdleConnsPerHost != 100 || tr.MaxIdleConns != 1000 || tr.IdleConnTimeout != 90*time.Second {
 		t.Errorf("pool = %d per host, %d total, idle %s", tr.MaxIdleConnsPerHost, tr.MaxIdleConns, tr.IdleConnTimeout)
 	}
 	if tr.TLSHandshakeTimeout != 5*time.Second || tr.Proxy != nil {
 		t.Errorf("TLS timeout %s, proxy set %v", tr.TLSHandshakeTimeout, tr.Proxy != nil)
+	}
+}
+
+// SSRF (MT.9): a route whose upstream is an internal address the policy
+// doesn't allow gets 502 upstream_not_allowed at once. The backend is never
+// reached, and the warning names the workspace and the target.
+func TestForwardRefusesInternalUpstreams(t *testing.T) {
+	var called atomic.Bool
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called.Store(true) }))
+	defer backend.Close()
+	upstream, _ := url.Parse(backend.URL)
+	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{{
+		ID: "r1", PathPrefix: "/v1", Methods: []string{"GET"}, Upstream: upstream, Timeout: 5 * time.Second,
+	}}})
+	logs := &strings.Builder{}
+	gw := routed(snap, NewForwarder(slog.New(slog.NewJSONHandler(logs, nil)), nil)) // the deny list alone
+
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, httptest.NewRequest("GET", "/v1/x", nil))
+
+	if rec.Code != http.StatusBadGateway || errorCode(t, rec) != "upstream_not_allowed" {
+		t.Fatalf("got %d %q, want 502 upstream_not_allowed", rec.Code, rec.Body.String())
+	}
+	if called.Load() {
+		t.Error("the internal backend was reached")
+	}
+	var line map[string]any
+	if err := json.Unmarshal([]byte(logs.String()), &line); err != nil {
+		t.Fatalf("want one JSON warning, got %q", logs.String())
+	}
+	if line["level"] != "WARN" || line["workspace_id"] != "ws-default" || line["route_id"] != "r1" ||
+		line["upstream"] != "127.0.0.1" || line["address"] != "127.0.0.1" {
+		t.Errorf("warning = %v", line)
+	}
+}
+
+func TestClassifyPutsThePolicyFirst(t *testing.T) {
+	blocked := &egress.BlockedError{Host: "redis", Addr: netip.MustParseAddr("172.18.0.3")}
+	// Even if the route's time ran out meanwhile, a refusal is no timeout.
+	if status, code := classify(context.DeadlineExceeded, blocked); status != http.StatusBadGateway || code != "upstream_not_allowed" {
+		t.Errorf("classify = %d %s, want 502 upstream_not_allowed", status, code)
+	}
+	// A client that left gets nothing either way: recorded as 499, not logged.
+	if status, _ := classify(context.Canceled, blocked); status != StatusClientClosedRequest {
+		t.Errorf("client gone and refused = %d, want 499", status)
+	}
+	wrapped := fmt.Errorf("dial: %w", blocked)
+	if _, code := classify(nil, wrapped); code != "upstream_not_allowed" {
+		t.Errorf("a wrapped refusal = %s", code)
 	}
 }

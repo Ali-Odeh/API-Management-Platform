@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/inflight"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
@@ -59,7 +60,7 @@ func TestAPIHandlerEndToEnd(t *testing.T) {
 		Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
 	})
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	tests := []struct {
 		name         string
@@ -120,7 +121,7 @@ func TestAPIHandlerTimesTheBackend(t *testing.T) {
 		ID: "r1", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: false, Upstream: upstream, Timeout: 5 * time.Second,
 	}}})
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	api.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
@@ -166,7 +167,7 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 	a, b := version(1, "consumer-a", 5*time.Second), version(2, "consumer-b", 4*time.Second)
 	source := &swappingSource{}
 	source.current.Store(a)
-	api := apiHandler(source, "localhost", allowAll{}, slog.New(slog.DiscardHandler))
+	api := apiHandler(source, "localhost", testBackends, allowAll{}, slog.New(slog.DiscardHandler))
 
 	stopSwapping := make(chan struct{})
 	swapped := make(chan struct{})
@@ -240,6 +241,16 @@ func BenchmarkAPIHandlerChain(b *testing.B) {
 	}
 }
 
+// testBackends allows the loopback addresses httptest backends listen on;
+// the egress policy refuses them otherwise, as it should in production.
+var testBackends = func() *egress.Policy {
+	p, err := egress.NewPolicy([]string{"127.0.0.0/8", "::1"})
+	if err != nil {
+		panic(err)
+	}
+	return p
+}()
+
 // allowAll is a rate limiter that always says yes, for tests about other
 // layers.
 type allowAll struct{}
@@ -291,7 +302,7 @@ func TestAPIHandlerKeepsWorkspacesApart(t *testing.T) {
 		tenantWith("w-globex", "globex", globexKey, backend("globex")),
 	)
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	call := func(host, key string) (int, string, map[string]any) {
 		logs.Reset()
@@ -364,7 +375,7 @@ func TestAPIHandlerSlowWorkspaceCantStarveTheOthers(t *testing.T) {
 		workspace("slow", slow.URL, config.Limits{RateLimitPerMin: 6000, MaxConcurrent: slowShare}),
 		workspace("fast", fast.URL, roomyLimits),
 	)
-	api := apiHandler(staticSource{snap}, "localhost", allowAll{}, slog.New(slog.DiscardHandler))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.DiscardHandler))
 	call := func(host string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/v1/x", nil)
 		req.Host = host
