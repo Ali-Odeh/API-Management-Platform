@@ -433,7 +433,7 @@ The application's database user has only `INSERT` and `SELECT` on `audit_events`
 | `apim_app` | `DATABASE_URL` | read and write application tables, with only `INSERT` and `SELECT` on `audit_events`, only `SELECT` on `config_seq` and `workspace_config`, and no access to `alembic_version` |
 | `apim_retention` | `AUDIT_RETENTION_DATABASE_URL` | `SELECT` and `DELETE` on `audit_events`, nothing else |
 | `apim_purge` | `PURGE_DATABASE_URL` | the workspace purge job (MT.5): `SELECT` and `DELETE` on every table with workspace data, audit events included; `INSERT` on `audit_events` (its own `workspace.purged`); `UPDATE` of `workspaces.status` only. The config triggers its deletes run need nothing more: `bump_workspaces` is `SECURITY DEFINER` (MT.6) |
-| `apim_ingest` | `INGEST_DATABASE_URL` | the `usage-ingest` worker (V2.1): `INSERT` on `request_logs` and `UPDATE` of `api_keys.last_used_at` only. Creating and dropping monthly partitions needs the table's owner; V2.1 decides how that upkeep runs (never with the API's login) |
+| `apim_ingest` | `INGEST_DATABASE_URL` | the `usage-ingest` worker (V2.1): `INSERT` on `request_logs`, `SELECT (id, last_used_at)` and `UPDATE (last_used_at)` on `api_keys`, and `EXECUTE` on the two partition functions (below), nothing else |
 
 The one-shot `control-plane-db-init` service creates or updates its logins with `scripts/prepare_database.py` and runs migrations before the API starts. Migrations grant table privileges, including defaults for later tables. The API container receives only the `apim_app` login for Postgres.
 
@@ -601,9 +601,15 @@ Transition rules (MT.5):
 
 **Usage and analytics (V2.1)**
 
-- The gateway appends one event per proxied request (the log line's fields plus an `event_id`) to `usage:events`, buffered in memory for at most about a second and written with pipelined `XADD ... MAXLEN ~`. Redis slow or down: the events are dropped, counted (a metric in V2.3) and reported in a throttled warning; a request is never delayed.
-- `usage-ingest` (its own container and login) reads with a consumer group, inserts a batch with `ON CONFLICT DO NOTHING`, updates `last_used_at` (at most once a minute per key), commits, then `XACK`s. Entries left pending by a stopped worker are claimed again (`XAUTOCLAIM`); several workers can run side by side.
-- Analytics come from `request_logs` by SQL aggregation, per workspace, in buckets of a minute, an hour or a day, at most 31 days per query. Requests refused before a workspace was known (unknown host) are not stored.
+- The gateway appends one event per answered request whose workspace is known (refusals such as 401, 404 inside a workspace and 429 included; the log line's fields plus an `event_id`, a UUIDv7) to `usage:events`. Events are buffered in memory (10,000 at most) and written every 200 ms in pipelined batches of at most 100 (`XADD ... MAXLEN ~ 200000`), through a Redis client of their own (2 s timeouts), so a batch never holds up a rate-limit check. Buffer full or Redis slow or down: the events are dropped, counted (a metric in V2.3) and reported in a warning at most every 10 s; a request is never delayed.
+- `usage-ingest` (its own container and login) reads with the consumer group `usage-ingest` (its own unacknowledged entries first), and per batch in one transaction makes the month partitions it needs, inserts with `ON CONFLICT DO NOTHING` and moves `last_used_at` forward (at most once a minute per key); after the commit it `XACK`s and `XDEL`s the entries. Entries pending for over a minute on a stopped worker are claimed (`XAUTOCLAIM`); several workers can run side by side. Malformed entries and those outside [now − retention, now + 1 day] are dropped and counted. Retention drops expired months once a day.
+- Partitions are UTC months (`request_logs_y2026m11`), made and dropped by `ensure_request_log_partitions(months)` and `drop_request_log_partitions(keep_days)`, `SECURITY DEFINER` functions only `apim_ingest` may call; a new partition gets no privileges of its own (everyone goes through the parent). `set_updated_at` ignores `last_used_at`: a key being used isn't an edit.
+- Analytics come from `request_logs` by SQL aggregation, per workspace, over `from`/`to` (default the last day, at most 31 days):
+  - `GET .../analytics/traffic?interval=minute|hour|day` (default `hour`; `route_id`, `consumer_id` filters): `{start, end, interval, totals, buckets}`, buckets aligned to UTC units, empty ones as zero, at most 1,500.
+  - `GET .../analytics/routes` and `.../analytics/consumers` (`limit`, 1–100, default 20): the busiest first, with their current `path_prefix` or `name` (`null`: no route or consumer, or deleted since).
+  - Each answer counts `requests`, `client_errors` (4xx) and `server_errors` (5xx), with `latency` `{p50_ms, p95_ms, p99_ms}` of the whole request.
+  - `GET .../request-logs` (`route_id`, `consumer_id`, `status`, `method`; paged): the log, newest first.
+  - A `route_id` or `consumer_id` filter that isn't in this workspace is `422`, as for every filter (so a deleted one can't be filtered on).
 
 **Developer portal API (P.1, P.2)**
 
@@ -1147,7 +1153,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 
 Fewer, larger steps than MT: each one is a self-contained piece of work that an AI agent finishes completely (code, migrations, tests, e2e, docs, logical commits), planning its own sub-tasks. Outcomes and done criteria are in ROADMAP.md.
 
-- [ ] V2.1 Usage and analytics: usage events over a Redis Stream, the `usage-ingest` worker, `request_logs` by month with retention, `last_used_at`, analytics and request-log endpoints
+- [x] V2.1 Usage and analytics: usage events over a Redis Stream, the `usage-ingest` worker, `request_logs` by month with retention, `last_used_at`, analytics and request-log endpoints
 - [ ] V2.2 Plans and protection: plans per workspace, consumers on plans (migration), monthly quotas, per-IP limits on public routes, failed-key limits
 - [ ] V2.3 Metrics and v2 end to end: Prometheus metrics, the v2 definition of done as e2e, the load test again
 
