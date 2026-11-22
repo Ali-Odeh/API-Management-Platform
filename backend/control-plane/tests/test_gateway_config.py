@@ -139,7 +139,7 @@ async def test_service_and_route_changes_bump(
     client: AsyncClient, auth_headers: Headers, workspace: Workspace, watch: Watch
 ) -> None:
     base = f"{API}/workspaces/default"
-    body = {"name": "orders", "upstream_url": "http://mock-backend:9000"}
+    body = {"name": "orders", "targets": [{"url": "http://mock-backend:9000"}]}
     service = (await client.post(f"{base}/services", json=body, headers=auth_headers)).json()
     await watch.assert_bumped(workspace.id)
 
@@ -202,9 +202,9 @@ async def test_a_cascade_bumps_too(db: AsyncSession, workspace: Workspace) -> No
     await db.execute(text("DELETE FROM consumers WHERE id = :id"), {"id": consumer.id})
     await db.commit()
 
-    seq, versions = await _seq(), await _versions()
-    assert seq == watch.seq + 2  # one statement on consumers, one (cascaded) on keys
-    assert versions[workspace.id] == (watch.versions[workspace.id][0] + 2, seq)
+    # Both triggers ran (consumers, and keys by the cascade), but one
+    # transaction is one change: one bump, one NOTIFY (MT.10).
+    await watch.assert_bumped(workspace.id)
 
 
 async def test_lifecycle_and_gateway_limits_bump(
@@ -255,9 +255,17 @@ async def test_one_statement_over_two_workspaces_bumps_once(db: AsyncSession) ->
 # A change of each column the gateway uses (service_id, consumer_id and
 # status move through the API tests above).
 _CONFIG_CHANGES = [
-    ("services", "upstream_url", "'http://other:1'"),
     ("services", "timeout_ms", "timeout_ms + 1"),
     ("services", "is_active", "NOT is_active"),
+    ("services", "hc_path", "'/ready'"),
+    ("services", "hc_interval_s", "hc_interval_s + 1"),
+    ("services", "hc_unhealthy_threshold", "hc_unhealthy_threshold + 1"),
+    ("services", "hc_healthy_threshold", "hc_healthy_threshold + 1"),
+    ("services", "passive_failures", "passive_failures + 1"),
+    ("services", "passive_eject_s", "passive_eject_s + 1"),
+    ("service_targets", "url", "'http://other:1'"),
+    ("service_targets", "weight", "weight + 1"),
+    ("service_targets", "is_active", "NOT is_active"),
     ("routes", "path_prefix", "'/v2/x'"),
     ("routes", "methods", "ARRAY['DELETE']"),
     ("routes", "strip_prefix", "NOT strip_prefix"),
@@ -271,11 +279,16 @@ _CONFIG_CHANGES = [
     ("workspaces", "max_concurrent", "7"),
 ]
 _THROUGH_THE_API = {("routes", "service_id"), ("consumers", "status"),
-                    ("api_keys", "consumer_id"), ("workspaces", "status")}  # fmt: skip
+                    ("api_keys", "consumer_id"), ("workspaces", "status"),
+                    ("service_targets", "service_id")}  # fmt: skip
+# Config columns with only one allowed value so far: nothing to change them
+# to yet. They are in the triggers for the day a second value arrives.
+_ONE_VALUE_SO_FAR = {("services", "lb_algorithm")}
 # A change of each column the gateway doesn't use.
 _NOT_CONFIG = [
     ("services", "name", "'renamed'"),
     ("services", "updated_at", "now() + interval '1 hour'"),
+    ("service_targets", "updated_at", "now() + interval '1 hour'"),
     ("routes", "updated_at", "now() + interval '1 hour'"),
     ("consumers", "name", "'renamed'"),
     ("consumers", "email", "'new@example.com'"),
@@ -304,7 +317,9 @@ def test_every_column_of_a_config_table_is_decided() -> None:
             "created_at",
         }
         tried = {c for t, c, _ in _CONFIG_CHANGES if t == table}
-        assert set(config) == tried | {c for t, c in _THROUGH_THE_API if t == table}, table
+        assert set(config) == tried | {
+            c for t, c in _THROUGH_THE_API | _ONE_VALUE_SO_FAR if t == table
+        }, table
         others = {c for t, c, _ in _NOT_CONFIG if t == table} | {
             c for t, c in _WITH_STATUS if t == table
         }
@@ -359,7 +374,7 @@ async def test_failed_writes_do_not_bump(
     client: AsyncClient, auth_headers: Headers, watch: Watch
 ) -> None:
     base = f"{API}/workspaces/default"
-    body = {"name": "orders", "upstream_url": "http://mock-backend:9000"}
+    body = {"name": "orders", "targets": [{"url": "http://mock-backend:9000"}]}
     service = (await client.post(f"{base}/services", json=body, headers=auth_headers)).json()
     await client.post(
         f"{base}/routes",
@@ -408,7 +423,7 @@ async def test_commit_sends_notify_and_rollback_does_not(
 
         # A change that is rolled back: the trigger ran, but NOTIFY is only
         # delivered on commit, so nobody hears about it.
-        db.add(Service(workspace_id=workspace_id, name="ghost", upstream_url="http://x:1"))
+        db.add(Service(workspace_id=workspace_id, name="ghost"))
         await db.flush()
         await db.rollback()
 

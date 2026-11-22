@@ -24,7 +24,14 @@ from app.gateway_config.schemas import ConfigAnswer, WorkspaceConfigOut
 from app.main import app
 from app.workspaces.models import Workspace, WorkspaceStatus
 from tests.conftest import OWNER_URL
-from tests.factories import make_api_key, make_consumer, make_route, make_service, make_workspace
+from tests.factories import (
+    make_api_key,
+    make_consumer,
+    make_route,
+    make_service,
+    make_target,
+    make_workspace,
+)
 from tests.test_api_guards import set_status
 
 
@@ -85,8 +92,16 @@ async def test_services_routes_and_keys(db: AsyncSession, workspace: Workspace) 
         {
             "id": orders.id,
             "timeout_ms": 3000,
-            # Until MT.10 a service's upstream_url is its one target.
-            "targets": [{"id": orders.id, "url": "http://orders:9000", "weight": 100}],
+            "lb_algorithm": "round_robin",
+            "health": {
+                "path": "/health",
+                "interval_s": 10,
+                "unhealthy": 3,
+                "healthy": 2,
+                "passive_failures": 5,
+                "passive_eject_s": 30,
+            },
+            "targets": [{"id": orders.targets[0].id, "url": "http://orders:9000", "weight": 100}],
         }
     ]
     assert [r.model_dump() for r in default.routes] == [
@@ -564,3 +579,28 @@ async def test_stop_without_start_is_harmless() -> None:
     await asyncio.sleep(0.05)
     await never_started.stop()
     await asyncio.wait_for(waiting, timeout=1)  # the waiter was released
+
+
+async def test_only_active_targets_and_routable_services(
+    db: AsyncSession, workspace: Workspace
+) -> None:
+    # Two targets, oldest first, the inactive one left out. A service whose
+    # targets are all off isn't routable: it and its routes leave the config.
+    orders = await make_service(db, workspace.id, name="orders", upstream_url="http://a:1")
+    second = await make_target(db, workspace.id, orders.id, url="http://b:1", weight=50)
+    await make_target(db, workspace.id, orders.id, url="http://c:1", is_active=False)
+    await make_route(db, workspace.id, orders.id, path_prefix="/v1/orders")
+    idle = await make_service(db, workspace.id, name="idle", upstream_url="http://d:1")
+    idle.targets[0].is_active = False
+    await db.commit()
+    await make_route(db, workspace.id, idle.id, path_prefix="/v1/idle")
+
+    [default] = (await _answer()).workspaces
+
+    [service] = default.services
+    assert service.id == orders.id
+    assert [(t.id, t.url, t.weight) for t in service.targets] == [
+        (orders.targets[0].id, "http://a:1", 100),
+        (second.id, "http://b:1", 50),
+    ]
+    assert [r.path_prefix for r in default.routes] == ["/v1/orders"]

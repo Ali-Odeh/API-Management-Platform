@@ -25,6 +25,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/tenant"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/upstream"
 )
 
 type staticSource struct{ snap *config.Snapshot }
@@ -55,12 +56,12 @@ func TestAPIHandlerEndToEnd(t *testing.T) {
 		Version: 1,
 		Routes: []config.Route{{
 			ID: "r1", PathPrefix: "/v1/orders", Methods: []string{"GET"}, AuthRequired: true,
-			Upstream: upstream, Timeout: 5 * time.Second,
+			Service: serviceOf(upstream, 5*time.Second),
 		}},
 		Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
 	})
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, testRegistry(t), allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	tests := []struct {
 		name         string
@@ -118,10 +119,10 @@ func TestAPIHandlerTimesTheBackend(t *testing.T) {
 	defer backend.Close()
 	upstream, _ := url.Parse(backend.URL)
 	snap := snapshotOf(&config.Workspace{Version: 1, Routes: []config.Route{{
-		ID: "r1", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: false, Upstream: upstream, Timeout: 5 * time.Second,
+		ID: "r1", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: false, Service: serviceOf(upstream, 5*time.Second),
 	}}})
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, testRegistry(t), allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	api.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
@@ -159,7 +160,7 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 			Version: v,
 			Routes: []config.Route{{
 				ID: fmt.Sprintf("r%d", v), PathPrefix: "/v1", Methods: []string{"GET"}, AuthRequired: true,
-				Upstream: upstream, Timeout: timeout,
+				Service: serviceOf(upstream, timeout),
 			}},
 			Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: consumer, ConsumerStatus: config.ConsumerActive}},
 		})
@@ -167,7 +168,7 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 	a, b := version(1, "consumer-a", 5*time.Second), version(2, "consumer-b", 4*time.Second)
 	source := &swappingSource{}
 	source.current.Store(a)
-	api := apiHandler(source, "localhost", testBackends, allowAll{}, slog.New(slog.DiscardHandler))
+	api := apiHandler(source, "localhost", testBackends, testRegistry(t), allowAll{}, slog.New(slog.DiscardHandler))
 
 	stopSwapping := make(chan struct{})
 	swapped := make(chan struct{})
@@ -251,6 +252,23 @@ var testBackends = func() *egress.Policy {
 	return p
 }()
 
+// serviceOf is a service with one target at u, without health checks.
+func serviceOf(u *url.URL, timeout time.Duration) *config.Service {
+	return &config.Service{
+		ID: "s-" + u.Host, WorkspaceID: "ws", Timeout: timeout,
+		Targets:     []config.Target{{ID: "t-" + u.Host, URL: u, Weight: 100}},
+		Fingerprint: u.String(),
+	}
+}
+
+// testRegistry is a target registry whose checkers end with the test.
+func testRegistry(t testing.TB) *upstream.Registry {
+	t.Helper()
+	r := upstream.NewRegistry(context.Background(), testBackends, slog.New(slog.DiscardHandler))
+	t.Cleanup(r.Close)
+	return r
+}
+
 // allowAll is a rate limiter that always says yes, for tests about other
 // layers.
 type allowAll struct{}
@@ -293,7 +311,7 @@ func TestAPIHandlerKeepsWorkspacesApart(t *testing.T) {
 			ID: id, Slug: slug, Status: config.WorkspaceActive, Hosts: []string{slug},
 			Limits: roomyLimits,
 			Routes: []config.Route{{ID: "r-" + slug, PathPrefix: "/v1/orders", Methods: []string{"GET"},
-				AuthRequired: true, Upstream: upstream, Timeout: 5 * time.Second}},
+				AuthRequired: true, Service: serviceOf(upstream, 5*time.Second)}},
 			Keys: map[string]config.Key{sha256Hex(key): {ID: "k-" + slug, ConsumerID: "c-" + slug, ConsumerStatus: config.ConsumerActive}},
 		}
 	}
@@ -302,7 +320,7 @@ func TestAPIHandlerKeepsWorkspacesApart(t *testing.T) {
 		tenantWith("w-globex", "globex", globexKey, backend("globex")),
 	)
 	var logs bytes.Buffer
-	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, testRegistry(t), allowAll{}, slog.New(slog.NewJSONHandler(&logs, nil)))
 
 	call := func(host, key string) (int, string, map[string]any) {
 		logs.Reset()
@@ -368,14 +386,14 @@ func TestAPIHandlerSlowWorkspaceCantStarveTheOthers(t *testing.T) {
 		return &config.Workspace{
 			ID: "w-" + slug, Slug: slug, Status: config.WorkspaceActive, Hosts: []string{slug}, Limits: limits,
 			Routes: []config.Route{{ID: "r-" + slug, PathPrefix: "/v1", Methods: []string{"GET"},
-				Upstream: upstream, Timeout: 5 * time.Second}},
+				Service: serviceOf(upstream, 5*time.Second)}},
 		}
 	}
 	snap := config.NewSnapshot(1,
 		workspace("slow", slow.URL, config.Limits{RateLimitPerMin: 6000, MaxConcurrent: slowShare}),
 		workspace("fast", fast.URL, roomyLimits),
 	)
-	api := apiHandler(staticSource{snap}, "localhost", testBackends, allowAll{}, slog.New(slog.DiscardHandler))
+	api := apiHandler(staticSource{snap}, "localhost", testBackends, testRegistry(t), allowAll{}, slog.New(slog.DiscardHandler))
 	call := func(host string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/v1/x", nil)
 		req.Host = host

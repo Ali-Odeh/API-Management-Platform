@@ -52,6 +52,7 @@ func logRequest(log *slog.Logger, r *http.Request, info *reqctx.Info, sw *status
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
 		slog.String("route_id", info.RouteID),
+		slog.String("target_id", info.TargetID),
 		slog.String("consumer_id", info.ConsumerID),
 		slog.String("key_id", info.KeyID),
 		slog.String("ratelimit", info.RateLimit),

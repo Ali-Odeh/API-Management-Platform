@@ -11,6 +11,7 @@ It is a learning project, built step by step with production habits: tests at ev
 - **Routing:** `/v1/orders/...` goes to the orders service, by longest path prefix and HTTP method, on whole path segments.
 - **API keys:** consumers (client apps) get keys, shown once and stored hashed. No key or a wrong key is `401`, a blocked consumer is `403`.
 - **Rate limiting:** a token bucket per consumer and one per workspace in Redis, checked together in one atomic Lua script shared by every gateway instance. Over either limit is `429` with `Retry-After`. If Redis is down, traffic still flows (fail open).
+- **Load balancing and health checks:** a service runs on several backend instances (targets) with weights; the gateway spreads requests by smooth weighted round robin and avoids a broken instance, found by periodic health checks and by failures in real traffic (`503 no_healthy_upstream` when none is left).
 - **SSRF protection:** a tenant's service can't point the gateway at the platform's insides (private, loopback, link-local and cloud-metadata addresses). The gateway checks the address it really connects to, after DNS, so DNS rebinding doesn't help; the control plane refuses plainly internal URLs on save. The Platform Admin can allow exceptions (`UPSTREAM_ALLOW`).
 - **Noisy-neighbor protection:** each workspace may have only so many requests in flight per gateway instance (`503 workspace_overloaded` beyond that), so a slow backend in one workspace can't tie up the gateway for the others.
 - **Reverse proxy:** per-route timeouts (`504`), dead backends (`502`), optional prefix stripping, trusted `X-Forwarded-*` headers. The backend never sees the API key; it gets `X-Consumer-ID`.
@@ -117,7 +118,7 @@ function Add($path, $body) {
         -ContentType application/json -Body ($body | ConvertTo-Json)
 }
 
-$svc = Add /services  @{ name = "orders"; upstream_url = "http://mock-backend:9000" }
+$svc = Add /services  @{ name = "orders"; targets = @(@{ url = "http://mock-backend:9000" }) }
 $rt  = Add /routes    @{ service_id = $svc.id; path_prefix = "/v1/orders"; methods = @("GET", "POST") }
 $app = Add /consumers @{ name = "mobile-app"; email = "dev@example.com"; rate_limit_per_min = 3 }
 $key = (Add "/consumers/$($app.id)/keys" @{ name = "demo" }).key   # shown only this once
@@ -167,7 +168,7 @@ Some decisions worth a look (all of them, with reasons, are in the [decisions lo
 | [`backend/gateway/`](backend/gateway) | The Go gateway: `cmd/gateway` (main) and `internal/` (config, proxy, middleware, ratelimit, ...) |
 | [`backend/control-plane/`](backend/control-plane) | The FastAPI admin API, organized by feature (users, services, routes, consumers, keys, gateway_config) |
 | [`backend/auth/`](backend/auth) | Prepares GoTrue's own database on the shared Postgres |
-| [`backend/mock-backend/`](backend/mock-backend) | A small echo service to proxy to |
+| [`backend/mock-backend/`](backend/mock-backend) | A small echo service to proxy to (two copies in Compose, for load balancing) |
 | [`e2e/`](e2e) | End-to-end tests against the whole stack |
 | [`loadtest/`](loadtest) | The k6 load test and its results |
 | [`docs/`](docs) | [Plan](docs/PLAN.md), [roadmap and decisions](docs/ROADMAP.md), [MT design decisions](docs/MT_ROLES_DECISIONS.md), [developer guide](docs/DEVELOPMENT.md) |
@@ -186,7 +187,7 @@ docker compose run --rm loadtest            # k6 load test
 
 ## Status and what's next
 
-The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), and SSRF protection (MT.9), are in. Next on the [roadmap](docs/ROADMAP.md):
+The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT)** is in progress: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), SSRF protection (MT.9), and load balancing over several targets with active and passive health checks (MT.10), are in. Next on the [roadmap](docs/ROADMAP.md):
 
-- **More gateway work:** load balancing with health checks, CORS and a body size limit.
+- **More gateway work:** CORS and a body size limit.
 - Later: plans and monthly quotas, usage analytics, Prometheus metrics, a developer portal, and finally the React app.

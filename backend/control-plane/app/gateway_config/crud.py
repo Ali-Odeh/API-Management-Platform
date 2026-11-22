@@ -17,6 +17,7 @@ from app.gateway_config.models import SINGLETON_ID, ConfigSeq, WorkspaceConfig
 from app.gateway_config.schemas import (
     ConfigAnswer,
     GatewayLimits,
+    HealthConfig,
     KeyConfig,
     RouteConfig,
     ServiceConfig,
@@ -25,7 +26,7 @@ from app.gateway_config.schemas import (
 )
 from app.keys.models import ApiKey
 from app.routes.models import Route
-from app.services.models import Service
+from app.services.models import Service, ServiceTarget
 from app.workspaces.limits import default_limit
 from app.workspaces.models import Workspace, WorkspaceStatus
 
@@ -51,8 +52,6 @@ class WorkspaceCache:
 
 _CURSOR_QUERY = select(ConfigSeq.generation, ConfigSeq.seq).where(ConfigSeq.id == SINGLETON_ID)
 _IN_CONFIG = (WorkspaceStatus.ACTIVE, WorkspaceStatus.SUSPENDED)
-# Until service targets exist (MT.10), a service's upstream_url is its one target.
-_ONLY_TARGET_WEIGHT = 100
 
 
 async def get_config_seq(db: AsyncSession) -> ConfigSeq:
@@ -156,10 +155,34 @@ async def _build(
         .join(WorkspaceConfig, WorkspaceConfig.workspace_id == Workspace.id)
         .where(Workspace.id.in_(workspace_ids))
     )
+    targets: defaultdict[uuid.UUID, list[TargetConfig]] = defaultdict(list)
+    for t in await conn.execute(
+        select(ServiceTarget.service_id, ServiceTarget.id, ServiceTarget.url, ServiceTarget.weight)
+        .where(ServiceTarget.workspace_id.in_(workspace_ids), ServiceTarget.is_active)
+        .order_by(ServiceTarget.created_at, ServiceTarget.id)
+    ):
+        targets[t.service_id].append(TargetConfig(id=t.id, url=t.url, weight=t.weight))
+    # A service is routable only with at least one active target.
+    routable = select(ServiceTarget.service_id).where(ServiceTarget.is_active)
     services = _grouped(
         await conn.execute(
-            select(Service.workspace_id, Service.id, Service.timeout_ms, Service.upstream_url)
-            .where(Service.workspace_id.in_(workspace_ids), Service.is_active)
+            select(
+                Service.workspace_id,
+                Service.id,
+                Service.timeout_ms,
+                Service.lb_algorithm,
+                Service.hc_path,
+                Service.hc_interval_s,
+                Service.hc_unhealthy_threshold,
+                Service.hc_healthy_threshold,
+                Service.passive_failures,
+                Service.passive_eject_s,
+            )
+            .where(
+                Service.workspace_id.in_(workspace_ids),
+                Service.is_active,
+                Service.id.in_(routable),
+            )
             .order_by(Service.id)
         )
     )
@@ -175,7 +198,12 @@ async def _build(
                 Route.auth_required,
             )
             .join(Service, Route.service_id == Service.id)
-            .where(Route.workspace_id.in_(workspace_ids), Route.is_active, Service.is_active)
+            .where(
+                Route.workspace_id.in_(workspace_ids),
+                Route.is_active,
+                Service.is_active,
+                Service.id.in_(routable),
+            )
             .order_by(Route.path_prefix)
         )
     )
@@ -210,7 +238,16 @@ async def _build(
                 ServiceConfig(
                     id=s.id,
                     timeout_ms=s.timeout_ms,
-                    targets=[TargetConfig(id=s.id, url=s.upstream_url, weight=_ONLY_TARGET_WEIGHT)],
+                    lb_algorithm=s.lb_algorithm,
+                    health=HealthConfig(
+                        path=s.hc_path,
+                        interval_s=s.hc_interval_s,
+                        unhealthy=s.hc_unhealthy_threshold,
+                        healthy=s.hc_healthy_threshold,
+                        passive_failures=s.passive_failures,
+                        passive_eject_s=s.passive_eject_s,
+                    ),
+                    targets=targets[s.id],
                 )
                 for s in services[workspace.id]
             ],

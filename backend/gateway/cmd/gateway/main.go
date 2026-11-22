@@ -30,6 +30,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/server"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/settings"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/tenant"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/upstream"
 )
 
 func main() {
@@ -78,6 +79,11 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 	var background sync.WaitGroup
 	background.Go(func() { poller.Run(ctx) })
 
+	// One balancer per service, following the config: it starts and stops
+	// the targets' active health checks as services come and go.
+	targets := upstream.NewRegistry(ctx, cfg.Egress, log)
+	background.Go(func() { targets.Run(ctx, store) })
+
 	// Redis is only reached on the first limited request; if it is down,
 	// requests are let through (fail open) until it is back.
 	rdb, err := ratelimit.NewClient(cfg.RedisURL.Reveal())
@@ -87,9 +93,9 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 	}
 	defer rdb.Close()
 
-	err = server.New(cfg, apiHandler(store, cfg.BaseDomain, cfg.Egress, ratelimit.New(rdb), log), log).ListenAndServe(ctx)
-	stop()            // if the server failed on its own, stop the poller too
-	background.Wait() // never exit while the poller is still running
+	err = server.New(cfg, apiHandler(store, cfg.BaseDomain, cfg.Egress, targets, ratelimit.New(rdb), log), log).ListenAndServe(ctx)
+	stop()            // if the server failed on its own, stop the poller and checkers too
+	background.Wait() // never exit while the poller or a health check is still running
 
 	if err != nil {
 		log.Error("gateway stopped with an error", "error", err)
@@ -104,8 +110,10 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 //	request ID → logger → recover → tenant (503/404/403) → router (400/404/405)
 //	  → auth (401/403) → rate limit (429) → in flight (503) → forwarder (502/504)
 //
-// The forwarder connects only to upstreams the egress policy allows (SSRF
-// protection): an internal address not on UPSTREAM_ALLOW gets 502.
+// The forwarder sends each request to one of its service's healthy targets,
+// by weight (503 when none is left), and connects only to upstreams the
+// egress policy allows (SSRF protection): an internal address not on
+// UPSTREAM_ALLOW gets 502.
 //
 // Recover sits inside the logger, so a panic's 500 shows in the request log.
 // Tenant finds the workspace from the Host before anything else: matching,
@@ -117,9 +125,9 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // requests on their way to a backend hold one of the workspace's slots.
 // GET /health is answered by the server before this chain, so Docker's
 // health checks don't fill the log.
-func apiHandler(source tenant.SnapshotSource, baseDomain string, upstreams *egress.Policy, limiter middleware.Allower, log *slog.Logger) http.Handler {
+func apiHandler(source tenant.SnapshotSource, baseDomain string, upstreams *egress.Policy, targets *upstream.Registry, limiter middleware.Allower, log *slog.Logger) http.Handler {
 	afterMatch := middleware.Chain(
-		proxy.NewForwarder(log, upstreams),
+		proxy.NewForwarder(log, upstreams, targets),
 		middleware.Auth(log),
 		middleware.RateLimit(limiter, log),
 		middleware.InFlight(&inflight.Limiter{}, log),

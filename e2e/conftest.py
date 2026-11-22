@@ -31,6 +31,8 @@ MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://mailpit:8025")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8080")
 # The backend as the gateway reaches it.
 MOCK_BACKEND_URL = os.environ.get("MOCK_BACKEND_URL", "http://mock-backend:9000")
+# Its second copy (MT.10), for load balancing.
+MOCK_BACKEND_2_URL = os.environ.get("MOCK_BACKEND_2_URL", "http://mock-backend-2:9000")
 # Same host, a port nothing listens on: connection refused at once (a 502).
 DEAD_BACKEND_URL = "http://mock-backend:9"
 
@@ -66,9 +68,22 @@ class World:
         return f"/e2e-{self.run_id}/{label}"
 
     def service(
-        self, label: str, upstream_url: str = MOCK_BACKEND_URL, timeout_ms: int = 5000
+        self,
+        label: str,
+        upstream_url: str = MOCK_BACKEND_URL,
+        timeout_ms: int = 5000,
+        *,
+        targets: list[dict[str, Any]] | None = None,
+        **settings: Any,
     ) -> dict[str, Any]:
-        body = {"name": self.name(label), "upstream_url": upstream_url, "timeout_ms": timeout_ms}
+        """A service with one target at upstream_url, or the given targets;
+        `settings` are other fields such as the health checks (MT.10)."""
+        body = {
+            "name": self.name(label),
+            "targets": targets or [{"url": upstream_url}],
+            "timeout_ms": timeout_ms,
+            **settings,
+        }
         svc = self._create("/services", body)
         self._services.append(svc["id"])
         return svc

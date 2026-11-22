@@ -40,7 +40,7 @@ def _make(admin: httpx.Client, rate_limit_per_min: int, max_concurrent: int) -> 
         json={"rate_limit_per_min": rate_limit_per_min, "max_concurrent": max_concurrent},
     )
     assert r.status_code == 200, r.text
-    r = admin.post(f"{base}/services", json={"name": "api", "upstream_url": MOCK_BACKEND_URL})
+    r = admin.post(f"{base}/services", json={"name": "api", "targets": [{"url": MOCK_BACKEND_URL}]})
     assert r.status_code == 201, r.text
     service_id = r.json()["id"]
     for prefix, auth_required in (("/public", False), ("/private", True)):

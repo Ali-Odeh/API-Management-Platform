@@ -22,7 +22,7 @@ from app.core.security import generate_api_key, hash_api_key
 from app.keys.models import KEY_PREFIX_LENGTH, ApiKey
 from app.members.models import WorkspaceMember
 from app.routes.models import Route
-from app.services.models import Service
+from app.services.models import Service, ServiceTarget
 from app.users.models import User
 from app.workspaces.models import Workspace
 
@@ -55,10 +55,29 @@ async def make_member(
 
 
 async def make_service(
-    db: AsyncSession, workspace_id: uuid.UUID, name: str = "orders", **fields: Any
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    name: str = "orders",
+    *,
+    upstream_url: str = "http://mock-backend:9000",
+    **fields: Any,
 ) -> Service:
-    fields.setdefault("upstream_url", "http://mock-backend:9000")
-    return await _save(db, Service(workspace_id=workspace_id, name=name, **fields))
+    """A service with one target at upstream_url (weight 100)."""
+    service = Service(workspace_id=workspace_id, name=name, **fields)
+    service.targets = [ServiceTarget(workspace_id=workspace_id, url=upstream_url)]
+    return await _save(db, service)
+
+
+async def make_target(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    service_id: uuid.UUID,
+    url: str = "http://mock-backend-2:9000",
+    **fields: Any,
+) -> ServiceTarget:
+    return await _save(
+        db, ServiceTarget(workspace_id=workspace_id, service_id=service_id, url=url, **fields)
+    )
 
 
 async def make_route(

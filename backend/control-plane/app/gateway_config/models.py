@@ -25,7 +25,18 @@ from app.core.db import Base
 # part of it. Only a change to one of these columns bumps: renaming a
 # consumer or a workspace, or `updated_at` / `last_used_at` moving, doesn't.
 CONFIG_COLUMNS: dict[str, tuple[str, ...]] = {
-    "services": ("upstream_url", "timeout_ms", "is_active"),
+    "services": (
+        "timeout_ms",
+        "is_active",
+        "lb_algorithm",
+        "hc_path",
+        "hc_interval_s",
+        "hc_unhealthy_threshold",
+        "hc_healthy_threshold",
+        "passive_failures",
+        "passive_eject_s",
+    ),
+    "service_targets": ("service_id", "url", "weight", "is_active"),
     "routes": (
         "service_id",
         "path_prefix",

@@ -138,7 +138,15 @@ async def _check_upgraded(before: dict[str, list[dict[str, Any]]], gotrue: FakeG
         # The config is exactly as it was: no row added, changed or bumped.
         after = await _snapshot(engine)
         mvp_version = before.pop("config_version")[0]["version"]
+        # MT.10 moved each service's upstream_url into its one target, with the
+        # service's id (the target id the gateway already used), weight 100.
+        upstream_urls = {row["id"]: row.pop("upstream_url") for row in before["services"]}
         assert _columns_of(after, before) == before
+        async with engine.connect() as conn:
+            targets = (await conn.execute(text("SELECT * FROM service_targets"))).all()
+        assert [(t.id, t.service_id, t.url, t.weight, t.is_active) for t in targets] == [
+            (SERVICE_ID, SERVICE_ID, upstream_urls[SERVICE_ID], 100, True)
+        ]
         # The sequence continues from the MVP's version (MT.6), so a running
         # gateway isn't sent back to the start; the workspace starts at version 1.
         async with engine.connect() as conn:

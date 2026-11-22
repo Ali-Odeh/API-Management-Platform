@@ -181,7 +181,7 @@ export function setup() {
 // A service, a public and a protected route, and a consumer with a key, all
 // named after this run; returned once the gateway serves them.
 function createTestObjects(token) {
-  const service = admin('POST', '/services', { name: `lt-${RUN_ID}-backend`, upstream_url: BACKEND }, token);
+  const service = admin('POST', '/services', { name: `lt-${RUN_ID}-backend`, targets: [{ url: BACKEND }] }, token);
   const route = (label, authRequired) =>
     admin('POST', '/routes', {
       service_id: service.id,

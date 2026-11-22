@@ -14,20 +14,32 @@ from app.workspaces.models import WorkspaceStatus
 
 
 class TargetConfig(BaseModel):
-    """A backend instance. Until service targets exist (MT.10), each service
-    has exactly one: its upstream_url, with the service's id."""
+    """An active backend instance of a service (MT.10)."""
 
     id: uuid.UUID
     url: str
     weight: int
 
 
+class HealthConfig(BaseModel):
+    """How the gateway checks a service's targets (decision 14)."""
+
+    path: str
+    interval_s: int
+    unhealthy: int  # failed active checks in a row that take a target out
+    healthy: int  # passed checks in a row that bring it back
+    passive_failures: int  # failed requests in a row that set a target aside
+    passive_eject_s: int  # for this long
+
+
 class ServiceConfig(BaseModel):
-    """An active service."""
+    """An active service with at least one active target."""
 
     id: uuid.UUID
     timeout_ms: int
-    targets: list[TargetConfig]
+    lb_algorithm: str
+    health: HealthConfig
+    targets: list[TargetConfig]  # oldest first
 
 
 class RouteConfig(BaseModel):

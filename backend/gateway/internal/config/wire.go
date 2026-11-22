@@ -35,9 +35,20 @@ type wireLimits struct {
 }
 
 type wireService struct {
-	ID        string       `json:"id"`
-	TimeoutMS int          `json:"timeout_ms"`
-	Targets   []wireTarget `json:"targets"`
+	ID          string       `json:"id"`
+	TimeoutMS   int          `json:"timeout_ms"`
+	LBAlgorithm string       `json:"lb_algorithm"`
+	Health      *wireHealth  `json:"health"`
+	Targets     []wireTarget `json:"targets"`
+}
+
+type wireHealth struct {
+	Path            string `json:"path"`
+	IntervalS       int    `json:"interval_s"`
+	Unhealthy       int    `json:"unhealthy"`
+	Healthy         int    `json:"healthy"`
+	PassiveFailures int    `json:"passive_failures"`
+	PassiveEjectS   int    `json:"passive_eject_s"`
 }
 
 type wireTarget struct {
@@ -199,9 +210,16 @@ func (w wireWorkspace) toWorkspace() (ws *Workspace, skipped []error, err error)
 		Keys:    make(map[string]Key, len(w.Keys)),
 	}
 
-	services := make(map[string]wireService, len(w.Services))
-	for _, s := range w.Services {
-		services[s.ID] = s
+	services := make(map[string]*Service, len(w.Services))
+	for _, wsvc := range w.Services {
+		svc, svcSkipped, err := wsvc.toService(w.ID)
+		skipped = append(skipped, svcSkipped...)
+		if err != nil {
+			skipped = append(skipped, fmt.Errorf("workspace %s, service %s: %w", w.Slug, wsvc.ID, err))
+			continue
+		}
+		services[svc.ID] = svc
+		ws.Services = append(ws.Services, svc)
 	}
 	for _, wr := range w.Routes {
 		route, err := wr.toRoute(services)
@@ -228,7 +246,107 @@ func (w wireWorkspace) toWorkspace() (ws *Workspace, skipped []error, err error)
 	return ws, skipped, nil
 }
 
-func (w wireRoute) toRoute(services map[string]wireService) (Route, error) {
+// The only load-balancing algorithm so far (decision 14). An empty one is
+// round robin too, as from a control plane older than MT.10.
+const lbRoundRobin = "round_robin"
+
+// Target weights the control plane allows.
+const minWeight, maxWeight = 1, 1000
+
+// toService checks a service and its targets. A bad target is left out
+// (skipped); a service without any usable target, or with unusable
+// settings, is an error: its routes are left out.
+func (w wireService) toService(workspaceID string) (svc *Service, skipped []error, err error) {
+	if w.ID == "" {
+		return nil, nil, errors.New("no id")
+	}
+	if w.TimeoutMS <= 0 {
+		return nil, nil, fmt.Errorf("timeout_ms %d is not positive", w.TimeoutMS)
+	}
+	if w.LBAlgorithm != "" && w.LBAlgorithm != lbRoundRobin {
+		return nil, nil, fmt.Errorf("unknown lb_algorithm %q", w.LBAlgorithm)
+	}
+	health, err := w.Health.toHealth()
+	if err != nil {
+		return nil, nil, err
+	}
+	svc = &Service{
+		ID:          w.ID,
+		WorkspaceID: workspaceID,
+		Timeout:     time.Duration(w.TimeoutMS) * time.Millisecond,
+		Health:      health,
+		Targets:     make([]Target, 0, len(w.Targets)),
+	}
+	seen := make(map[string]bool, len(w.Targets))
+	for _, wt := range w.Targets {
+		target, err := wt.toTarget()
+		if err == nil && seen[wt.ID] {
+			err = errors.New("duplicate id")
+		}
+		if err != nil {
+			skipped = append(skipped, fmt.Errorf("service %s, target %s: %w", w.ID, wt.ID, err))
+			continue
+		}
+		seen[wt.ID] = true
+		svc.Targets = append(svc.Targets, target)
+	}
+	if len(svc.Targets) == 0 {
+		return nil, skipped, errors.New("no usable target")
+	}
+	svc.Fingerprint = fingerprint(svc)
+	return svc, skipped, nil
+}
+
+func (w wireTarget) toTarget() (Target, error) {
+	if w.ID == "" {
+		return Target{}, errors.New("no id")
+	}
+	u, err := url.Parse(w.URL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return Target{}, fmt.Errorf("url %q is not an absolute http(s) URL", w.URL)
+	}
+	if w.Weight < minWeight || w.Weight > maxWeight {
+		return Target{}, fmt.Errorf("weight %d is not %d to %d", w.Weight, minWeight, maxWeight)
+	}
+	return Target{ID: w.ID, URL: u, Weight: w.Weight}, nil
+}
+
+// toHealth checks the health settings. Missing settings (a control plane
+// older than MT.10) mean no checks at all.
+func (w *wireHealth) toHealth() (Health, error) {
+	if w == nil {
+		return Health{}, nil
+	}
+	switch {
+	case !strings.HasPrefix(w.Path, "/"):
+		return Health{}, fmt.Errorf("health path %q does not start with '/'", w.Path)
+	case w.IntervalS < 1 || w.Unhealthy < 1 || w.Healthy < 1:
+		return Health{}, fmt.Errorf("active health settings %d s, %d, %d must be at least 1", w.IntervalS, w.Unhealthy, w.Healthy)
+	case w.PassiveFailures < 1 || w.PassiveEjectS < 1:
+		return Health{}, fmt.Errorf("passive health settings %d, %d s must be at least 1", w.PassiveFailures, w.PassiveEjectS)
+	}
+	return Health{
+		Path:            w.Path,
+		Interval:        time.Duration(w.IntervalS) * time.Second,
+		Unhealthy:       w.Unhealthy,
+		Healthy:         w.Healthy,
+		PassiveFailures: w.PassiveFailures,
+		PassiveEject:    time.Duration(w.PassiveEjectS) * time.Second,
+	}, nil
+}
+
+// fingerprint names everything a balancer depends on: the targets (id, url,
+// weight, in order) and the health settings.
+func fingerprint(svc *Service) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%+v", svc.Health)
+	for _, t := range svc.Targets {
+		fmt.Fprintf(&b, "|%s %s %d", t.ID, t.URL, t.Weight)
+	}
+	return b.String()
+}
+
+func (w wireRoute) toRoute(services map[string]*Service) (Route, error) {
 	if !strings.HasPrefix(w.PathPrefix, "/") {
 		return Route{}, fmt.Errorf("path_prefix %q does not start with '/'", w.PathPrefix)
 	}
@@ -237,18 +355,7 @@ func (w wireRoute) toRoute(services map[string]wireService) (Route, error) {
 	}
 	service, ok := services[w.ServiceID]
 	if !ok {
-		return Route{}, fmt.Errorf("service %s is not in the config", w.ServiceID)
-	}
-	if service.TimeoutMS <= 0 {
-		return Route{}, fmt.Errorf("service timeout_ms %d is not positive", service.TimeoutMS)
-	}
-	// One target per service until load balancing (MT.10).
-	if len(service.Targets) == 0 {
-		return Route{}, fmt.Errorf("service %s has no target", w.ServiceID)
-	}
-	upstream, err := url.Parse(service.Targets[0].URL)
-	if err != nil || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.Host == "" {
-		return Route{}, fmt.Errorf("target url %q is not an absolute http(s) URL", service.Targets[0].URL)
+		return Route{}, fmt.Errorf("service %s is not in the config, or not usable", w.ServiceID)
 	}
 	return Route{
 		ID:           w.ID,
@@ -257,8 +364,7 @@ func (w wireRoute) toRoute(services map[string]wireService) (Route, error) {
 		Methods:      w.Methods,
 		StripPrefix:  w.StripPrefix,
 		AuthRequired: w.AuthRequired,
-		Upstream:     upstream,
-		Timeout:      time.Duration(service.TimeoutMS) * time.Millisecond,
+		Service:      service,
 	}, nil
 }
 

@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 22, 2026 · **Current step:** MT.9 done (SSRF protection); next: MT.10
+**Last updated:** Nov 22, 2026 · **Current step:** MT.10 done (load balancing and health checks); next: MT.11
 
 ## Overview
 
@@ -13,7 +13,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | M2: Control plane done | ✅✅✅✅✅✅ 6/6 | ✅ Done |
 | M3: Gateway proxies (Go) | ✅✅✅✅✅✅✅ 7/7 | ✅ Done |
 | M4: MVP done | ✅✅✅✅✅ 5/5 | ✅ Done |
-| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅⬜⬜⬜ 9/12 | 🔄 In progress |
+| MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅⬜⬜ 10/12 | 🔄 In progress |
 | v2: Plans and analytics (backend) | not planned yet | ⏳ After MT |
 | v3: Portal and extras (backend) | not planned yet | ⏳ After v2 |
 | FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ **Last**, after every backend milestone |
@@ -26,7 +26,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 1280 passing (about 5.5 min), including internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
+| Tests | 1408 passing (about 6 min), including service targets (the 50 limit, the last target kept under parallel deletes, URLs once per service), health settings, one config bump per transaction, internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
 | Coverage | 99% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
@@ -36,15 +36,15 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 504 passing (tests, table cases and fuzz seeds), including internal upstreams refused before connecting (also through a name, and through DNS rebinding with a fake DNS server), the SSRF warning throttled per workspace and host, the workspace and consumer buckets spent together or not at all by 100 parallel requests, a slow workspace held to its in-flight share while another keeps answering, two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
-| Coverage | **97.9%** total (minimum 90%, enforced): inflight, tenant, proxy, middleware and 3 more packages at 100%, egress 98.9%, config 95.8%, server 97.4%, ratelimit 97.9%, main 87.0% |
+| Tests | 542 passing (tests, table cases and fuzz seeds), including smooth weighted round robin (nginx's order for 5/1/1, exact shares over many picks), active checks against real servers with exact thresholds, passive ejection and return, balancers kept or replaced across config versions, internal upstreams refused before connecting (also through a name, and through DNS rebinding with a fake DNS server), the SSRF warning throttled per workspace and host, the workspace and consumer buckets spent together or not at all by 100 parallel requests, a slow workspace held to its in-flight share while another keeps answering, two workspaces on one path kept apart through the whole chain, config resync, a streamed answer over 64 MiB, the 1 GiB answer cap and unreadable workspaces dropped alone; the Redis tests need Docker's Redis |
+| Coverage | **98.1%** total (minimum 90%, enforced): inflight, tenant, proxy, middleware and 3 more packages at 100%, egress 98.9%, upstream 98.6%, config 95.8%, server 97.4%, ratelimit 97.9%, main 87.0% |
 | Fuzz tests | 9 (paths, matching, prefix stripping, request IDs, config answers, Host parsing: about 800,000 Hosts in the first 15 s run, the SSRF deny list: 2.6 million addresses in 15 s against an independent reading, and the `UPSTREAM_ALLOW` parser: 738,000 lists in 15 s), 10 s each in CI |
-| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 11 µs** with the tenant and in-flight steps (10.7–11.9 µs over 3 runs; 9.9–13.2 µs at MT.7, 8.5 µs at step 3.7); an in-flight slot **23 ns** (no allocations; 79 ns with 8 goroutines on one workspace); one rate-limit check with both buckets **≈ 0.4 ms** (0.38–0.49 ms; one bucket 0.39–0.40 ms on the same machine; Windows → Docker's Redis, so a round trip dominates) |
+| Benchmarks | match **0.04 / 0.4 / 4–5 µs** for 10 / 100 / 1000 routes (no allocations); key check **0.28 µs** for 100 or 100,000 keys; Host → workspace **0.04–0.06 µs** (no allocations); whole chain without network **≈ 11 µs** with the tenant and in-flight steps (10.7–11.9 µs over 3 runs; 9.9–13.2 µs at MT.7, 8.5 µs at step 3.7); a target pick **23–36 ns** for 1 to 10 targets (no allocations); an in-flight slot **23 ns** (no allocations; 79 ns with 8 goroutines on one workspace); one rate-limit check with both buckets **≈ 0.4 ms** (0.38–0.49 ms; one bucket 0.39–0.40 ms on the same machine; Windows → Docker's Redis, so a round trip dominates) |
 | Auth (live) | no key 401, wrong key 401, valid 200, blocked 403, unblocked 200, revoked 401; key never in logs or at the backend |
 | Rate limit (live) | limit 5/min: 5 × 200 (remaining 4 → 0), then 429 with `Retry-After: 12`; Redis stopped → requests let through, one throttled warning; limiting resumes ~3 s after Redis is back. Workspace limit 3/min (MT.8): a public route 3 × 200 then 429, and a consumer with its own budget 429 too (`limited_workspace` in the log); in-flight limit 1: `503 workspace_overloaded` with `Retry-After: 1` while a 2 s request runs, another workspace answering |
 | Gateway overhead (live) | `gateway_ms` **0.06–0.19 ms** per request (Docker, single requests) |
 | gofmt, go vet | clean |
-| Race detector | clean, including the in-flight counters under 64 goroutines, 100 parallel two-bucket checks, 1,000 requests while the config changes every ms, and requests reading while 1,000 answers are merged (`go test -race` in a Linux container; also in CI) |
+| Race detector | clean, including balancers picked while the config changes and checkers start and stop, the in-flight counters under 64 goroutines, 100 parallel two-bucket checks, 1,000 requests while the config changes every ms, and requests reading while 1,000 answers are merged (`go test -race` in a Linux container; also in CI) |
 | Config propagation | a committed change served by the gateway **≈ 4 ms** after `psql` returns (10 runs, first 45 ms; MT.6, one changed workspace per answer); 68 ms admin change → gateway at step 2.5 |
 | Proxy errors (live) | slow backend → **504 after 5.05 s** (route timeout 5 s); backend down → **502** |
 | Image | 16.9 MB (distroless, non-root) |
@@ -56,7 +56,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | --- | --- |
 | CI | GitHub Actions on every push and pull request (`.github/workflows/ci.yml`): control plane, gateway (`-race`, 90% coverage gate, fuzz runs, image build), mock backend, then the end-to-end job on a fresh stack with a k6 smoke run |
 | API contract | `backend/control-plane/openapi.json`, checked by a test |
-| End-to-end tests | **42 stories pass in about 17 s**, including a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
+| End-to-end tests | **45 stories pass in about 21 s**, including traffic over two targets by weight (exactly 30 and 10 of 40), traffic moving off a stopped target within its thresholds and back, `503 no_healthy_upstream`, a service pointing at `http://redis:6379` refused with `502 upstream_not_allowed` and internal upstreams refused on save (422), a workspace over its rate limit (429 on public and protected routes) and one with its requests in flight (503), two workspaces on their own subdomains (`Host: <slug>.localhost`) with the same path, (`docker compose run --rm e2e`), including GoTrue login with password and TOTP; nothing left behind (the e2e MFA factor is removed; the test person and the workspace `e2e-tenant` are reused; each lifecycle story's own workspace ends deleted, for the purge job); fresh stack healthy in 17 s (measured at step 4.3, before GoTrue) |
 | Load test (k6) | 300 requests/s, 3 × 30 s, **0 errors**: the gateway adds **0.78 ms median / 0.83 ms p95** (since MT.8 public and protected routes both make the Redis call; the gateway's own work with Redis ≈ 0.38 ms in its log; 0.77 / 0.95 ms at step 4.4); `default`'s rate limit is raised for the run and put back; `docker compose run --rm loadtest` |
 
 ## Step 0: Go basics (Ali, in parallel)
@@ -137,7 +137,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT.7 | Gateway tenancy | ✅ |
 | MT.8 | Workspace limits in the gateway | ✅ |
 | MT.9 | SSRF protection | ✅ |
-| MT.10 | Load balancing and health checks | ⬜ |
+| MT.10 | Load balancing and health checks | ✅ |
 | MT.11 | CORS and body size limit | ⬜ |
 | MT.12 | MT end to end, load test, docs | ⬜ |
 
@@ -288,6 +288,8 @@ The order follows dependencies: identity before roles, roles before audit and me
 - Compose gets a second mock-backend instance for tests
 
 **Done when:** unit tests show the weighted distribution over many picks, skipping, recovery and passive ejection; e2e shows traffic spread over two targets and moving off a stopped one within the configured thresholds.
+
+**Status:** ✅ Done (Nov 22). Commits `9335e49` (control plane: `service_targets`, the migration moving each `upstream_url` into one target, health settings, target endpoints, the config answer, one bump per transaction), `d04d3af` (gateway: the `upstream` package with the balancer, active checks, passive ejection and the registry; the forwarder picks per request; `target_id` in the log; `503 no_healthy_upstream`), `dab224f` (a second mock backend and the e2e stories), then the docs. The migration was run down and up on the local database (53 services, each now with its target). Unit tests cover the weighted distribution (exact shares, nginx's smooth order), skipping, recovery and passive ejection; e2e shows exactly 30 / 10 over two targets and traffic moving off a stopped one within the thresholds; the live log shows `target set aside after failed requests` and `target_id`. Building it found two things fixed on the way: one service with its targets bumped the config twice (now once per transaction), and targets sent in one request came back in random order (now in the order sent).
 
 ### MT.11 CORS and body size limit [15, 16]
 
@@ -515,3 +517,12 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 22 | MT.9 | Compose defaults `UPSTREAM_ALLOW` to `mock-backend` with `${UPSTREAM_ALLOW-mock-backend}` (no colon), so an existing `.env` without the line keeps the local stack working and an explicit empty value allows nothing | Upgrading developers need no `.env` change; production sets it empty or to its own hosts |
 | Nov 22 | MT.9 | A policy refusal is never reported as a timeout, even when the route's time ran out meanwhile; no new log field on the request line, a separate warning names host and address | The client and the operator see the real cause; the request line's status 502 and the warning are enough |
 | Nov 22 | MT.9 | Review fixes: the SSRF warning is throttled per workspace and host (10 s, with `skipped_warnings`); `UPSTREAM_ALLOW` refuses entries that could never match (a zoned address, an IPv4-mapped network shorter than /96) and accepts `_` in host names; a mixed answer whose allowed address fails is a connection error; a client that hung up stays `499`; the rebinding test sets its answers between dials; fuzz tests for the allow-list parser (Go, also in CI) and seeded random checks in the control plane | A tenant could write one warning per request; an exception that looks set must work; Docker serves names with `_`; the status must name the real cause; AGENTS.md wants fuzz tests for security parsers. The control plane has no fuzzing library, and a seeded random test needs no new dependency |
+| Nov 22 | MT.10 | The config sequence moves once per **transaction**, not per statement (`bump_workspaces` remembers the transaction's sequence in a transaction-local setting); each workspace's version moves once | Creating a service with its targets is two statements and was two bumps, two NOTIFYs and two gateway wake-ups for one change; the same for cascades and the purge |
+| Nov 22 | MT.10 | Migrated targets keep the service's id as their id | The gateway already used that id (MT.6), so a running gateway's balancer and log ids stay the same through the upgrade |
+| Nov 22 | MT.10 | At most 50 targets per service (`409`); the last target can't be removed (`409`, switch it off instead); a duplicate URL in one service is `409` (`422` within one create request); a target's `PATCH` changes only `weight` and `is_active` | Each target is health-checked by every gateway instance, so the number is bounded like other quotas; "a service has one or more targets" (PLAN.md section 7) holds; the plan lists "update weight or state". Adding and removing targets lock the service row, tested with parallel deletes |
+| Nov 22 | MT.10 | Health-setting bounds: interval 1–300 s, thresholds 1–10, passive failures 1–100, eject 1–3600 s; `hc_path` a path only; `lb_algorithm` only `round_robin` | Decided here (the plan had defaults only); a CHECK for each in the database |
+| Nov 22 | MT.10 | Targets made in one request get their creation times in the order sent | Postgres's `now()` is the same for a whole transaction, so "oldest first" would otherwise follow the random ids |
+| Nov 22 | MT.10 | The gateway keeps a service's balancer while its fingerprint (targets' ids, URLs, weights in order, health settings) is the same; services of suspended workspaces aren't checked; a request on an older config gets a temporary balancer the registry doesn't keep | Health state survives unrelated config changes (decision 14); checkers never outlive their service |
+| Nov 22 | MT.10 | Passive checks count connection errors, timeouts and 5xx; client hang-ups and egress refusals count for nothing, for active checks too | A refused target must keep answering `502 upstream_not_allowed` (MT.9), not hide behind `503 no_healthy_upstream` |
+| Nov 22 | MT.10 | One active check times out at the interval, at most 5 s; a 3xx is healthy and not followed; each target's first check waits a random part of the interval | "A short timeout" made concrete; checks of many targets (and a restarted gateway's) don't fire at once |
+| Nov 22 | MT.10 | The mock backend names its instance in the echo and can be made to act down (`PUT /_mock/state`); Compose runs `mock-backend-2`, and `UPSTREAM_ALLOW` defaults to both | e2e stops a target without Docker access; it runs only in the test stack |

@@ -391,6 +391,45 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HealthConfig": {
+        "description": "How the gateway checks a service's targets (decision 14).",
+        "properties": {
+          "healthy": {
+            "title": "Healthy",
+            "type": "integer"
+          },
+          "interval_s": {
+            "title": "Interval S",
+            "type": "integer"
+          },
+          "passive_eject_s": {
+            "title": "Passive Eject S",
+            "type": "integer"
+          },
+          "passive_failures": {
+            "title": "Passive Failures",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "unhealthy": {
+            "title": "Unhealthy",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "interval_s",
+          "unhealthy",
+          "healthy",
+          "passive_failures",
+          "passive_eject_s"
+        ],
+        "title": "HealthConfig",
+        "type": "object"
+      },
       "KeyConfig": {
         "description": "A non-revoked key. Blocked consumers' keys are included so the gateway can answer 403.",
         "properties": {
@@ -1148,6 +1187,27 @@
         "title": "Page[ServiceOut]",
         "type": "object"
       },
+      "Page_TargetOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TargetOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[TargetOut]",
+        "type": "object"
+      },
       "Page_WorkspaceOut_": {
         "properties": {
           "items": {
@@ -1432,11 +1492,18 @@
         "type": "object"
       },
       "ServiceConfig": {
-        "description": "An active service.",
+        "description": "An active service with at least one active target.",
         "properties": {
+          "health": {
+            "$ref": "#/components/schemas/HealthConfig"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
+            "type": "string"
+          },
+          "lb_algorithm": {
+            "title": "Lb Algorithm",
             "type": "string"
           },
           "targets": {
@@ -1454,6 +1521,8 @@
         "required": [
           "id",
           "timeout_ms",
+          "lb_algorithm",
+          "health",
           "targets"
         ],
         "title": "ServiceConfig",
@@ -1461,10 +1530,49 @@
       },
       "ServiceCreate": {
         "properties": {
+          "hc_healthy_threshold": {
+            "default": 2,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Hc Healthy Threshold",
+            "type": "integer"
+          },
+          "hc_interval_s": {
+            "default": 10,
+            "description": "Seconds between active checks",
+            "maximum": 300.0,
+            "minimum": 1.0,
+            "title": "Hc Interval S",
+            "type": "integer"
+          },
+          "hc_path": {
+            "default": "/health",
+            "description": "Path the gateway calls on each target: 2xx or 3xx is healthy",
+            "examples": [
+              "/health"
+            ],
+            "maxLength": 255,
+            "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$",
+            "title": "Hc Path",
+            "type": "string"
+          },
+          "hc_unhealthy_threshold": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Hc Unhealthy Threshold",
+            "type": "integer"
+          },
           "is_active": {
             "default": true,
             "title": "Is Active",
             "type": "boolean"
+          },
+          "lb_algorithm": {
+            "const": "round_robin",
+            "default": "round_robin",
+            "title": "Lb Algorithm",
+            "type": "string"
           },
           "name": {
             "description": "Lowercase letters, digits, '-' and '_'",
@@ -1477,6 +1585,31 @@
             "title": "Name",
             "type": "string"
           },
+          "passive_eject_s": {
+            "default": 30,
+            "description": "Seconds a target is set aside",
+            "maximum": 3600.0,
+            "minimum": 1.0,
+            "title": "Passive Eject S",
+            "type": "integer"
+          },
+          "passive_failures": {
+            "default": 5,
+            "description": "Failed requests in a row that set a target aside",
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Passive Failures",
+            "type": "integer"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetCreate"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Targets",
+            "type": "array"
+          },
           "timeout_ms": {
             "default": 5000,
             "description": "100 ms to 60 s",
@@ -1484,19 +1617,11 @@
             "minimum": 100.0,
             "title": "Timeout Ms",
             "type": "integer"
-          },
-          "upstream_url": {
-            "examples": [
-              "http://mock-backend:9000"
-            ],
-            "maxLength": 2048,
-            "title": "Upstream Url",
-            "type": "string"
           }
         },
         "required": [
           "name",
-          "upstream_url"
+          "targets"
         ],
         "title": "ServiceCreate",
         "type": "object"
@@ -1508,6 +1633,22 @@
             "title": "Created At",
             "type": "string"
           },
+          "hc_healthy_threshold": {
+            "title": "Hc Healthy Threshold",
+            "type": "integer"
+          },
+          "hc_interval_s": {
+            "title": "Hc Interval S",
+            "type": "integer"
+          },
+          "hc_path": {
+            "title": "Hc Path",
+            "type": "string"
+          },
+          "hc_unhealthy_threshold": {
+            "title": "Hc Unhealthy Threshold",
+            "type": "integer"
+          },
           "id": {
             "format": "uuid",
             "title": "Id",
@@ -1517,9 +1658,28 @@
             "title": "Is Active",
             "type": "boolean"
           },
+          "lb_algorithm": {
+            "title": "Lb Algorithm",
+            "type": "string"
+          },
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "passive_eject_s": {
+            "title": "Passive Eject S",
+            "type": "integer"
+          },
+          "passive_failures": {
+            "title": "Passive Failures",
+            "type": "integer"
+          },
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/TargetOut"
+            },
+            "title": "Targets",
+            "type": "array"
           },
           "timeout_ms": {
             "title": "Timeout Ms",
@@ -1529,18 +1689,21 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
-          },
-          "upstream_url": {
-            "title": "Upstream Url",
-            "type": "string"
           }
         },
         "required": [
           "id",
           "name",
-          "upstream_url",
+          "targets",
           "timeout_ms",
           "is_active",
+          "lb_algorithm",
+          "hc_path",
+          "hc_interval_s",
+          "hc_unhealthy_threshold",
+          "hc_healthy_threshold",
+          "passive_failures",
+          "passive_eject_s",
           "created_at",
           "updated_at"
         ],
@@ -1548,7 +1711,65 @@
         "type": "object"
       },
       "ServiceUpdate": {
+        "description": "Targets change through their own endpoints.",
         "properties": {
+          "hc_healthy_threshold": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hc Healthy Threshold"
+          },
+          "hc_interval_s": {
+            "anyOf": [
+              {
+                "description": "Seconds between active checks",
+                "maximum": 300.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hc Interval S"
+          },
+          "hc_path": {
+            "anyOf": [
+              {
+                "description": "Path the gateway calls on each target: 2xx or 3xx is healthy",
+                "examples": [
+                  "/health"
+                ],
+                "maxLength": 255,
+                "pattern": "^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hc Path"
+          },
+          "hc_unhealthy_threshold": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hc Unhealthy Threshold"
+          },
           "is_active": {
             "anyOf": [
               {
@@ -1559,6 +1780,18 @@
               }
             ],
             "title": "Is Active"
+          },
+          "lb_algorithm": {
+            "anyOf": [
+              {
+                "const": "round_robin",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lb Algorithm"
           },
           "name": {
             "anyOf": [
@@ -1578,6 +1811,34 @@
             ],
             "title": "Name"
           },
+          "passive_eject_s": {
+            "anyOf": [
+              {
+                "description": "Seconds a target is set aside",
+                "maximum": 3600.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passive Eject S"
+          },
+          "passive_failures": {
+            "anyOf": [
+              {
+                "description": "Failed requests in a row that set a target aside",
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passive Failures"
+          },
           "timeout_ms": {
             "anyOf": [
               {
@@ -1591,21 +1852,6 @@
               }
             ],
             "title": "Timeout Ms"
-          },
-          "upstream_url": {
-            "anyOf": [
-              {
-                "examples": [
-                  "http://mock-backend:9000"
-                ],
-                "maxLength": 2048,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Upstream Url"
           }
         },
         "title": "ServiceUpdate",
@@ -1631,7 +1877,7 @@
         "type": "object"
       },
       "TargetConfig": {
-        "description": "A backend instance. Until service targets exist (MT.10), each service\nhas exactly one: its upstream_url, with the service's id.",
+        "description": "An active backend instance of a service (MT.10).",
         "properties": {
           "id": {
             "format": "uuid",
@@ -1653,6 +1899,108 @@
           "weight"
         ],
         "title": "TargetConfig",
+        "type": "object"
+      },
+      "TargetCreate": {
+        "properties": {
+          "is_active": {
+            "default": true,
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "url": {
+            "examples": [
+              "http://mock-backend:9000"
+            ],
+            "maxLength": 2048,
+            "title": "Url",
+            "type": "string"
+          },
+          "weight": {
+            "default": 100,
+            "description": "Share of the requests, relative to the other targets",
+            "maximum": 1000.0,
+            "minimum": 1.0,
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "TargetCreate",
+        "type": "object"
+      },
+      "TargetOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "weight",
+          "is_active",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TargetOut",
+        "type": "object"
+      },
+      "TargetUpdate": {
+        "properties": {
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "description": "Share of the requests, relative to the other targets",
+                "maximum": 1000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Weight"
+          }
+        },
+        "title": "TargetUpdate",
         "type": "object"
       },
       "Usage": {
@@ -5589,6 +5937,430 @@
           }
         ],
         "summary": "Update Service",
+        "tags": [
+          "services"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/services/{service_id}/targets": {
+      "get": {
+        "operationId": "list_targets_api_v1_workspaces__slug__services__service_id__targets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "service_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Service Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_TargetOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Targets",
+        "tags": [
+          "services"
+        ]
+      },
+      "post": {
+        "operationId": "create_target_api_v1_workspaces__slug__services__service_id__targets_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "service_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Service Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TargetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "URL already used by this service's targets, or the service has the maximum of targets"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Target",
+        "tags": [
+          "services"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/services/{service_id}/targets/{target_id}": {
+      "delete": {
+        "operationId": "delete_target_api_v1_workspaces__slug__services__service_id__targets__target_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "service_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Service Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service or target not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "A service keeps at least one target"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Target",
+        "tags": [
+          "services"
+        ]
+      },
+      "patch": {
+        "operationId": "update_target_api_v1_workspaces__slug__services__service_id__targets__target_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "service_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Service Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Target Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TargetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TargetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Service or target not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Target",
         "tags": [
           "services"
         ]

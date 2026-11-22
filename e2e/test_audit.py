@@ -16,7 +16,7 @@ def _find(log: list[dict[str, Any]], request_id: str) -> dict[str, Any]:
 def test_a_change_appears_in_its_workspace_log(world: World) -> None:
     # The client's request id ties the change to its entry.
     request_id = f"e2e-{uuid.uuid4().hex[:12]}"
-    body = {"name": world.name("audited"), "upstream_url": "http://mock-backend:9000"}
+    body = {"name": world.name("audited"), "targets": [{"url": "http://mock-backend:9000"}]}
     r = world.admin.post(f"{world.base}/services", json=body, headers={"X-Request-ID": request_id})
     assert r.status_code == 201, r.text
     world._services.append(r.json()["id"])  # cleaned up with the rest

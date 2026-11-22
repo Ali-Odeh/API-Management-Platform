@@ -14,6 +14,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/upstream"
 )
 
 // Connection pool to the backends. Every phase of a connection has a limit,
@@ -31,20 +32,22 @@ const (
 // (step 3.5). The number is nginx's convention, not an official HTTP status.
 const StatusClientClosedRequest = 499
 
-// Forwarder sends a matched request to its route's backend and copies the
-// answer back to the client. One Forwarder (and one connection pool) serves
-// every route; the target is picked per request from the route.
+// Forwarder sends a matched request to one of its service's targets and
+// copies the answer back to the client. One Forwarder (and one connection
+// pool) serves every route; the target is picked per request.
 type Forwarder struct {
 	proxy    *httputil.ReverseProxy
+	targets  *upstream.Registry
 	log      *slog.Logger
 	refusals *refusalLog
 }
 
-// NewForwarder builds the forwarder with its connection pool. Every new
-// connection goes through policy (SSRF protection): an internal address it
-// doesn't allow is never connected to. A nil policy is the deny list alone.
-func NewForwarder(log *slog.Logger, policy *egress.Policy) *Forwarder {
-	f := &Forwarder{log: log, refusals: newRefusalLog(log)}
+// NewForwarder builds the forwarder with its connection pool. targets picks
+// a healthy target for each request (load balancing). Every new connection
+// goes through policy (SSRF protection): an internal address it doesn't
+// allow is never connected to. A nil policy is the deny list alone.
+func NewForwarder(log *slog.Logger, policy *egress.Policy, targets *upstream.Registry) *Forwarder {
+	f := &Forwarder{log: log, targets: targets, refusals: newRefusalLog(log)}
 	f.proxy = &httputil.ReverseProxy{
 		Rewrite:      rewrite,
 		Transport:    timedTransport{next: newTransport(policy)},
@@ -55,7 +58,9 @@ func NewForwarder(log *slog.Logger, policy *egress.Policy) *Forwarder {
 
 // timedTransport measures how long the backend takes to start answering
 // (until its response headers arrive) and notes it for the request log as
-// upstream_ms. The proxy calls RoundTrip in the request's own goroutine.
+// upstream_ms. It also tells the target's balancer how the call went (the
+// passive health check). The proxy calls RoundTrip in the request's own
+// goroutine.
 type timedTransport struct {
 	next http.RoundTripper
 }
@@ -64,8 +69,28 @@ func (t timedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	start := time.Now()
 	resp, err := t.next.RoundTrip(req)
 	reqctx.From(req.Context()).Upstream = time.Since(start)
+	if pick, ok := req.Context().Value(pickKey{}).(upstream.Pick); ok {
+		report(pick, req.Context(), resp, err)
+	}
 	return resp, err
 }
+
+// report tells the balancer whether the target failed: a connection error,
+// a timeout or a 5xx answer. A client that left, or a connection the egress
+// policy refused, says nothing about the target and isn't reported.
+func report(pick upstream.Pick, ctx context.Context, resp *http.Response, err error) {
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled), isBlocked(err):
+		return
+	case err != nil:
+		pick.Done(true)
+	default:
+		pick.Done(resp.StatusCode >= http.StatusInternalServerError)
+	}
+}
+
+// pickKey is the context key for the target picked for a request.
+type pickKey struct{}
 
 func newTransport(policy *egress.Policy) *http.Transport {
 	// The check runs once per new connection; pooled connections are reused
@@ -96,11 +121,20 @@ func (f *Forwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	svc := m.Route.Service
+	pick, ok := f.targets.Balancer(svc).Pick()
+	if !ok {
+		// Every target is unhealthy or set aside after failures.
+		respond.Error(w, http.StatusServiceUnavailable, "no_healthy_upstream")
+		return
+	}
+	reqctx.From(r.Context()).TargetID = pick.TargetID() // for the request log
+
 	// The timeout covers the whole answer, start to last byte. The context
 	// also ends the backend call at once if the client hangs up.
-	ctx, cancel := context.WithTimeout(r.Context(), m.Route.Timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), svc.Timeout)
 	defer cancel()
-	f.proxy.ServeHTTP(w, r.WithContext(ctx))
+	f.proxy.ServeHTTP(w, r.WithContext(context.WithValue(ctx, pickKey{}, pick)))
 }
 
 // rewrite builds the backend request from the client's request. Before it
@@ -112,10 +146,11 @@ func rewrite(pr *httputil.ProxyRequest) {
 	if m.Route.StripPrefix {
 		stripPrefix(pr.Out.URL, m.Route.PathPrefix)
 	}
-	// Scheme and host from the upstream, its base path joined in front
+	// Scheme and host from the picked target, its base path joined in front
 	// ("http://svc/api" + "/7" -> "/api/7"), query kept. The Host header
 	// becomes the backend's own.
-	pr.SetURL(m.Route.Upstream)
+	pick, _ := pr.In.Context().Value(pickKey{}).(upstream.Pick) // set by ServeHTTP
+	pr.SetURL(pick.URL())
 	// Fresh X-Forwarded-For (the real client IP), -Host and -Proto.
 	pr.SetXForwarded()
 }
@@ -166,8 +201,9 @@ func (f *Forwarder) handleError(w http.ResponseWriter, r *http.Request, err erro
 		respond.Error(w, status, code)
 		return
 	}
+	pick, _ := r.Context().Value(pickKey{}).(upstream.Pick)
 	f.log.Warn("backend call failed",
-		"route_id", m.Route.ID, "upstream", m.Route.Upstream.Host,
+		"route_id", m.Route.ID, "target_id", pick.TargetID(), "upstream", pick.URL().Host,
 		"status", status, "error", err.Error())
 	respond.Error(w, status, code)
 }
