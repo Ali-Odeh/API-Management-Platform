@@ -50,7 +50,7 @@ func newAuthGateway(t *testing.T) (http.Handler, *seen) {
 		*got = seen{called: true, apiKey: r.Header.Get(APIKeyHeader), consumerID: r.Header.Get(ConsumerIDHeader)}
 		w.WriteHeader(http.StatusOK)
 	})
-	auth := Auth(slog.New(slog.DiscardHandler))
+	auth := Auth(slog.New(slog.DiscardHandler), nil)
 	return tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(auth(backend))), got
 }
 
@@ -153,7 +153,7 @@ func TestAuthUsesTheRoutersSnapshot(t *testing.T) {
 		Version: 2, Routes: old.Default().Routes,
 		Keys: map[string]config.Key{hashAPIKey(activeKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
 	})}
-	gw := tenant.Middleware(source, "localhost")(proxy.NewRouter(Auth(slog.New(slog.DiscardHandler))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))))
+	gw := tenant.Middleware(source, "localhost")(proxy.NewRouter(Auth(slog.New(slog.DiscardHandler), nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))))
 	req := httptest.NewRequest("GET", "/x", nil)
 	req.Header.Set(APIKeyHeader, activeKey)
 	rec := httptest.NewRecorder()
@@ -184,7 +184,7 @@ func TestAuthWithoutRouterIs500(t *testing.T) {
 	var logs jsonLogger
 	rec := httptest.NewRecorder()
 
-	Auth(logs.logger())(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
+	Auth(logs.logger(), nil)(http.NotFoundHandler()).ServeHTTP(rec, httptest.NewRequest("GET", "/x", nil))
 
 	if rec.Code != 500 || !strings.Contains(logs.buf.String(), "without a matched route") {
 		t.Errorf("status %d, logs %q", rec.Code, logs.buf.String())

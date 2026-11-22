@@ -231,7 +231,7 @@ func BenchmarkAPIHandlerChain(b *testing.B) {
 	// forwarder, so only the gateway's own cost is measured.
 	instant := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 	chain := middleware.Chain(
-		tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(middleware.Auth(log)(middleware.InFlight(&inflight.Limiter{}, log)(instant)))),
+		tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(middleware.Auth(log, nil)(middleware.InFlight(&inflight.Limiter{}, log)(instant)))),
 		middleware.RequestID, middleware.Logger(log, nil), middleware.Recover(log),
 	)
 

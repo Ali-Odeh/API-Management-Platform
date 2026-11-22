@@ -429,7 +429,9 @@ func TestMalformedRequestsAreErrors(t *testing.T) {
 
 func TestResultReadsTheScriptsAnswer(t *testing.T) {
 	public := Request{WorkspaceID: "w", WorkspaceLimit: 7}
+	publicIP := Request{WorkspaceID: "w", WorkspaceLimit: 7, ClientIP: "1.2.3.4", IPLimit: 4}
 	protected := Request{WorkspaceID: "w", WorkspaceLimit: 7, ConsumerID: "c", ConsumerLimit: 3}
+	quota := Request{WorkspaceID: "w", WorkspaceLimit: 7, ConsumerID: "c", ConsumerLimit: 3, MonthlyQuota: 100}
 	tests := []struct {
 		name  string
 		req   Request
@@ -437,39 +439,48 @@ func TestResultReadsTheScriptsAnswer(t *testing.T) {
 		want  Result
 		bad   bool
 	}{
-		{"public allowed", public, []any{int64(1), int64(6), int64(0), ""}, Result{Allowed: true, Limit: 7, Remaining: 6}, false},
-		{"protected allowed", protected, []any{int64(1), int64(2), int64(0), ""}, Result{Allowed: true, Limit: 3, Remaining: 2}, false},
-		{"refused by the workspace", protected, []any{int64(0), int64(0), int64(800), "workspace"},
+		{"public allowed", public, []any{int64(1), int64(6), int64(0), "", int64(-1)}, Result{Allowed: true, Limit: 7, Remaining: 6}, false},
+		{"public allowed by the IP's bucket", publicIP, []any{int64(1), int64(3), int64(0), "", int64(-1)}, Result{Allowed: true, Limit: 4, Remaining: 3}, false},
+		{"protected allowed", protected, []any{int64(1), int64(2), int64(0), "", int64(-1)}, Result{Allowed: true, Limit: 3, Remaining: 2}, false},
+		{"allowed with a quota", quota, []any{int64(1), int64(2), int64(0), "", int64(41)},
+			Result{Allowed: true, Limit: 3, Remaining: 2, QuotaLimit: 100, QuotaRemaining: 41}, false},
+		{"refused by the workspace", protected, []any{int64(0), int64(0), int64(800), "workspace", int64(-1)},
 			Result{LimitedBy: BucketWorkspace, Limit: 7, RetryAfter: 800 * time.Millisecond}, false},
-		{"refused by the consumer", protected, []any{int64(0), int64(0), int64(900), "consumer"},
+		{"refused by the consumer", protected, []any{int64(0), int64(0), int64(900), "consumer", int64(-1)},
 			Result{LimitedBy: BucketConsumer, Limit: 3, RetryAfter: 900 * time.Millisecond}, false},
-		{"too few values", public, []any{int64(1), int64(6), int64(0)}, Result{}, true},
-		{"wrong types", public, []any{"1", int64(6), int64(0), ""}, Result{}, true},
-		{"refused naming no bucket", public, []any{int64(0), int64(0), int64(5), ""}, Result{}, true},
-		{"refused naming an unknown bucket", public, []any{int64(0), int64(0), int64(5), "planet"}, Result{}, true},
+		{"refused by the quota", quota, []any{int64(0), int64(0), int64(5000), "quota", int64(0)},
+			Result{LimitedBy: Quota, Limit: 100, RetryAfter: 5 * time.Second, QuotaLimit: 100}, false},
+		{"too few values", public, []any{int64(1), int64(6), int64(0), ""}, Result{}, true},
+		{"wrong types", public, []any{"1", int64(6), int64(0), "", int64(-1)}, Result{}, true},
+		{"refused naming no check", public, []any{int64(0), int64(0), int64(5), "", int64(-1)}, Result{}, true},
+		{"refused naming a check it doesn't have", public, []any{int64(0), int64(0), int64(5), "quota", int64(-1)}, Result{}, true},
 	}
 	for _, tc := range tests {
-		got, err := tc.req.result(tc.reply)
+		checks, err := tc.req.checks()
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		got, err := tc.req.result(tc.reply, checks)
 		if (err != nil) != tc.bad || got != tc.want {
 			t.Errorf("%s: result = %+v, %v; want %+v, error %v", tc.name, got, err, tc.want, tc.bad)
 		}
 	}
 }
 
-// The script guards itself against a caller passing the wrong keys.
-func TestScriptRefusesWrongKeyCounts(t *testing.T) {
+// The script guards itself against a caller passing wrong arguments.
+func TestScriptRefusesMalformedArguments(t *testing.T) {
 	_, rdb := newTestLimiter(t)
-	for _, keys := range [][]string{{}, {"a", "b", "c"}} {
-		args := make([]any, len(keys))
-		for i := range args {
-			args[i] = 1
+	ws := unique(t, "ws")
+	for name, run := range map[string]func() error{
+		"no keys":            func() error { return limits.Run(t.Context(), rdb, nil).Err() },
+		"a key without kind": func() error { return limits.Run(t.Context(), rdb, []string{ws}).Err() },
+		"an unknown kind": func() error {
+			return limits.Run(t.Context(), rdb, []string{ws}, "planet", 1).Err()
+		},
+	} {
+		if err := run(); err == nil {
+			t.Errorf("%s: no error", name)
 		}
-		if err := buckets.Run(t.Context(), rdb, keys, args...).Err(); err == nil {
-			t.Errorf("%d keys: no error", len(keys))
-		}
-	}
-	if err := buckets.Run(t.Context(), rdb, []string{unique(t, "ws")}).Err(); err == nil {
-		t.Error("a key without a capacity: no error")
 	}
 }
 

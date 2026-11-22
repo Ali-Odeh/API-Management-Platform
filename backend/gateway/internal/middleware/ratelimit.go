@@ -20,13 +20,28 @@ const (
 	RateLimitLimited          = "limited"           // refused by the consumer's bucket
 	RateLimitLimitedWorkspace = "limited_workspace" // refused by the workspace's bucket
 	RateLimitUnavailable      = "unavailable"       // Redis did not answer; the request went through
+	RateLimitLimitedIP        = "limited_ip"        // refused by the client IP's bucket (public route, V2.2)
+	RateLimitLimitedQuota     = "limited_quota"     // the plan's monthly quota is used up (V2.2)
+	RateLimitBlockedIP        = "blocked_ip"        // too many wrong keys from this IP (V2.2)
 )
 
 // Rate-limit headers (the X- names GitHub and Kong use).
 const (
 	LimitHeader     = "X-RateLimit-Limit"
 	RemainingHeader = "X-RateLimit-Remaining"
+	// The consumer's monthly quota and what is left of it (V2.2).
+	QuotaLimitHeader     = "X-Quota-Limit"
+	QuotaRemainingHeader = "X-Quota-Remaining"
 )
+
+// refusals: for each check that can refuse, the log value and the error code.
+var refusals = map[ratelimit.Check]struct{ log, code string }{
+	ratelimit.BucketWorkspace: {RateLimitLimitedWorkspace, "rate_limit_exceeded"},
+	ratelimit.BucketConsumer:  {RateLimitLimited, "rate_limit_exceeded"},
+	ratelimit.BucketIP:        {RateLimitLimitedIP, "rate_limit_exceeded"},
+	ratelimit.Quota:           {RateLimitLimitedQuota, "quota_exceeded"},
+	ratelimit.AuthFail:        {RateLimitBlockedIP, "too_many_failed_attempts"},
+}
 
 // At most one "Redis unavailable" warning per this interval: an outage at
 // 1,000 requests/s must not write 1,000 log lines per second.
@@ -38,14 +53,20 @@ type Allower interface {
 	Allow(ctx context.Context, req ratelimit.Request) (ratelimit.Result, error)
 }
 
-// RateLimit runs after Auth and spends one token of the workspace's bucket
-// and, on a protected route, one of the consumer's, in one Redis call:
+// RateLimit runs after Auth and checks every limit of the request in one
+// Redis call, spending nothing unless all pass:
 //
-//	budget left in both    → on to the backend, with X-RateLimit-Limit / -Remaining
-//	either bucket is empty → 429 rate_limit_exceeded, with Retry-After (seconds)
+//	all pass               → on to the backend, with X-RateLimit-Limit / -Remaining
+//	                         (and X-Quota-Limit / -Remaining with a quota)
+//	a bucket is empty      → 429 rate_limit_exceeded, with Retry-After (seconds)
+//	the quota is used up   → 429 quota_exceeded, Retry-After until the month ends
+//	the IP sent too many
+//	wrong keys             → 429 too_many_failed_attempts, until its window ends
 //	Redis down             → on to the backend anyway (fail open), warning in the log
 //
-// Public routes have no consumer: the workspace's bucket alone limits them.
+// Public routes have no consumer: the workspace's bucket and the client IP's
+// limit them. Protected routes: the workspace's and the consumer's (its
+// plan's limit), its monthly quota, and the IP's failed-key refusal.
 // Requests refused by Auth (401/403) never get here, so they cost no budget.
 // The client gets the same 429 whichever bucket refused; the log tells them
 // apart (limited / limited_workspace).
@@ -62,9 +83,16 @@ func RateLimit(limiter Allower, log *slog.Logger) Middleware {
 				respond.Error(w, http.StatusInternalServerError, "internal_error")
 				return
 			}
-			req := ratelimit.Request{WorkspaceID: ws.ID, WorkspaceLimit: ws.Limits.RateLimitPerMin}
+			req := ratelimit.Request{
+				WorkspaceID:    ws.ID,
+				WorkspaceLimit: ws.Limits.RateLimitPerMin,
+				ClientIP:       clientIP(r),
+				IPLimit:        ws.Limits.IPRateLimitPerMin,
+				AuthFailLimit:  ws.Limits.AuthFailLimit,
+			}
 			if key, ok := consumerFrom(r.Context()); ok {
 				req.ConsumerID, req.ConsumerLimit = key.ConsumerID, key.RateLimitPerMin
+				req.MonthlyQuota = key.MonthlyQuota
 			}
 
 			res, err := limiter.Allow(r.Context(), req)
@@ -77,17 +105,23 @@ func RateLimit(limiter Allower, log *slog.Logger) Middleware {
 			}
 
 			h := w.Header()
-			h.Set(LimitHeader, strconv.Itoa(res.Limit))
-			h.Set(RemainingHeader, strconv.Itoa(res.Remaining))
+			if res.QuotaLimit > 0 {
+				h.Set(QuotaLimitHeader, strconv.FormatInt(res.QuotaLimit, 10))
+				h.Set(QuotaRemainingHeader, strconv.FormatInt(res.QuotaRemaining, 10))
+			}
 			if !res.Allowed {
-				info.RateLimit = RateLimitLimited
-				if res.LimitedBy == ratelimit.BucketWorkspace {
-					info.RateLimit = RateLimitLimitedWorkspace
+				refusal := refusals[res.LimitedBy]
+				info.RateLimit = refusal.log
+				if res.LimitedBy != ratelimit.Quota && res.LimitedBy != ratelimit.AuthFail {
+					h.Set(LimitHeader, strconv.Itoa(res.Limit))
+					h.Set(RemainingHeader, strconv.Itoa(res.Remaining))
 				}
 				h.Set("Retry-After", strconv.Itoa(retryAfterSeconds(res.RetryAfter)))
-				respond.Error(w, http.StatusTooManyRequests, "rate_limit_exceeded")
+				respond.Error(w, http.StatusTooManyRequests, refusal.code)
 				return
 			}
+			h.Set(LimitHeader, strconv.Itoa(res.Limit))
+			h.Set(RemainingHeader, strconv.Itoa(res.Remaining))
 			info.RateLimit = RateLimitOK
 			next.ServeHTTP(w, r)
 		})

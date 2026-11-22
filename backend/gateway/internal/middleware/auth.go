@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/respond"
 )
@@ -38,7 +40,13 @@ const (
 // The key is looked up in the same config snapshot the router used, by its
 // SHA-256 hash (the control plane never stores the raw key). The key itself
 // never reaches the backend or the log.
-func Auth(log *slog.Logger) Middleware {
+//
+// A wrong key is counted against the client IP (V2.2): past the workspace's
+// auth_fail_limit within ratelimit.AuthFailWindow the answer is 429
+// too_many_failed_attempts instead of 401, and the rate-limit step refuses
+// that IP's valid keys too until the window ends. Without Redis the answer
+// stays 401 (fail open). A nil counter counts nothing.
+func Auth(log *slog.Logger, failures FailureCounter) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Removed on every route, public ones too: the backend must not
@@ -65,6 +73,9 @@ func Auth(log *slog.Logger) Middleware {
 				info.ConsumerID = key.ConsumerID
 				info.KeyID = key.ID
 			}
+			if code == "invalid_api_key" && countFailure(r, failures, m.Workspace, w) {
+				return // refused with 429: too many wrong keys from this IP
+			}
 			if status != 0 {
 				if status == http.StatusUnauthorized {
 					// HTTP requires a 401 to say how to authenticate.
@@ -79,6 +90,30 @@ func Auth(log *slog.Logger) Middleware {
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), consumerKey{}, *key)))
 		})
 	}
+}
+
+// FailureCounter counts failed key attempts per client IP. *ratelimit.Limiter
+// fits it; tests pass a fake.
+type FailureCounter interface {
+	CountFailure(ctx context.Context, f ratelimit.Failure) (ratelimit.FailureResult, error)
+}
+
+// countFailure counts a wrong key and, when the IP is past its limit,
+// answers 429 and reports true.
+func countFailure(r *http.Request, failures FailureCounter, ws *config.Workspace, w http.ResponseWriter) bool {
+	if failures == nil || ws.Limits.AuthFailLimit < 1 {
+		return false
+	}
+	res, err := failures.CountFailure(r.Context(), ratelimit.Failure{
+		WorkspaceID: ws.ID, ClientIP: clientIP(r), Limit: ws.Limits.AuthFailLimit,
+	})
+	if err != nil || !res.Blocked {
+		return false // Redis down: an ordinary 401
+	}
+	reqctx.From(r.Context()).RateLimit = RateLimitBlockedIP
+	w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(res.RetryAfter)))
+	respond.Error(w, http.StatusTooManyRequests, "too_many_failed_attempts")
+	return true
 }
 
 // consumerKey is the context key for the authenticated consumer's key entry.

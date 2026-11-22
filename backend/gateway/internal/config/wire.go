@@ -30,8 +30,10 @@ type wireWorkspace struct {
 }
 
 type wireLimits struct {
-	RateLimitPerMin int `json:"rate_limit_per_min"`
-	MaxConcurrent   int `json:"max_concurrent"`
+	RateLimitPerMin   int `json:"rate_limit_per_min"`
+	MaxConcurrent     int `json:"max_concurrent"`
+	IPRateLimitPerMin int `json:"ip_rate_limit_per_min"`
+	AuthFailLimit     int `json:"auth_fail_limit"`
 }
 
 type wireService struct {
@@ -81,7 +83,9 @@ type wireKey struct {
 	KeyHash         string `json:"key_hash"`
 	ConsumerID      string `json:"consumer_id"`
 	ConsumerStatus  string `json:"consumer_status"`
+	PlanID          string `json:"plan_id"`
 	RateLimitPerMin int    `json:"rate_limit_per_min"`
+	MonthlyQuota    *int64 `json:"monthly_quota"` // null: no quota
 }
 
 // answer is a parsed /internal/config body: the workspaces that changed
@@ -205,9 +209,11 @@ func (w wireWorkspace) toWorkspace() (ws *Workspace, skipped []error, err error)
 	// The control plane always sends the effective limits (at least 1, by
 	// its CHECKs). Without them the gateway couldn't protect the others from
 	// this workspace (MT.8): not served, like any workspace it can't read.
-	if w.Limits.RateLimitPerMin < 1 || w.Limits.MaxConcurrent < 1 {
-		return nil, nil, fmt.Errorf("invalid limits (rate_limit_per_min %d, max_concurrent %d)",
-			w.Limits.RateLimitPerMin, w.Limits.MaxConcurrent)
+	l := w.Limits
+	if l.RateLimitPerMin < 1 || l.MaxConcurrent < 1 || l.IPRateLimitPerMin < 0 || l.AuthFailLimit < 0 {
+		return nil, nil, fmt.Errorf("invalid limits (rate_limit_per_min %d, max_concurrent %d, "+
+			"ip_rate_limit_per_min %d, auth_fail_limit %d)",
+			l.RateLimitPerMin, l.MaxConcurrent, l.IPRateLimitPerMin, l.AuthFailLimit)
 	}
 	ws = &Workspace{
 		ID:      w.ID,
@@ -215,9 +221,14 @@ func (w wireWorkspace) toWorkspace() (ws *Workspace, skipped []error, err error)
 		Status:  status,
 		Version: w.Version,
 		Hosts:   w.Hosts,
-		Limits:  Limits{RateLimitPerMin: w.Limits.RateLimitPerMin, MaxConcurrent: w.Limits.MaxConcurrent},
-		Routes:  make([]Route, 0, len(w.Routes)),
-		Keys:    make(map[string]Key, len(w.Keys)),
+		Limits: Limits{
+			RateLimitPerMin:   l.RateLimitPerMin,
+			MaxConcurrent:     l.MaxConcurrent,
+			IPRateLimitPerMin: l.IPRateLimitPerMin,
+			AuthFailLimit:     l.AuthFailLimit,
+		},
+		Routes: make([]Route, 0, len(w.Routes)),
+		Keys:   make(map[string]Key, len(w.Keys)),
 	}
 
 	services := make(map[string]*Service, len(w.Services))
@@ -404,10 +415,19 @@ func (w wireKey) toKey() (Key, error) {
 		// Unknown means "not allowed": the key is left out, so it gets 401.
 		return Key{}, fmt.Errorf("unknown consumer_status %q", w.ConsumerStatus)
 	}
+	var quota int64
+	if w.MonthlyQuota != nil {
+		if *w.MonthlyQuota < 1 {
+			return Key{}, fmt.Errorf("monthly_quota %d: must be at least 1 or null", *w.MonthlyQuota)
+		}
+		quota = *w.MonthlyQuota
+	}
 	return Key{
 		ID:              w.ID,
 		ConsumerID:      w.ConsumerID,
 		ConsumerStatus:  status,
+		PlanID:          w.PlanID,
 		RateLimitPerMin: w.RateLimitPerMin,
+		MonthlyQuota:    quota,
 	}, nil
 }
