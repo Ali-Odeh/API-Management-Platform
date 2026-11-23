@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
+from prometheus_client import Counter, Gauge
 from pydantic import ValidationError
 from redis.asyncio import Redis
 from redis.exceptions import RedisError, ResponseError
@@ -74,6 +75,13 @@ _LAST_USED = """
 """
 _ENSURE_PARTITIONS = "SELECT ensure_request_log_partitions($1::date[])"
 _DROP_PARTITIONS = "SELECT drop_request_log_partitions($1)"
+
+# Prometheus metrics (V2.3), served by scripts/usage_ingest.py.
+STORED = Counter("usage_ingest_events_stored_total", "Request log rows inserted.")
+REPEATED = Counter("usage_ingest_events_repeated_total", "Entries read again, already stored.")
+DROPPED = Counter("usage_ingest_events_dropped_total", "Malformed or out-of-window entries.")
+BATCHES = Counter("usage_ingest_batches_total", "Batches stored.")
+LAG = Gauge("usage_ingest_stream_length", "Entries waiting in the stream (0 when caught up).")
 
 # What a stream read returns: (entry id, fields) pairs.
 Entry = tuple[str, dict[str, str]]
@@ -180,6 +188,9 @@ class Ingester:
             stored = int(status.split()[-1])  # "INSERT 0 412"
             self.totals.stored += stored
             self.totals.repeated += len(events) - stored
+            STORED.inc(stored)
+            REPEATED.inc(len(events) - stored)
+            BATCHES.inc()
         ids = [entry_id for entry_id, _ in entries]
         async with self.redis.pipeline(transaction=False) as pipe:
             pipe.xack(self.stream, self.group, *ids)
@@ -205,6 +216,7 @@ class Ingester:
 
     def _drop(self, entry_id: str, reason: str) -> None:
         self.totals.dropped += 1
+        DROPPED.inc()
         logger.warning("usage event %s dropped: %s", entry_id, reason)
 
     async def drop_expired(self) -> int:
@@ -234,6 +246,7 @@ class Ingester:
                         logger.info("claimed %d usage events of a stopped worker", claimed)
                     next_claim = now + CLAIM_EVERY
                 await self.ingest_once()
+                LAG.set(await self.redis.xlen(self.stream))
                 if now >= next_report:
                     self._report()
                     next_report = now + 60

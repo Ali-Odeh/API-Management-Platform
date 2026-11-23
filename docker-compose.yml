@@ -255,6 +255,20 @@ services:
       redis:
         condition: service_healthy
 
+  # Scrapes the gateway's and the usage-ingest worker's metrics (V2.3); its
+  # UI on 127.0.0.1:9090. Only in the local stack and CI.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   gateway:
     build: ./backend/gateway
     # Only the variables the gateway uses, not the whole .env: it never needs
@@ -319,6 +333,11 @@ services:
       mock-backend-2:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      # The v2 story reads the request log and Prometheus (V2.3).
+      usage-ingest:
+        condition: service_started
+      prometheus:
         condition: service_healthy
 
   # Load test with k6 (step 4.4), also in the "test" profile. Run with:
