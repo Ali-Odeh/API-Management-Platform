@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import socket
 import struct
 import time
@@ -27,6 +28,8 @@ import pytest
 # Addresses inside the Compose network (the e2e container runs there).
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://control-plane:8000")
 GOTRUE_URL = os.environ.get("GOTRUE_URL", "http://auth:9999")
+# The developers' own GoTrue (P.1): open sign-up, its own accounts.
+PORTAL_GOTRUE_URL = os.environ.get("PORTAL_GOTRUE_URL", "http://auth-portal:9998")
 # Mailpit catches the emails GoTrue sends (invitations); its API lists them.
 MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://mailpit:8025")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8080")
@@ -42,7 +45,13 @@ DEAD_BACKEND_URL = "http://mock-backend:9"
 
 # What the runner needs from .env. Compose passes them through without
 # requiring them (see docker-compose.yml), so they are checked here.
-REQUIRED_ENV = ("PLATFORM_ADMIN_EMAIL", "PLATFORM_ADMIN_PASSWORD", "GOTRUE_SERVICE_ROLE_KEY")
+REQUIRED_ENV = (
+    "PLATFORM_ADMIN_EMAIL",
+    "PLATFORM_ADMIN_PASSWORD",
+    "GOTRUE_SERVICE_ROLE_KEY",
+    "PORTAL_GOTRUE_SERVICE_ROLE_KEY",
+)
+MAIL_WAIT = 10.0  # seconds; GoTrue sends at once, Mailpit stores in milliseconds
 
 STACK_START_TIMEOUT = 90.0  # seconds; containers may still be starting
 CONFIG_WAIT = 3.0  # seconds; config changes usually reach the gateway in ~70 ms
@@ -284,6 +293,12 @@ class GoTrue:
         assert r.status_code == 200, f"GoTrue login of {email} failed: {r.status_code} {r.text}"
         return Session(r.json()["access_token"], r.json()["refresh_token"])
 
+    def sign_up(self, email: str, password: str) -> None:
+        """Open sign-up (the developers' GoTrue): no session until the email is confirmed."""
+        r = self.http.post("/signup", json={"email": email, "password": password})
+        assert r.status_code == 200, f"sign-up of {email} failed: {r.status_code} {r.text}"
+        assert "access_token" not in r.json(), "signed in before confirming the email"
+
     def refresh(self, refresh_token: str) -> httpx.Response:
         return self.http.post(
             "/token", params={"grant_type": "refresh_token"}, json={"refresh_token": refresh_token}
@@ -312,8 +327,8 @@ class GoTrue:
     # Admin API (service-role key): only to set up and clean up test accounts.
 
     def accept_invitation(self, link: str) -> Session:
-        """Open an invitation link as a browser would: GoTrue verifies it and
-        redirects with the new session in the URL fragment."""
+        """Open an invitation (or sign-up confirmation) link as a browser would:
+        GoTrue verifies it and redirects with the new session in the URL fragment."""
         link_parts = urlsplit(link)
         r = self.http.get(f"{link_parts.path}?{link_parts.query}", follow_redirects=False)
         assert r.status_code == 303, f"invitation link refused: {r.status_code} {r.text}"
@@ -327,6 +342,12 @@ class GoTrue:
 
     def delete_account(self, user_id: str) -> None:
         self.http.delete(f"/admin/users/{user_id}", headers=self._admin_headers)
+
+    def account_id(self, email: str) -> str | None:
+        found = self.http.get(
+            "/admin/users", params={"filter": email}, headers=self._admin_headers
+        ).json()["users"]
+        return next((u["id"] for u in found if u["email"] == email), None)
 
     def remove_factors(self, user_id: str, name: str) -> None:
         r = self.http.get(f"/admin/users/{user_id}/factors", headers=self._admin_headers)
@@ -365,6 +386,90 @@ def gotrue() -> Iterator[GoTrue]:
     client = GoTrue(GOTRUE_URL, os.environ["GOTRUE_SERVICE_ROLE_KEY"])
     yield client
     client.http.close()
+
+
+@pytest.fixture(scope="session")
+def portal_gotrue() -> Iterator[GoTrue]:
+    """The developers' GoTrue (P.1), with its own admin key for cleaning up."""
+    _wait_until_up(PORTAL_GOTRUE_URL)
+    client = GoTrue(PORTAL_GOTRUE_URL, os.environ["PORTAL_GOTRUE_SERVICE_ROLE_KEY"])
+    yield client
+    client.http.close()
+
+
+# ---- Emails, read through Mailpit's API
+
+
+def read_email(address: str) -> dict[str, Any]:
+    """The newest email sent to `address`."""
+    deadline = time.monotonic() + MAIL_WAIT
+    while time.monotonic() < deadline:
+        found = httpx.get(
+            f"{MAILPIT_URL}/api/v1/search", params={"query": f'to:"{address}"'}, timeout=10
+        ).json()["messages"]
+        if found:
+            message: dict[str, Any] = httpx.get(
+                f"{MAILPIT_URL}/api/v1/message/{found[0]['ID']}", timeout=10
+            ).json()
+            return message
+        time.sleep(0.2)
+    pytest.fail(f"no email for {address} after {MAIL_WAIT:.0f} s")
+
+
+def verify_link(message: dict[str, Any]) -> str:
+    """The one GoTrue /verify link in an email (invitation or confirmation)."""
+    [link] = [
+        url.replace("&amp;", "&")
+        for url in re.findall(r'https?://[^\s"<>]+', message["HTML"] or message["Text"])
+        if "/verify" in url
+    ]
+    return link
+
+
+def delete_emails(address: str) -> None:
+    found = httpx.get(
+        f"{MAILPIT_URL}/api/v1/search", params={"query": f'to:"{address}"'}, timeout=10
+    ).json()["messages"]
+    if ids := [m["ID"] for m in found]:
+        httpx.request("DELETE", f"{MAILPIT_URL}/api/v1/messages", json={"IDs": ids}, timeout=10)
+
+
+@dataclass
+class Developer:
+    email: str
+    password: str
+    session: Session
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return self.session.headers
+
+
+def sign_up_developer(portal_gotrue: GoTrue, email: str) -> Developer:
+    """Sign up on the portal like a person: sign up, open the confirmation email,
+    then log in with the password."""
+    password = uuid.uuid4().hex
+    portal_gotrue.sign_up(email, password)
+    portal_gotrue.accept_invitation(verify_link(read_email(email)))
+    return Developer(email, password, portal_gotrue.sign_in(email, password))
+
+
+@pytest.fixture
+def new_developer(portal_gotrue: GoTrue) -> Iterator[Callable[[], Developer]]:
+    """Makes developers with new addresses; their accounts and emails go afterwards
+    (their rows in the platform's developers table stay, like users)."""
+    made: list[str] = []
+
+    def make() -> Developer:
+        email = f"e2e-dev-{uuid.uuid4().hex[:8]}@example.test"
+        made.append(email)
+        return sign_up_developer(portal_gotrue, email)
+
+    yield make
+    for email in made:
+        if (account := portal_gotrue.account_id(email)) is not None:
+            portal_gotrue.delete_account(account)
+        delete_emails(email)
 
 
 @pytest.fixture(scope="session")

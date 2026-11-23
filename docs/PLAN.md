@@ -372,7 +372,7 @@ erDiagram
 | `api_keys` | FK (`consumer_id`, `workspace_id`) → `consumers`, ON DELETE CASCADE; `key_hash` unique; CHECKs `char_length(key_hash) = 64` and `char_length(key_prefix) = 12` (exist today); index on `consumer_id` (exists; a partial index WHERE `revoked_at IS NULL` is optional) |
 | `workspace_config` | PK and FK `workspace_id`; index on `seq` (the `since` query) |
 | `config_seq` | single row: CHECK `id = 1` |
-| `audit_events` | no FK on `workspace_id` (platform rows survive purges); `actor_type` CHECK in (`user`, `platform_admin`, `system`); indexes on (`workspace_id`, `created_at` DESC) and (`created_at`); the app's database user has INSERT and SELECT only |
+| `audit_events` | no FK on `workspace_id` (platform rows survive purges); `actor_type` CHECK in (`user`, `platform_admin`, `system`, `developer`) (`developer` since P.1); indexes on (`workspace_id`, `created_at` DESC) and (`created_at`); the app's database user has INSERT and SELECT only |
 | every tenant table | index on `workspace_id`; every query filters by it; the FK to `workspaces` stays ON DELETE RESTRICT (as today), so the purge job deletes children first: `api_keys`, `routes`, `service_targets`, `services`, `consumers`, `workspace_members`, the workspace's `audit_events`. It keeps `workspace_config` (MT.6): its newer `seq` is how a gateway that was away learns the workspace is gone. The tables added by v2 and the Portal that hold workspace data (`plans`, `request_logs`, `apis`, `api_routes`, `apps`) join this list; the existing guard test makes sure |
 | every table | `updated_at` is set by a `BEFORE UPDATE` trigger (`set_updated_at`), not by the ORM, so updates from triggers, bulk statements and SQL keep it correct; it moves only when the row really changed (MT.1) |
 
@@ -406,7 +406,7 @@ The agent writes the Alembic migrations to match this exactly; column lengths an
 | `api_keys` | `workspace_id` (FK), `consumer_id` (FK), `key_prefix`, `key_hash` (unique), `name`, `last_used_at`, `revoked_at` | Unchanged; the raw key is never stored |
 | `config_seq` | `id` (always 1), `seq` (bigint), `generation` (UUID), `updated_at` | Single row (a CHECK forbids a second one). A new database gets a new generation. Rotate it when restoring a backup. |
 | `workspace_config` | `workspace_id` (PK, FK), `version` (bigint), `seq` (bigint, indexed) | One row per workspace. `seq` = the global sequence at the workspace's last change |
-| `audit_events` | `workspace_id` (nullable), `actor_user_id`, `actor_email`, `actor_type` (`user`, `platform_admin`, `system`), `action`, `target_type`, `target_id`, `target_name`, `changes` (jsonb), `request_id`, `ip`, `user_agent` | Append-only (see below). `workspace_id` NULL = platform-level event. No FK on `workspace_id`, so platform-level rows survive a purge |
+| `audit_events` | `workspace_id` (nullable), `actor_user_id`, `actor_email`, `actor_type` (`user`, `platform_admin`, `system`, `developer`), `action`, `target_type`, `target_id`, `target_name`, `changes` (jsonb), `request_id`, `ip`, `user_agent` | Append-only (see below). `workspace_id` NULL = platform-level event. No FK on `workspace_id`, so platform-level rows survive a purge |
 
 **How the config sequence is bumped**
 
@@ -451,9 +451,9 @@ The one-shot `control-plane-db-init` service creates or updates its logins with 
 
 | Table | Columns | Notes |
 | --- | --- | --- |
-| `developers` | `auth_user_id` (unique, the developers' GoTrue `sub`), `email` (unique, lowercase), `status` (`active`, `blocked`) | Not workspace members and never in `users`: two kinds of people with separate GoTrue instances. Created just in time on the first portal request |
-| `apis` | `workspace_id` (FK), `name`, `slug` (unique per workspace), `description`, `status` (`draft`, `published`, `deprecated`), `openapi` (jsonb, optional, size-limited) | What the catalog shows. Only `published` and `deprecated` reach developers; `deprecated` takes no new apps |
-| `api_routes` | `api_id`, `route_id`, `workspace_id` | The routes that make up an API (composite FKs on `workspace_id`); a route belongs to at most one API |
+| `developers` | `auth_user_id` (unique, NOT NULL, the developers' GoTrue `sub`), `email` (unique, CHECK lowercase), `status` (`active`, `blocked`, CHECK) | Not workspace members and never in `users`: two kinds of people with separate GoTrue instances. Created just in time on the first portal request (`developer.create`, a platform-level event by the developer); a token of another account whose email a row holds gets `403 account_conflict`, as for users. Not tenant data (no `workspace_id`) |
+| `apis` | `workspace_id` (FK), `name` (1–100), `slug` (unique per workspace, immutable), `description` (≤ 2,000, default empty), `status` (`draft`, `published`, `deprecated`, CHECK; default `draft`), `openapi` (jsonb, NULL = none; CHECK: an object of at most 2 MiB as Postgres prints it) | What the catalog shows. Only `published` and `deprecated` reach developers; `deprecated` takes no new apps. Unique (`id`, `workspace_id`) as the target of `api_routes`. Not config: no config triggers |
+| `api_routes` | `route_id` (PK), `api_id`, `workspace_id`, `created_at` | The routes that make up an API. The primary key on `route_id` makes a route part of at most one API. Composite FKs (`api_id`, `workspace_id`) → `apis` and (`route_id`, `workspace_id`) → `routes` (which gains unique (`id`, `workspace_id`)), both ON DELETE CASCADE: deleting an API or a route removes the link only |
 | `apps` | `workspace_id` (FK), `developer_id` (FK), `consumer_id` (FK, unique), `name`, `status` (`pending`, `approved`, `rejected`) | A developer's app in one workspace, backed by a consumer, so the gateway, plans, quotas and keys work unchanged. An app on a plan that `requires_approval` starts `pending` with its consumer `blocked` until an API Admin approves |
 
 The exact columns of the Portal tables are confirmed in P.1 and P.2 and recorded in the ROADMAP decisions log; the rules above (separate identities, an app is a consumer, workspace-scoped composite keys) are fixed.
@@ -538,7 +538,9 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | GET, PATCH, DELETE | `/api/v1/workspaces/{slug}/plans/{id}` | `plans:*` | Read, update, delete (V2.2) |
 | GET | `/api/v1/workspaces/{slug}/analytics/...` | `usage:read` | Requests, errors and latency over time, by route and by consumer (V2.1) |
 | GET | `/api/v1/workspaces/{slug}/request-logs` | `usage:read` | The request log, filtered and paged (V2.1) |
-| GET, POST, PATCH, DELETE | `/api/v1/workspaces/{slug}/apis[/{id}]` | `apis:*` | APIs, their routes, OpenAPI document and status (P.1) |
+| GET, POST, PATCH, DELETE | `/api/v1/workspaces/{slug}/apis[/{id}]` | `apis:*` | APIs, their routes, OpenAPI document and status (P.1; below) |
+| GET | `/api/v1/developers` | Platform Admin | Developers who signed up on the portal, newest first; `?status=` filters (P.1) |
+| PATCH | `/api/v1/developers/{id}` | Platform Admin | Block or unblock a developer `{status}`: a blocked one gets `403 developer_blocked` on every portal request (P.1) |
 | GET, PATCH | `/api/v1/workspaces/{slug}/apps[/{id}]` | `apps:*` | Developers' apps: approve, reject, block (P.2) |
 | various | `/api/v1/portal/...` | developer JWT | The developer portal API (below; P.1, P.2) |
 | PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}`; also bans or unbans them in GoTrue (an account not linked yet is found by exact email). The row is locked across the GoTrue calls. Disabling yourself → `409`. GoTrue failing or timing out (the lookup or the ban) → `502` with the safe side kept: a disable stays (repeat to finish the ban), an enable isn't made |
@@ -613,11 +615,21 @@ Transition rules (MT.5):
 
 **Developer portal API (P.1, P.2)**
 
-- Developers sign in with their own GoTrue (`auth-portal`, open sign-up, email confirmation through Mailpit). The control plane verifies its tokens with that instance's secret; a portal token never opens the admin API, and an admin token never opens the portal API (a guard test over every endpoint).
-- `/api/v1/portal/workspaces/{slug}/apis` lists published and deprecated APIs with their docs; a draft is `404`.
+- Developers sign in with their own GoTrue (`auth-portal`, open sign-up, email confirmation through Mailpit). Its tokens carry their own audience (`developer`) and are signed with their own secret (`PORTAL_GOTRUE_JWT_SECRET`, which must differ from `GOTRUE_JWT_SECRET`: the control plane refuses to start otherwise). A portal token never opens the admin API (`401`), and an admin token, the Platform Admin's with MFA included, never opens the portal API (`401`); a guard test checks every endpoint both ways.
+- `GET /api/v1/portal/me`: the developer (made on their first request). A blocked developer gets `403 developer_blocked` everywhere in the portal.
+- `GET /api/v1/portal/workspaces`: the active workspaces with at least one published or deprecated API (`slug`, `name`, `apis`: how many), by name, paged.
+- `GET /api/v1/portal/workspaces/{slug}/apis` lists a workspace's published and deprecated APIs by name, without their documents (`has_openapi`), with their routes (`path_prefix`, `methods`, `auth_required`); `GET .../apis/{api_id}` adds the OpenAPI document. A draft, another workspace's API, and an unknown id are the same `404 API not found`; a workspace that isn't active (suspended, deleted) or doesn't exist is `404 Workspace not found`. Reading writes no audit event.
 - `/api/v1/portal/apps` (create in a workspace on a portal-visible plan, list own), `/apps/{id}/keys` (generate and revoke, the admin API's key rules), `/apps/{id}/usage` (requests over time, quota used). A developer sees only their own apps (`404` otherwise).
 - A plan with `requires_approval` makes a new app `pending` until an API Admin approves it.
-- Developer writes are audited in the workspace's log with `actor_type` `developer` (the CHECK gains it in P.2).
+- Developer writes are audited in the workspace's log with `actor_type` `developer` (the CHECK gained it in P.1, for `developer.create`).
+
+**APIs (P.1)**
+
+- `POST .../apis {name, slug, description?, openapi?, route_ids?}` makes a `draft`. `PATCH` changes `name`, `description`, `openapi` (`null` removes it), `route_ids` (replaces the set) and `status`; the slug never changes. Lists go by name and leave the documents out (`has_openapi`); `GET .../apis/{id}` has the document.
+- Lifecycle: `draft` → `published` → `deprecated`, and `deprecated` → `published` (a deprecation undone). Any other move is `409 api_<current status>` (`api_draft`, `api_published`, `api_deprecated`); the same status changes nothing.
+- `openapi`: a JSON object with `"openapi": "3.x"` (or `"swagger": "2.0"`) and an `info` object, at most 1 MiB as compact JSON (`422` otherwise). Not validated further: a broken document only hurts its own docs page.
+- `route_ids` (at most 1,000, no repeats): routes of this workspace (`422 Route not found` otherwise, as for every reference); a route already in another API is `409` naming its path and that API.
+- Audit: `api.create`, `api.update`, `api.delete`; `changes` hold a fingerprint of the document (`sha256:` and 16 hex characters), never the document, and the sorted `route_ids`.
 
 **Generate a key**
 
@@ -998,7 +1010,9 @@ api-platform/
 │   │   │   ├── audit/            # audit_events, record(), the audit endpoints, retention job
 │   │   │   ├── plans/            # plans and their rules (V2.2)
 │   │   │   ├── usage/            # usage-ingest worker, request logs, analytics (V2.1)
-│   │   │   ├── portal/           # developers, APIs, apps, the portal API (P.1, P.2)
+│   │   │   ├── developers/       # developers of the portal (P.1)
+│   │   │   ├── apis/             # APIs and their routes, the catalog's content (P.1)
+│   │   │   ├── portal/           # the portal API and its developer token check (P.1, P.2)
 │   │   │   ├── gateway_config/   # the /internal/config endpoint (incremental)
 │   │   │   ├── gotrue/           # thin client for GoTrue's admin API (invite, ban, create user)
 │   │   │   └── main.py           # creates the app, includes each router
@@ -1021,7 +1035,7 @@ The control plane is organized by feature: everything about one feature (endpoin
 
 | Service | Port | Purpose |
 | --- | --- | --- |
-| `postgres` | 5432 (host 5434) | Databases `apim` (ours) and `auth` (GoTrue's). Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
+| `postgres` | 5432 (host 5434) | Databases `apim` (ours), `auth` (GoTrue's) and `auth_portal` (the developers' GoTrue's, P.1). Mapped to 5434 on the host because local Postgres installs already use 5432 and 5433 |
 | `auth-db-init` | — | One-shot job before GoTrue starts (MT): creates GoTrue's login (`gotrue`), the `auth` database and schema, and the `postgres` role GoTrue's migrations expect; safe to repeat |
 | `auth` | 9999 | GoTrue (MT, pinned `v2.197.0`): login, MFA, refresh, invitations, recovery |
 | `control-plane-db-init` | — | One-shot job that prepares the Postgres logins and runs migrations before the API starts |
@@ -1060,7 +1074,9 @@ The control plane is organized by feature: everything about one feature (endpoin
 | control-plane-db-init, usage-ingest | `INGEST_DATABASE_URL` | `postgresql+asyncpg://apim_ingest:<password>@postgres:5432/apim` (V2.1) |
 | usage-ingest | `REQUEST_LOG_RETENTION_DAYS` | default `90` (V2.1) |
 | Control plane | `PUBLIC_RATE_LIMIT_PER_IP_PER_MIN`, `AUTH_FAIL_LIMIT_PER_IP` | per-IP limits, sent to the gateway as effective values (V2.2) |
-| Control plane | `PORTAL_GOTRUE_URL`, `PORTAL_GOTRUE_JWT_SECRET` | the developers' GoTrue (P.1) |
+| Control plane, auth-portal | `PORTAL_GOTRUE_JWT_SECRET` | the developers' GoTrue signs with it, the control plane verifies (P.1). The control plane never calls that GoTrue, so it gets no URL and no admin key |
+| auth-db-init, auth-portal | `PORTAL_GOTRUE_DB_PASSWORD` | the developers' GoTrue's own login (`gotrue_portal`) on `auth_portal` (P.1) |
+| e2e | `PORTAL_GOTRUE_SERVICE_ROLE_KEY` | the developers' GoTrue's admin key, to remove the developers the e2e tests sign up (P.1) |
 | Gateway | `METRICS_ADDR` | default `:9091`, metrics only (V2.3) |
 | GoTrue | `GOTRUE_DB_DATABASE_URL` | the `auth` database, as its own login `gotrue` (password `GOTRUE_DB_PASSWORD`), which can't open `apim` |
 | GoTrue | `GOTRUE_JWT_SECRET`, `GOTRUE_JWT_EXP` | shared with the control plane; `600` (10 minutes) |
@@ -1160,7 +1176,7 @@ Fewer, larger steps than MT: each one is a self-contained piece of work that an 
 
 **Portal: developer portal (planned Nov 22, 2026)**
 
-- [ ] P.1 Developers and catalog: the developers' GoTrue, `developers`, APIs with their routes, OpenAPI documents and lifecycle, the catalog
+- [x] P.1 Developers and catalog: the developers' GoTrue, `developers`, APIs with their routes, OpenAPI documents and lifecycle, the catalog
 - [ ] P.2 Self-service and Portal end to end: apps on plans (with approval), own keys and usage, the Portal definition of done as e2e, backup and restore
 
 **FE: Frontend (Claude, after the Portal)**

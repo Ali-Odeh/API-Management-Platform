@@ -30,6 +30,17 @@ class Settings(BaseSettings):
     gotrue_jwt_secret: str = Field(min_length=32)
     # Opens GoTrue's admin API (create, invite, ban users). A secret.
     gotrue_service_role_key: str
+    # The developers' own GoTrue (`auth-portal`, P.1): open sign-up, its own
+    # secret. Only its tokens open the portal API, and they open nothing else.
+    portal_gotrue_jwt_secret: str = Field(min_length=32)
+
+    @model_validator(mode="after")
+    def _separate_identities(self) -> Self:
+        # One secret for both would let either GoTrue's tokens be checked as
+        # the other's: the audiences still differ, but the keys must too.
+        if self.portal_gotrue_jwt_secret == self.gotrue_jwt_secret:
+            raise ValueError("PORTAL_GOTRUE_JWT_SECRET must differ from GOTRUE_JWT_SECRET")
+        return self
 
     # The first Platform Admin, made sure of at every startup. With a password
     # the GoTrue account is created with it; without one GoTrue sends an

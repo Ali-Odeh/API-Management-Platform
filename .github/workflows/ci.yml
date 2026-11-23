@@ -65,6 +65,8 @@ jobs:
       # a fake GoTrue, so no GoTrue process runs here (the e2e job has one).
       GOTRUE_JWT_SECRET: ci-only-gotrue-jwt-secret-at-least-32-chars
       GOTRUE_SERVICE_ROLE_KEY: ci-only-service-role-key
+      # The developers' GoTrue (P.1): the tests sign developers' tokens with it.
+      PORTAL_GOTRUE_JWT_SECRET: ci-only-portal-gotrue-jwt-secret-at-least-32
       PLATFORM_ADMIN_EMAIL: admin@example.com
       PLATFORM_ADMIN_PASSWORD: ci-only-platform-admin-password
 
@@ -195,7 +197,8 @@ jobs:
         run: >-
           docker compose exec -T control-plane python -c
           'import os; assert not {"MIGRATION_DATABASE_URL", "AUDIT_RETENTION_DATABASE_URL", "PURGE_DATABASE_URL", "INGEST_DATABASE_URL",
-          "POSTGRES_PASSWORD", "PGPASSWORD", "GOTRUE_DB_PASSWORD"}.intersection(os.environ)'
+          "POSTGRES_PASSWORD", "PGPASSWORD", "GOTRUE_DB_PASSWORD", "PORTAL_GOTRUE_DB_PASSWORD",
+          "PORTAL_GOTRUE_SERVICE_ROLE_KEY"}.intersection(os.environ)'
 
       - name: End-to-end tests
         run: docker compose run --rm e2e

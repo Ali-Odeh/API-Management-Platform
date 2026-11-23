@@ -24,17 +24,18 @@ docker compose ps
 | `mock-backend` | `mock-backend:9000` | `localhost:9000` | Echo service to proxy to (`?delay_ms=` answers late) |
 | `mock-backend-2` | `mock-backend-2:9000` | — (Compose network only) | A second echo instance, so a service can have two targets (MT.10) |
 | `auth` | `auth:9999` | `localhost:9999` | GoTrue: login, MFA, refresh, invitations |
+| `auth-portal` | `auth-portal:9998` | `localhost:9998` | The developers' GoTrue: open sign-up with email confirmation, login (P.1) |
 | `audit-retention` | — | — | Deletes audit events older than `AUDIT_RETENTION_DAYS` (default 365), at start and daily |
 | `workspace-purge` | — | — | Purges workspaces deleted more than `PURGE_AFTER_DAYS` (default 30) ago, at start and daily |
 | `usage-ingest` | — | — | Reads the gateway's usage events from Redis into the request log; drops months older than `REQUEST_LOG_RETENTION_DAYS` (default 90) daily (V2.1) |
-| `mailpit` | `mailpit:1025` (SMTP) | `localhost:8025` | Catches every email GoTrue sends (web UI) |
-| `postgres` | `postgres:5432` | `localhost:5434` | Databases `apim` (config) and `auth` (GoTrue's own), for pgAdmin / DBeaver |
+| `mailpit` | `mailpit:1025` (SMTP) | `localhost:8025` | Catches every email both GoTrues send (web UI) |
+| `postgres` | `postgres:5432` | `localhost:5434` | Databases `apim` (config), `auth` and `auth_portal` (each GoTrue's own), for pgAdmin / DBeaver |
 | `redis` | `redis:6379` | `localhost:6379` | Rate-limit buckets |
 
 Host ports 5434 and 8081 avoid clashes with local Postgres servers (5432,
 5433) and another app on 8080. Containers always use the inside addresses.
-A one-shot `auth-db-init` job prepares GoTrue's database on every `up` and
-exits (it shows as "Exited (0)" in `docker compose ps -a`).
+A one-shot `auth-db-init` job prepares both GoTrue databases on every `up`
+and exits (it shows as "Exited (0)" in `docker compose ps -a`).
 
 ```powershell
 docker compose logs -f gateway         # one JSON line per request
@@ -163,6 +164,26 @@ $password = -join ($bytes | ForEach-Object { $_.ToString("x2") })
 $db = ((Select-String -Path .env -Pattern '^DATABASE_URL=(.*)').Matches.Groups[1].Value).Split('/')[-1]
 $line = "PURGE_DATABASE_URL=postgresql+asyncpg://apim_purge:$password@postgres:5432/$db`n"
 [IO.File]::AppendAllText("$PWD\.env", $line, (New-Object Text.UTF8Encoding $false))   # LF, no BOM
+docker compose up -d --build --wait
+```
+
+### Upgrading a v2 install: the developers' GoTrue (P.1)
+
+P.1 adds a second GoTrue (`auth-portal`) with its own database login, signing
+secret and admin key. Add the three values to an existing `.env` (the
+`auth-db-init` job creates the login and the `auth_portal` database on the
+next start):
+
+```powershell
+function New-Hex([int]$n) { $b = New-Object byte[] $n; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString("x2") }) }
+function ConvertTo-B64Url([byte[]]$x) { [Convert]::ToBase64String($x).TrimEnd('=').Replace('+', '-').Replace('/', '_') }
+$secret = New-Hex 32
+$utf8 = [Text.Encoding]::UTF8
+$now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$jwt = (ConvertTo-B64Url $utf8.GetBytes('{"alg":"HS256","typ":"JWT"}')) + "." + (ConvertTo-B64Url $utf8.GetBytes("{""role"":""service_role"",""iss"":""apim"",""iat"":$now,""exp"":$($now + 315360000)}"))
+$sig = ConvertTo-B64Url (New-Object Security.Cryptography.HMACSHA256 (, $utf8.GetBytes($secret))).ComputeHash($utf8.GetBytes($jwt))
+$lines = "PORTAL_GOTRUE_DB_PASSWORD=$(New-Hex 16)`nPORTAL_GOTRUE_JWT_SECRET=$secret`nPORTAL_GOTRUE_SERVICE_ROLE_KEY=$jwt.$sig`n"
+[IO.File]::AppendAllText("$PWD\.env", $lines, (New-Object Text.UTF8Encoding $false))   # LF, no BOM
 docker compose up -d --build --wait
 ```
 
@@ -377,13 +398,37 @@ left alone; their test person `e2e-person@example.test` and their workspace
 `e2e-tenant` are reused by every run.
 Each run invites a new `e2e-invitee-...@example.test`; its membership, GoTrue
 account and email are deleted, its row in `users` stays (people are never
-deleted).
+deleted). The portal stories (P.1) sign up new `e2e-dev-...@example.test`
+developers on the developers' GoTrue through the confirmation email; their
+accounts and emails are deleted afterwards, their rows in `developers` stay.
 
 ```powershell
 docker compose run --rm e2e
 ```
 
 Run them for any change a request touches from end to end.
+
+## Developer portal (P.1)
+
+Developers sign up on their own GoTrue (`localhost:9998`), confirm their
+address through the email in Mailpit, and call the portal API with that
+token. A member's token doesn't open the portal, and a developer's token
+opens nothing else.
+
+```powershell
+$dev = @{ email = "dev@example.test"; password = "a-long-password" } | ConvertTo-Json
+Invoke-RestMethod -Method Post http://localhost:9998/signup -ContentType application/json -Body $dev
+# Open the confirmation link in Mailpit (http://localhost:8025), then log in:
+$tok = (Invoke-RestMethod -Method Post "http://localhost:9998/token?grant_type=password" `
+  -ContentType application/json -Body $dev).access_token
+$h = @{ Authorization = "Bearer $tok" }
+Invoke-RestMethod http://localhost:8000/api/v1/portal/workspaces -Headers $h
+Invoke-RestMethod http://localhost:8000/api/v1/portal/workspaces/default/apis -Headers $h
+```
+
+A workspace's members publish APIs under `/api/v1/workspaces/{slug}/apis`
+(a new one is a draft; `PATCH {"status": "published"}`); the Platform Admin
+lists and blocks developers under `/api/v1/developers`.
 
 ## Internal upstreams (SSRF protection)
 

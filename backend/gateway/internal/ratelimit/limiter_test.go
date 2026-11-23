@@ -329,7 +329,7 @@ func TestConcurrentRequestsNeverOverspend(t *testing.T) {
 	allowed, elapsed := fire(t, l, 100, func(int) Request { return req })
 
 	// 50 per minute refills one token every 1.2 s; a slow run earns one per 1.2 s.
-	want := int64(50) + int64(elapsed/(1200*time.Millisecond))
+	want := int64(50) + int64((elapsed+redisClockSlack)/(1200*time.Millisecond))
 	if got := allowed[req.ConsumerID]; got < 50 || got > want {
 		t.Errorf("%d of 100 concurrent requests allowed, want exactly 50", got)
 	}
@@ -357,10 +357,11 @@ func TestConcurrentRequestsSpendBothBucketsAtomically(t *testing.T) {
 		total += n
 	}
 	// The workspace refills one token every 1.2 s.
-	if most := wsLimit + int64(elapsed/(1200*time.Millisecond)); total < wsLimit || total > most {
+	if most := wsLimit + int64((elapsed+redisClockSlack)/(1200*time.Millisecond)); total < wsLimit || total > most {
 		t.Errorf("%d of 100 allowed, want %d (the workspace's limit)", total, wsLimit)
 	}
-	refill := elapsed.Minutes() * consumerLimit
+	// Far below one token even with the slack: a double spend is still caught.
+	refill := (elapsed + redisClockSlack).Minutes() * consumerLimit
 	for _, c := range consumers {
 		spent := float64(consumerLimit) - tokens(t, rdb, consumerKeyPrefix+c)
 		// spent = allowed - refill since the start, so allowed-refill <= spent <= allowed.
@@ -369,6 +370,13 @@ func TestConcurrentRequestsSpendBothBucketsAtomically(t *testing.T) {
 		}
 	}
 }
+
+// redisClockSlack is how much more time Redis may see pass during a burst
+// than the test measures: the script refills by Redis's clock, the test
+// reads its own, and Docker Desktop's VM clock is stepped to the host's now
+// and then. Without it, a step during a burst failed the exact refill checks
+// about once in 20 runs.
+const redisClockSlack = 250 * time.Millisecond
 
 // fire sends n requests at the same moment and counts the allowed ones by
 // consumer ("" for requests without one).

@@ -34,6 +34,8 @@ class Permission(StrEnum):
     USAGE_READ = "usage:read"
     PLANS_READ = "plans:read"
     PLANS_WRITE = "plans:write"
+    APIS_READ = "apis:read"
+    APIS_WRITE = "apis:write"
 
     @property
     def is_read(self) -> bool:
@@ -50,6 +52,7 @@ _VIEWER = frozenset(
         Permission.KEYS_READ,
         Permission.USAGE_READ,
         Permission.PLANS_READ,
+        Permission.APIS_READ,
     }
 )
 _API_ADMIN = _VIEWER | {
@@ -59,6 +62,7 @@ _API_ADMIN = _VIEWER | {
     Permission.KEYS_WRITE,
     Permission.AUDIT_READ,
     Permission.PLANS_WRITE,
+    Permission.APIS_WRITE,
 }
 _OWNER = _API_ADMIN | {
     Permission.MEMBERS_WRITE,
