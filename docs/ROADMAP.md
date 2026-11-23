@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 23, 2026 · **Current step:** P.2 done: **the backend is complete**; next: FE.1
+**Last updated:** Nov 23, 2026 · **Current step:** FE.1 done; next: FE.2
 
 ## Overview
 
@@ -15,7 +15,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅✅ 12/12 | ✅ Done |
 | v2: Usage, plans and metrics (backend) | ✅✅✅ 3/3 | ✅ Done |
 | Portal: developer portal (backend) | ✅✅ 2/2 | ✅ Done: **the backend is complete** |
-| FE: Frontend | ⬜⬜⬜⬜ 0/4 | ⏳ After the Portal |
+| FE: Frontend | ✅⬜⬜⬜ 1/4 | 🔨 In progress |
 | *Out of plan* | — | Kept for reference, not scheduled (see "Out of plan" below) |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
@@ -53,6 +53,16 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | Proxy errors (live) | slow backend → **504 after 5.05 s** (route timeout 5 s); backend down → **502** |
 | Image | 16.9 MB (distroless, non-root) |
 | Run all checks | `.\backend\gateway\scripts\check.ps1` (`-Fix` to autofix) |
+
+**Frontend (React)**
+
+| Check | Result |
+| --- | --- |
+| Tests | 68 passing (about 30 s), the whole app rendered against a fake GoTrue and the API faked with MSW: login with and without MFA (wrong code, several authenticators), invitation and recovery links, MFA set-up and removal, password change, sign-out everywhere, my workspaces and leaving one, the role and permission rules, a suspended workspace, the API client's 401 and `user_disabled` handling |
+| Coverage | 97.5% lines (minimum 90%) |
+| prettier, eslint (strict type-checked), tsc | clean |
+| Browser stories | 3 pass in about 37 s (`docker compose run --rm e2e-browser`) |
+| Run all checks | `.\frontend\scripts\check.ps1` (`-Fix` to format and regenerate the API types) |
 
 **Both**
 
@@ -409,10 +419,18 @@ Decided Nov 22, 2026: not scheduled, kept in PLAN.md for reference and marked *O
 
 | # | Step | Status |
 | --- | --- | --- |
-| FE.1 | Foundation: Vite, React, TypeScript, layout, GoTrue login and MFA, account page, workspace switcher, role-aware routing and buttons, generated API types (Vite proxies `/api`, so no CORS is needed) | ⬜ |
+| FE.1 | Foundation: Vite, React, TypeScript, layout, GoTrue login and MFA, account page, workspace switcher, role-aware routing and buttons, generated API types (Vite proxies `/api`, so no CORS is needed) | ✅ |
 | FE.2 | Dashboard: Overview, Services and service detail (targets, health), Routes (CORS, body limit), Consumers and keys, Members, Activity, Settings, Plans, Logs | ⬜ |
 | FE.3 | Platform: Workspaces (create, suspend, restore, limits), Users (disable, enable), platform activity | ⬜ |
 | FE.4 | Developer portal: sign-up and login, API catalog, API docs with try-it, own keys, own usage | ⬜ |
+
+The FE steps are built on stacked branches (`fe1-foundation` → `fe2-dashboard` → `fe3-platform` → `fe4-portal`), each one a pull request into the one before. The page lists above are a sketch: every feature of the finished backend gets a page or a control (decided Nov 23, 2026).
+
+### FE.1 Foundation
+
+**Done when:** a member and the Platform Admin can sign in (with the authenticator code when they have one), choose a password from an invitation or recovery link, set up and remove MFA, see their workspaces with their role, leave one, and open a workspace's dashboard frame; the frontend checks pass with coverage ≥ 90%; browser stories run on the stack and in CI.
+
+**Status:** ✅ Done (Nov 23). Commits `916bd32` (scaffold), `1cf1f03` (login, MFA, account, workspaces, layout), `d9bff87` (choosing between authenticators), `e79d70d` (types keep defaulted fields optional), `a9a0fd9` (the `frontend` service), `a11441c` (browser stories), `3eefffa` (CI). Checked by hand in a browser against the real stack: sign-in, MFA set-up with the QR code, sign-in with the code, removing the factor.
 
 ## Decisions log
 
@@ -680,3 +698,10 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 23 | P.2 | The app's usage: the analytics' traffic for its consumer, plus `quota` (`used` = this UTC month's request-log rows with `ratelimit` = `ok`, `remaining`, `resets_at`) | The control plane never reads Redis; the request log is close behind the gateway's counter (seconds), and the answer says so |
 | Nov 23 | P.2 | Blocking a developer blocks the consumers of their approved apps in every workspace in the same transaction (one `developer.block` event); unblocking reactivates them | A blocked developer's keys must stop at the gateway, not only the portal |
 | Nov 23 | P.2 | Backup: `scripts/backup.ps1` dumps `apim`, `auth` and `auth_portal` (custom format, copied out of the container); restore: `scripts/restore.ps1` into a fresh stack only (it refuses a database with tables), then a new config generation, migrations and the stack. PowerShell only, like the owner's tooling; no `.sh` twins | A restore must never overwrite data by mistake; the GoTrue databases are part of the backup so people and developers can still log in. Windows PowerShell 5.1 mangles binary pipes and quotes in native arguments, so the dumps are copied with `docker compose cp` and SQL goes in on stdin |
+| Nov 23 | FE.1 | Stack versions: React 19.3, Vite 7.3, TypeScript 5.9, Tailwind 4.3, shadcn/ui (generated with its CLI, kept as generated), TanStack Query 5, React Router 7, react-hook-form with zod 3, Vitest 3, MSW 2; newer majors exist (Vite 8, Vitest 5, React Router 8) but these are the lines the builder knows well. New dependencies beyond PLAN.md section 2: `@supabase/auth-js` (only the GoTrue client of supabase-js), `openapi-fetch` and `openapi-typescript` (typed calls from openapi.json), `sonner` (toasts), `date-fns` | Fewer surprises in a big step; every version is pinned exactly in package.json and can be raised later on purpose |
+| Nov 23 | FE.1 | Vite also forwards `/auth/v1` and `/portal-auth/v1` to the two GoTrues (not only `/api`) | The browser then never calls another origin, so neither GoTrue needs CORS settings |
+| Nov 23 | FE.1 | The app reads GoTrue's email links itself (the URL fragment) instead of letting the client do it, and removes the tokens from the address bar | It must know whether a link was an invitation or a recovery to ask for a password first |
+| Nov 23 | FE.1 | A person with several verified authenticators picks one at the MFA step | The first one only would lock out anyone whose other app is the one at hand (the e2e stories hold two for the Platform Admin) |
+| Nov 23 | FE.1 | API types are generated with `--default-non-nullable false` | A request field with a server default is optional, as the API says; the default made every create body repeat all defaults |
+| Nov 23 | FE.1 | Frontend checks run locally with Node (`frontend/scripts/check.ps1`), like the gateway's with Go; tests render the whole app against a fake GoTrue and the API faked with MSW. Coverage gate: lines and statements 90%, functions 85%, branches 80%; the generated shadcn/ui components are left out of coverage and of the strict lint rules | No stack needed for unit tests; the generated components aren't ours to test |
+| Nov 23 | FE.1 | Browser stories with Python Playwright in their own container (`e2e-browser`, test profile), reusing the e2e helpers; the plain e2e run skips them | The same fixtures (GoTrue admin, TOTP) as the API stories; Chromium stays out of the e2e image |
