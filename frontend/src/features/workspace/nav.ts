@@ -1,4 +1,6 @@
 import {
+  AppWindow,
+  BookOpen,
   Boxes,
   CreditCard,
   History,
@@ -28,6 +30,8 @@ export const WORKSPACE_NAV: NavItem[] = [
   { path: 'routes', label: 'Routes', icon: Signpost, permission: 'routes:read' },
   { path: 'consumers', label: 'Consumers', icon: UsersRound, permission: 'consumers:read' },
   { path: 'plans', label: 'Plans', icon: CreditCard, permission: 'plans:read' },
+  { path: 'apis', label: 'APIs', icon: BookOpen, permission: 'apis:read' },
+  { path: 'apps', label: 'Apps', icon: AppWindow, permission: 'apps:read' },
   { path: 'members', label: 'Members', icon: Users, permission: 'members:read' },
   { path: 'activity', label: 'Activity', icon: History, permission: 'audit:read' },
   { path: 'logs', label: 'Logs', icon: ScrollText, permission: 'usage:read' },
