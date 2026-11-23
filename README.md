@@ -18,7 +18,8 @@ It is a learning project, built step by step with production habits: tests at ev
 - **Reverse proxy:** per-route timeouts (`504`), dead backends (`502`), optional prefix stripping, trusted `X-Forwarded-*` headers. The backend never sees the API key; it gets `X-Consumer-ID`.
 - **Observability:** a request ID on every call, and one JSON log line per request with the route, the consumer, the status and how long the backend and the gateway each took.
 - **Login:** GoTrue handles passwords, TOTP MFA, rotating refresh tokens and emails; the control plane verifies its tokens and decides what each person may do from its own tables. A disabled person is refused on their very next request.
-- **Developer portal:** developers sign up on their own GoTrue (open sign-up, confirmed by email; never mixed with workspace members) and browse each workspace's catalog: the APIs it has published, with their OpenAPI documents. Drafts stay hidden, deprecated APIs are marked.
+- **Developer portal:** developers sign up on their own GoTrue (open sign-up, confirmed by email; never mixed with workspace members) and browse each workspace's catalog: the APIs it has published, with their OpenAPI documents. Drafts stay hidden, deprecated APIs are marked. Then they serve themselves: an app on a plan the workspace offers (an API Admin approves it first when the plan says so), keys, calls through the gateway, their own usage and remaining monthly quota. Every app is a consumer underneath, so the gateway needed no change.
+- **Backup and restore:** a script dumps the platform's and both GoTrues' databases; another restores them into a fresh stack only and rotates the config generation. Tried for real: a key made before the backup works at the restored gateway.
 - **Live configuration:** admins change services, routes, consumers and keys through a REST API (GoTrue JWT). The gateway long-polls the control plane and swaps in the new config without locks: a revoked key stops working in about 70 ms.
 
 ## Architecture
@@ -69,8 +70,8 @@ flowchart LR
 | **Config propagation** | An admin change reaches the gateway in about **4 ms** (only the changed workspace is sent) |
 | **Route matching** | 0.4 µs for 100 routes, no memory allocations (Go benchmark) |
 | **Gateway tests** | 575 tests and table cases, **98% coverage**, the race detector, 9 fuzz tests |
-| **Control plane tests** | 1,679 tests, **99% coverage**, mypy strict; permission, isolation and audit guards over every endpoint |
-| **End to end** | 63 stories on the real stack (GoTrue login with MFA, two tenants on their own subdomains, roles, audit log, invitations, lifecycle, limits, SSRF, load balancing, CORS, the request log and analytics), in CI on every push |
+| **Control plane tests** | 2,187 tests, **99% coverage**, mypy strict; permission, isolation and audit guards over every endpoint, the portal's too |
+| **End to end** | 66 stories on the real stack (the developer portal from sign-up to a revoked key, GoTrue login with MFA, two tenants on their own subdomains, roles, audit log, invitations, lifecycle, limits, SSRF, load balancing, CORS, the request log and analytics), in CI on every push |
 
 The load test ran on one laptop with Docker Desktop; the differences between runs (with and without the gateway) are the meaningful part.
 
@@ -193,4 +194,5 @@ docker compose run --rm loadtest            # k6 load test
 The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT) is done** too: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), SSRF protection (MT.9), load balancing over several targets with active and passive health checks (MT.10), CORS per route with request body limits (MT.11), and the MT definition of done proven end to end on every push, with the load test measured again on a tenant's subdomain and two targets (MT.12). Next on the [roadmap](docs/ROADMAP.md):
 
 - **v2 is complete:** every request is in its workspace's request log, with analytics on top (V2.1: the gateway writes usage events to a Redis Stream, a worker stores them in Postgres by month), plans with monthly quotas and per-IP protection (V2.2), and Prometheus metrics (V2.3).
-- **The developer portal, in progress:** developers sign up on their own GoTrue (open sign-up, email confirmation) and browse each workspace's published APIs with their OpenAPI documents (P.1, done). Next: self-service apps and keys (P.2), then the React app.
+- **The developer portal is complete:** developers sign up on their own GoTrue (open sign-up, email confirmation) and browse each workspace's published APIs with their OpenAPI documents (P.1); they make apps on offered plans (with approval when a plan needs it), get keys, call through the gateway and see their own usage and quota, with a tested backup and restore (P.2). **The backend is complete.**
+- Next: the React app (dashboard, platform pages and the developer portal), built against the final API.
