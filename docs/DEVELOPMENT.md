@@ -206,9 +206,15 @@ sets its rate limit and monthly quota. Public routes are also limited per
 client IP (`PUBLIC_RATE_LIMIT_PER_IP_PER_MIN`, default 600), and an IP that
 sends more than `AUTH_FAIL_LIMIT_PER_IP` (default 20) wrong keys in 5 minutes
 gets 429 until the 5 minutes are over. The e2e runner clears those counters
-when it starts. For the full load test, raise the per-IP limit first (k6
-sends from one IP): set `PUBLIC_RATE_LIMIT_PER_IP_PER_MIN=1000000` in `.env`,
-`docker compose up -d control-plane`, run it, then put it back.
+when it starts. The load test raises its own workspace's per-IP limit (k6 sends from
+one IP), so it needs nothing changed.
+
+Metrics (V2.3): Prometheus runs in the stack with its UI on
+http://127.0.0.1:9090 and scrapes the gateway (`gateway:9091`, never
+published) and the worker (`usage-ingest:9092`) every 5 s. Try
+`sum by (status) (rate(gateway_requests_total[1m]))`. A workspace's own
+per-IP limit (`ip_rate_limit_per_min` in `PATCH /limits`) overrides the
+platform default, as the load test does for its workspace.
 
 Events written while the worker is down wait in the stream (up to about
 200,000), and it stores them when it comes back. Its tests read a real
