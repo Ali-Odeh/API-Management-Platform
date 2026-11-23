@@ -74,9 +74,9 @@ type Request struct {
 }
 
 // Result is the answer for one request. Limit and Remaining describe one
-// bucket: when allowed, the consumer's on a protected route and the client
-// IP's (or, without one, the workspace's) on a public route; when refused,
-// the check that refused it.
+// bucket: when allowed, the consumer's on a protected route, and on a public
+// route the one with fewer tokens left (the workspace's or the client IP's);
+// when refused, the check that refused it.
 type Result struct {
 	Allowed    bool
 	LimitedBy  Check         // "" when allowed
@@ -176,7 +176,7 @@ type check struct {
 
 // checks lists the request's limits in the script's order: the failed-key
 // refusal, the workspace's bucket, the IP's or the consumer's bucket, then
-// the quota. The last bucket is the one an allowed answer describes.
+// the quota.
 func (r Request) checks() ([]check, error) {
 	if r.WorkspaceID == "" {
 		return nil, errors.New("rate limit without a workspace")
@@ -227,13 +227,12 @@ func (r Request) result(reply []any, checks []check) (Result, error) {
 		Remaining:  int(remaining),
 		RetryAfter: time.Duration(retryMS) * time.Millisecond,
 	}
-	described := limitedBy
 	if res.Allowed {
-		described = string(lastBucket(checks))
+		res.LimitedBy = "" // the script named the bucket it describes
 	}
 	found := false
 	for _, c := range checks {
-		if string(c.kind) == described {
+		if string(c.kind) == limitedBy {
 			res.Limit, found = int(c.limit), true
 		}
 		if c.kind == Quota {
@@ -244,16 +243,6 @@ func (r Request) result(reply []any, checks []check) (Result, error) {
 		return Result{}, fmt.Errorf("script answered naming check %q, which this request doesn't have", limitedBy)
 	}
 	return res, nil
-}
-
-func lastBucket(checks []check) Check {
-	var last Check
-	for _, c := range checks {
-		if c.kind != Quota && c.kind != AuthFail {
-			last = c.kind
-		}
-	}
-	return last
 }
 
 func (r Request) now() time.Time {

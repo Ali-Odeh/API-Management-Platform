@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import socket
 import struct
 import time
 import uuid
@@ -29,6 +30,9 @@ GOTRUE_URL = os.environ.get("GOTRUE_URL", "http://auth:9999")
 # Mailpit catches the emails GoTrue sends (invitations); its API lists them.
 MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://mailpit:8025")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8080")
+# The gateway's Redis (its database 0), for one thing only: see
+# _forget_failed_key_attempts.
+REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 # The backend as the gateway reaches it.
 MOCK_BACKEND_URL = os.environ.get("MOCK_BACKEND_URL", "http://mock-backend:9000")
 # Its second copy (MT.10), for load balancing.
@@ -190,6 +194,36 @@ def _wait_until_up(url: str) -> None:
             pass
         time.sleep(0.5)
     pytest.exit(f"{url} is not up after {STACK_START_TIMEOUT:.0f} s; is the stack running?")
+
+
+# Deletes every failed-key counter (V2.2) in one atomic script.
+_FORGET_FAILURES = (
+    "for _, k in ipairs(redis.call('KEYS', 'authfail:*')) do redis.call('DEL', k) end return 0"
+)
+
+
+def _forget_failed_key_attempts() -> None:
+    """Start every run with no failed key attempts counted.
+
+    All requests of the e2e tests come from one IP, and some stories send
+    wrong keys on purpose (or a new key before the gateway knows it). Two
+    runs within the gateway's 5-minute window would add up past the limit,
+    and the IP would be refused in `default`. The counters are short-lived
+    protection state, not data. Sent with Redis's own protocol (RESP), so
+    the runner needs no Redis library.
+    """
+    command = ["EVAL", _FORGET_FAILURES, "0"]
+    payload = f"*{len(command)}\r\n" + "".join(f"${len(c)}\r\n{c}\r\n" for c in command)
+    with socket.create_connection((REDIS_HOST, 6379), timeout=5) as conn:
+        conn.sendall(payload.encode())
+        reply = conn.recv(64)
+    if not reply.startswith(b":"):
+        pytest.exit(f"could not reset the failed-key counters in Redis: {reply!r}", returncode=2)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_failed_key_attempts() -> None:
+    _forget_failed_key_attempts()
 
 
 def pytest_configure(config: pytest.Config) -> None:

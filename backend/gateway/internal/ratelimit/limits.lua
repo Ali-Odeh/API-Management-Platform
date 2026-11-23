@@ -18,8 +18,10 @@
 -- can never both take the last token or the last request of a quota.
 --
 -- Returns { allowed (1/0), remaining, retry_after_ms, limited_by, quota_remaining }:
---   allowed   remaining = whole tokens left in the last bucket given;
---             retry_after_ms = 0; limited_by = ''
+--   allowed   the bucket the answer describes: the consumer's if there is
+--             one, else the one with the fewest tokens left (the workspace's
+--             or the client IP's); remaining = its whole tokens left;
+--             retry_after_ms = 0; limited_by = its kind
 --   refused   the check that holds the request back longest: limited_by =
 --             its kind, remaining = what it has left (0), retry_after_ms =
 --             time until every check would pass again
@@ -42,7 +44,7 @@ local month_left_ms = tonumber(ARGV[2 * pairs_count + 1]) or 0
 local allowed = 1
 local decider, decider_wait = nil, -1
 local tokens, quota_used = {}, {}
-local last_bucket = nil
+local described = nil -- the bucket an allowed answer describes
 
 local function refuse(i, wait)
   -- The longest wait decides; on a tie the later check (the more specific
@@ -65,7 +67,10 @@ for i = 1, pairs_count do
     -- Refill for the time since the last request; never above the limit
     -- (that also applies a lowered limit at once).
     tokens[i] = math.min(limit, have + math.max(0, now - ts) * refill_per_ms)
-    last_bucket = i
+    if kind == 'consumer' or described == nil
+       or (ARGV[2 * described - 1] ~= 'consumer' and tokens[i] < tokens[described]) then
+      described = i
+    end
     if tokens[i] < 1 then
       refuse(i, math.ceil((1 - tokens[i]) / refill_per_ms))
     end
@@ -110,11 +115,7 @@ end
 
 -- Redis turns Lua numbers into integers, so round explicitly.
 if allowed == 1 then
-  local remaining = 0
-  if last_bucket ~= nil then
-    remaining = math.floor(tokens[last_bucket])
-  end
-  return { 1, remaining, 0, '', quota_remaining }
+  return { 1, math.floor(tokens[described]), 0, ARGV[2 * described - 1], quota_remaining }
 end
 local left = 0
 if tokens[decider] ~= nil then

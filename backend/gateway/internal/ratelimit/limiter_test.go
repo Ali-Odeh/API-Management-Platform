@@ -439,10 +439,10 @@ func TestResultReadsTheScriptsAnswer(t *testing.T) {
 		want  Result
 		bad   bool
 	}{
-		{"public allowed", public, []any{int64(1), int64(6), int64(0), "", int64(-1)}, Result{Allowed: true, Limit: 7, Remaining: 6}, false},
-		{"public allowed by the IP's bucket", publicIP, []any{int64(1), int64(3), int64(0), "", int64(-1)}, Result{Allowed: true, Limit: 4, Remaining: 3}, false},
-		{"protected allowed", protected, []any{int64(1), int64(2), int64(0), "", int64(-1)}, Result{Allowed: true, Limit: 3, Remaining: 2}, false},
-		{"allowed with a quota", quota, []any{int64(1), int64(2), int64(0), "", int64(41)},
+		{"public allowed", public, []any{int64(1), int64(6), int64(0), "workspace", int64(-1)}, Result{Allowed: true, Limit: 7, Remaining: 6}, false},
+		{"public allowed, the IP's bucket the tighter", publicIP, []any{int64(1), int64(3), int64(0), "ip", int64(-1)}, Result{Allowed: true, Limit: 4, Remaining: 3}, false},
+		{"protected allowed", protected, []any{int64(1), int64(2), int64(0), "consumer", int64(-1)}, Result{Allowed: true, Limit: 3, Remaining: 2}, false},
+		{"allowed with a quota", quota, []any{int64(1), int64(2), int64(0), "consumer", int64(41)},
 			Result{Allowed: true, Limit: 3, Remaining: 2, QuotaLimit: 100, QuotaRemaining: 41}, false},
 		{"refused by the workspace", protected, []any{int64(0), int64(0), int64(800), "workspace", int64(-1)},
 			Result{LimitedBy: BucketWorkspace, Limit: 7, RetryAfter: 800 * time.Millisecond}, false},

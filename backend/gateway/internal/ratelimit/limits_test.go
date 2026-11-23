@@ -29,6 +29,19 @@ func TestPublicRoutesLimitEachClientIP(t *testing.T) {
 	}
 }
 
+// An allowed public request describes the tighter of its two buckets.
+func TestPublicAnswersDescribeTheTighterBucket(t *testing.T) {
+	l, _ := newTestLimiter(t)
+	tightWorkspace := Request{WorkspaceID: unique(t, "ws-a"), WorkspaceLimit: 3, ClientIP: "10.0.0.3", IPLimit: 600}
+	if res := allow(t, l, tightWorkspace); res.Limit != 3 || res.Remaining != 2 {
+		t.Errorf("%+v, want the workspace's 3 (2 left)", res)
+	}
+	tightIP := Request{WorkspaceID: unique(t, "ws-b"), WorkspaceLimit: 600, ClientIP: "10.0.0.4", IPLimit: 3}
+	if res := allow(t, l, tightIP); res.Limit != 3 || res.Remaining != 2 {
+		t.Errorf("%+v, want the IP's 3 (2 left)", res)
+	}
+}
+
 func TestProtectedRoutesHaveNoIPBucket(t *testing.T) {
 	l, rdb := newTestLimiter(t)
 	req := consumerReq(t, unique(t, "c"), roomy)
