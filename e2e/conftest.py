@@ -435,7 +435,25 @@ def admin(platform_admin_session: Session) -> Iterator[httpx.Client]:
 def gateway() -> Iterator[httpx.Client]:
     _wait_until_up(GATEWAY_URL)
     with httpx.Client(base_url=GATEWAY_URL, timeout=10) as client:
+        _wait_for_config(client)
         yield client
+
+
+def _wait_for_config(client: httpx.Client) -> None:
+    """Until the gateway serves its first config.
+
+    /health answers as soon as the gateway runs, config or not. On a fresh
+    stack the gateway often starts before the control plane, and its first
+    config requests fail and back off (up to about 10 s), so a test could
+    meet 503 config_not_loaded. Any other answer means a config is loaded.
+    """
+    deadline = time.monotonic() + STACK_START_TIMEOUT
+    while time.monotonic() < deadline:
+        r = client.get("/")
+        if not (r.status_code == 503 and r.json().get("error") == "config_not_loaded"):
+            return
+        time.sleep(0.5)
+    pytest.exit(f"the gateway has no config after {STACK_START_TIMEOUT:.0f} s")
 
 
 @pytest.fixture(scope="session")
