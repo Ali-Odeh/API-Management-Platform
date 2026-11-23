@@ -940,6 +940,8 @@ Plus the shared account pages: login (GoTrue, with MFA), account and MFA setup, 
 | 12 | Settings | `/w/{slug}/settings` | Name, limits and quotas (read-only for members), delete workspace (Owner, type the slug to confirm) | MT |
 | 13 | Plans | `/w/{slug}/plans` | Plan cards, create and edit modal | v2 |
 | 14 | Logs | `/w/{slug}/logs` | Filters, request table, detail drawer | v2 |
+| 14a | APIs | `/w/{slug}/apis`, `/w/{slug}/apis/:id` | APIs with status; an API's routes, OpenAPI document (paste or load), publish, deprecate (added in FE.2) | P.1 |
+| 14b | Apps | `/w/{slug}/apps` | Developers' apps, the approval queue first; approve, reject (added in FE.2) | P.2 |
 
 A Viewer sees every dashboard page read-only; buttons a role can't use are hidden.
 
@@ -965,7 +967,7 @@ A Viewer sees every dashboard page read-only; buttons a role can't use are hidde
 
 **Shared layout**
 
-Dashboard sidebar (Overview, Services, Routes, Consumers, Members, Activity, Plans, Logs, Settings); top bar with the workspace switcher, the user's name and role, and sign out; a Platform link for the Platform Admin; light and dark theme. In development Vite proxies `/api` to the control plane, so the app and the API share one origin (no CORS needed for the app). The session is handled by `supabase-js` (see MT_ROLES_DECISIONS.md decision 4 for its storage trade-off).
+Dashboard sidebar (Overview, Services, Routes, Consumers, Plans, APIs, Apps, Members, Activity, Logs, Settings); top bar with the workspace switcher, the user's name and role, and sign out; a Platform link for the Platform Admin; light and dark theme. In development Vite proxies `/api` to the control plane, so the app and the API share one origin (no CORS needed for the app). The session is handled by `supabase-js` (see MT_ROLES_DECISIONS.md decision 4 for its storage trade-off).
 
 **Folder structure**
 
