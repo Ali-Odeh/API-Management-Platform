@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/config"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/egress"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/inflight"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/metrics"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/middleware"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/proxy"
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/ratelimit"
@@ -113,16 +115,23 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 	var usageDone sync.WaitGroup
 	usageDone.Go(func() { recorder.Run(usageCtx) })
 
+	// Prometheus scrapes /metrics on a port of its own (V2.3).
+	inFlight := &inflight.Limiter{}
+	gatewayMetrics := metrics.New(metrics.Sources{InFlight: inFlight, Targets: targets, Config: store, Usage: recorder})
+	metricsDone := serveMetrics(ctx, cfg, gatewayMetrics.Handler(), log)
+
 	err = server.New(cfg, apiHandler(deps{
 		source:     store,
 		baseDomain: cfg.BaseDomain,
 		egress:     cfg.Egress,
 		targets:    targets,
 		limiter:    ratelimit.New(rdb),
-		usage:      recorder,
+		inFlight:   inFlight,
+		usage:      middleware.UsageRecorders{recorder, gatewayMetrics},
 		log:        log,
 	}), log).ListenAndServe(ctx)
-	stop()            // if the server failed on its own, stop the poller and checkers too
+	stop() // if the server failed on its own, stop the poller and checkers too
+	<-metricsDone
 	stopUsage()       // no request is running any more: write the last events
 	background.Wait() // never exit while the poller or a health check is still running
 	usageDone.Wait()
@@ -172,7 +181,7 @@ func apiHandler(d deps) http.Handler {
 		middleware.BodyLimit(log),
 		middleware.Auth(log, failures),
 		middleware.RateLimit(d.limiter, log),
-		middleware.InFlight(&inflight.Limiter{}, log),
+		middleware.InFlight(d.inFlight, log),
 	)
 	return middleware.Chain(
 		proxy.NewRouter(afterMatch),
@@ -190,8 +199,37 @@ type deps struct {
 	egress     *egress.Policy        // which upstreams may be reached (SSRF)
 	targets    *upstream.Registry    // the services' balancers
 	limiter    middleware.Allower    // the Redis rate limiter
+	inFlight   *inflight.Limiter     // requests in flight per workspace
 	usage      middleware.UsageRecorder
 	log        *slog.Logger
+}
+
+// serveMetrics serves /metrics on cfg.MetricsAddr until ctx ends; the
+// returned channel closes once it has stopped. A port that can't be opened
+// is logged, not fatal: the API matters more than its metrics. An empty
+// address (settings built by hand, in tests) serves nothing.
+func serveMetrics(ctx context.Context, cfg settings.Settings, h http.Handler, log *slog.Logger) <-chan struct{} {
+	done := make(chan struct{})
+	if cfg.MetricsAddr == "" {
+		close(done)
+		return done
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", h)
+	srv := &http.Server{Addr: cfg.MetricsAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		defer close(done)
+		go func() {
+			<-ctx.Done()
+			shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdown)
+		}()
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("metrics server stopped", "error", err, "addr", cfg.MetricsAddr)
+		}
+	}()
+	return done
 }
 
 // healthcheck is what Docker runs inside the container to ask "are you up?".

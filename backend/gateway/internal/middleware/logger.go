@@ -12,9 +12,18 @@ import (
 )
 
 // UsageRecorder takes each answered request's usage event (V2.1).
-// *usage.Recorder fits it; Record must never block.
+// *usage.Recorder and *metrics.Metrics fit it; Record must never block.
 type UsageRecorder interface {
 	Record(usage.Event)
+}
+
+// UsageRecorders hands each event to every one of them, in order.
+type UsageRecorders []UsageRecorder
+
+func (rs UsageRecorders) Record(e usage.Event) {
+	for _, r := range rs {
+		r.Record(e)
+	}
 }
 
 // Logger writes one JSON line per request once the answer is done

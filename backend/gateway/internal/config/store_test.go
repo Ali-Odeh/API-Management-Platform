@@ -3,6 +3,7 @@ package config
 import (
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestStoreStartsEmpty(t *testing.T) {
@@ -79,4 +80,17 @@ func TestStoreChangedIsClosedByTheNextSwap(t *testing.T) {
 	}
 	s.swap(&Snapshot{Seq: 2}) // also fine with nobody waiting afterwards
 	s.swap(&Snapshot{Seq: 3})
+}
+
+func TestStoreSeqAndLastSync(t *testing.T) {
+	var s Store
+	if s.Seq() != 0 || !s.LastSync().IsZero() {
+		t.Fatalf("empty store: seq %d, last sync %v", s.Seq(), s.LastSync())
+	}
+	s.swap(&Snapshot{Seq: 7})
+	at := time.Unix(1_700_000_000, 0)
+	s.markSynced(at)
+	if s.Seq() != 7 || !s.LastSync().Equal(at) {
+		t.Errorf("seq %d, last sync %v", s.Seq(), s.LastSync())
+	}
 }

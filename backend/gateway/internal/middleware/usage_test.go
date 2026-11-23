@@ -66,3 +66,11 @@ func TestARequestWithoutAWorkspaceIsOnlyLogged(t *testing.T) {
 		t.Errorf("log line %v", line)
 	}
 }
+
+func TestUsageRecordersHandEachEventToAll(t *testing.T) {
+	var a, b recordedEvents
+	UsageRecorders{&a, &b}.Record(usage.Event{ID: "e1"})
+	if len(a) != 1 || len(b) != 1 || b[0].ID != "e1" {
+		t.Errorf("a %v, b %v", a, b)
+	}
+}

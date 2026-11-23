@@ -20,6 +20,7 @@ var required = map[string]string{
 // defaults is what Load returns when only the required variables are set.
 var defaults = Settings{
 	ListenAddr:      ":8080",
+	MetricsAddr:     ":9091",
 	ShutdownTimeout: 5 * time.Second,
 	ControlPlaneURL: "http://control-plane:8000",
 	InternalToken:   "s3cret",
@@ -64,6 +65,7 @@ func TestLoad(t *testing.T) {
 			name: "custom values",
 			env: map[string]string{
 				"LISTEN_ADDR":         "127.0.0.1:9090",
+				"METRICS_ADDR":        "127.0.0.1:9191",
 				"SHUTDOWN_TIMEOUT":    "1500ms",
 				"CONTROL_PLANE_URL":   "https://cp.example.com/",
 				"CONFIG_WAIT":         "60s",
@@ -71,6 +73,7 @@ func TestLoad(t *testing.T) {
 			},
 			want: Settings{
 				ListenAddr:      "127.0.0.1:9090",
+				MetricsAddr:     "127.0.0.1:9191",
 				ShutdownTimeout: 1500 * time.Millisecond,
 				ControlPlaneURL: "https://cp.example.com", // trailing slash dropped
 				InternalToken:   "s3cret",
@@ -80,6 +83,7 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{name: "listen address without a colon", env: map[string]string{"LISTEN_ADDR": "8080"}, wantErr: []string{"LISTEN_ADDR"}},
+		{name: "metrics address without a colon", env: map[string]string{"METRICS_ADDR": "9091"}, wantErr: []string{"METRICS_ADDR"}},
 		{name: "shutdown timeout that is not a duration", env: map[string]string{"SHUTDOWN_TIMEOUT": "five"}, wantErr: []string{"SHUTDOWN_TIMEOUT"}},
 		{name: "shutdown timeout of zero", env: map[string]string{"SHUTDOWN_TIMEOUT": "0s"}, wantErr: []string{"greater than zero"}},
 		{name: "negative shutdown timeout", env: map[string]string{"SHUTDOWN_TIMEOUT": "-1s"}, wantErr: []string{"greater than zero"}},

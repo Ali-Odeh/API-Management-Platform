@@ -62,6 +62,15 @@ func (l *Limiter) InFlight(workspaceID string) int {
 	return 0
 }
 
+// Each calls fn with every workspace this instance has served and its
+// requests in flight right now. For the metrics.
+func (l *Limiter) Each(fn func(workspaceID string, inFlight int)) {
+	l.counts.Range(func(id, c any) bool {
+		fn(id.(string), int(c.(*atomic.Int64).Load()))
+		return true
+	})
+}
+
 // counter returns the workspace's counter, making it on first use. Load
 // first: after the first request, finding it takes no lock and allocates
 // nothing.

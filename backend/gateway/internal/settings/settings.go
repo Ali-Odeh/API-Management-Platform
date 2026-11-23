@@ -22,6 +22,8 @@ import (
 // Defaults used when an optional variable is unset or empty.
 const (
 	DefaultListenAddr = ":8080"
+	// Prometheus scrapes here (V2.3); never the public port.
+	DefaultMetricsAddr = ":9091"
 	// Below Docker's 10 s stop grace period, so we finish before a SIGKILL.
 	DefaultShutdownTimeout = 5 * time.Second
 	DefaultConfigWait      = 30 * time.Second
@@ -40,6 +42,7 @@ const (
 // when they first use them.
 type Settings struct {
 	ListenAddr      string        // LISTEN_ADDR, e.g. ":8080"
+	MetricsAddr     string        // METRICS_ADDR, e.g. ":9091": GET /metrics only
 	ShutdownTimeout time.Duration // SHUTDOWN_TIMEOUT, e.g. "5s"
 	ControlPlaneURL string        // CONTROL_PLANE_URL, e.g. "http://control-plane:8000" (no trailing slash)
 	InternalToken   Secret        // INTERNAL_TOKEN, shared with the control plane
@@ -68,6 +71,7 @@ func (s Secret) IsZero() bool       { return s == "" }
 func Load() (Settings, error) {
 	s := Settings{
 		ListenAddr:      DefaultListenAddr,
+		MetricsAddr:     DefaultMetricsAddr,
 		ShutdownTimeout: DefaultShutdownTimeout,
 		ConfigWait:      DefaultConfigWait,
 		BaseDomain:      DefaultBaseDomain,
@@ -79,6 +83,12 @@ func Load() (Settings, error) {
 			errs = append(errs, fmt.Errorf("LISTEN_ADDR %q: want host:port such as \":8080\": %w", v, err))
 		}
 		s.ListenAddr = v
+	}
+	if v := os.Getenv("METRICS_ADDR"); v != "" {
+		if _, _, err := net.SplitHostPort(v); err != nil {
+			errs = append(errs, fmt.Errorf("METRICS_ADDR %q: want host:port such as \":9091\": %w", v, err))
+		}
+		s.MetricsAddr = v
 	}
 
 	if v := os.Getenv("SHUTDOWN_TIMEOUT"); v != "" {

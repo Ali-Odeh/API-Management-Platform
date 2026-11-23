@@ -148,3 +148,16 @@ func BenchmarkAcquireReleaseParallel(b *testing.B) {
 		}
 	})
 }
+
+func TestEachListsEveryWorkspaceServed(t *testing.T) {
+	var l Limiter
+	slot, _ := l.Acquire("a", 5)
+	l.Acquire("a", 5)
+	slot.Release()
+	l.Acquire("b", 5)
+	got := map[string]int{}
+	l.Each(func(ws string, n int) { got[ws] = n })
+	if got["a"] != 1 || got["b"] != 1 || len(got) != 2 {
+		t.Errorf("Each = %v", got)
+	}
+}
