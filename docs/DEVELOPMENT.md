@@ -401,6 +401,7 @@ account and email are deleted, its row in `users` stays (people are never
 deleted). The portal stories (P.1) sign up new `e2e-dev-...@example.test`
 developers on the developers' GoTrue through the confirmation email; their
 accounts and emails are deleted afterwards, their rows in `developers` stay.
+`test_portal_done.py` plays the Portal definition of done as a whole (P.2).
 
 ```powershell
 docker compose run --rm e2e
@@ -427,8 +428,26 @@ Invoke-RestMethod http://localhost:8000/api/v1/portal/workspaces/default/apis -H
 ```
 
 A workspace's members publish APIs under `/api/v1/workspaces/{slug}/apis`
-(a new one is a draft; `PATCH {"status": "published"}`); the Platform Admin
-lists and blocks developers under `/api/v1/developers`.
+(a new one is a draft; `PATCH {"status": "published"}`) and offer plans to
+developers (`portal_visible`, optionally `requires_approval`); the Platform
+Admin lists and blocks developers under `/api/v1/developers`.
+
+Then the developer serves themself (P.2): an app on an offered plan, a key,
+calls through the gateway, their own usage and quota.
+
+```powershell
+$plans = Invoke-RestMethod http://localhost:8000/api/v1/portal/workspaces/default/plans -Headers $h
+$api = (Invoke-RestMethod http://localhost:8000/api/v1/portal/workspaces/default/apis -Headers $h).items[0]
+$app = Invoke-RestMethod -Method Post http://localhost:8000/api/v1/portal/apps -Headers $h -ContentType application/json `
+  -Body (@{ workspace = "default"; api_id = $api.id; plan_id = $plans.items[0].id; name = "My app" } | ConvertTo-Json)
+$key = Invoke-RestMethod -Method Post "http://localhost:8000/api/v1/portal/apps/$($app.id)/keys" -Headers $h `
+  -ContentType application/json -Body '{"name": "laptop"}'   # $key.key is shown only once
+Invoke-RestMethod "http://localhost:8000/api/v1/portal/apps/$($app.id)/usage" -Headers $h
+```
+
+An app on a plan that requires approval is `pending` until an API Admin
+approves it (`PATCH /api/v1/workspaces/{slug}/apps/{id} {"status": "approved"}`;
+the queue is `GET .../apps?status=pending`).
 
 ## Internal upstreams (SSRF protection)
 
@@ -447,6 +466,47 @@ recreate both services:
 ```powershell
 docker compose up -d control-plane gateway
 ```
+
+## Backup and restore (P.2)
+
+`scripts/backup.ps1` dumps the three databases from the running stack
+(`apim`, and the two GoTrue databases `auth` and `auth_portal`, so people
+and developers can still log in) into `backups\<date-time>\` (ignored by
+git), with `pg_dump`'s custom format. The dumps hold everything but the
+secrets: keep a copy of `.env` with them.
+
+```powershell
+.\scripts\backup.ps1                     # or -Out <folder>
+```
+
+`scripts/restore.ps1` restores one **into a fresh stack only**: it stops,
+changing nothing, when the platform's database already has tables. It
+makes the logins and GoTrue databases with the passwords in `.env`,
+restores the three dumps (owners and grants included), gives the config a
+new generation (a gateway that knew the old database then takes a full
+config instead of trusting its sequence numbers), runs the migrations (so
+an older backup is brought up to date) and starts the stack.
+
+```powershell
+# Replace this stack's data (deletes it: only when that is what you want):
+docker compose down -v
+.\scripts\restore.ps1 -From backups\20261123-120000
+
+# Or try a backup without touching this stack: stop it (its data stays in
+# its volume), restore into another Compose project on the same ports,
+# look, then remove that project and start this one again.
+docker compose stop
+.\scripts\restore.ps1 -From backups\20261123-120000 -ProjectName apim-restore
+docker compose -p apim-restore down -v
+docker compose up -d --wait
+```
+
+Tried for real (Nov 23, 2026), the second way: a route and a key made
+before the backup answered `200` at the restored gateway, the restored
+control plane's full config answer was identical apart from its rotated
+generation (`seq` 5649 in both), and the Platform Admin logged in on the
+restored GoTrue. The backup took a few seconds (8.8 MB for `apim`, most of
+it the request log); the restore, with image builds from cache, 76 s.
 
 ## Load test
 

@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.apps import crud as apps_crud
 from app.audit import crud as audit
 from app.audit.changes import Changes, created, snapshot, updated
 from app.audit.context import AuditContext
@@ -103,12 +104,14 @@ async def update_developer(
     db: AsyncSession, *, developer_id: uuid.UUID, data: DeveloperUpdate, audit: AuditContext
 ) -> Developer:
     """Block or unblock a developer (Platform Admin). Blocked, every portal
-    request answers 403 developer_blocked from the next one on."""
+    request answers 403 developer_blocked from the next one on, and the keys
+    of their apps stop working at the gateway, in every workspace (P.2)."""
     developer = await get_developer(db, developer_id, lock=True)
     before = _snapshot(developer)
     if data.status is not None:
         developer.status = data.status
     if changes := updated(before, _snapshot(developer)):
+        await apps_crud.follow_developer(db, developer.id, developer.status)
         action = (
             "developer.block"
             if developer.status == DeveloperStatus.BLOCKED

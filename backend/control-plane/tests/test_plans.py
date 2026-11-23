@@ -248,3 +248,31 @@ async def test_a_plan_change_and_a_move_reach_the_gateway(
     await watch.assert_bumped(workspace.id)
     await client.patch(f"{URL}/{pro.id}", json={"name": "Renamed"}, headers=auth_headers)
     await watch.assert_unchanged()  # the gateway doesn't use the name
+
+
+# ---- What the developer portal shows (P.2)
+
+
+async def test_a_plan_is_not_offered_to_developers_unless_said(
+    client: AsyncClient, auth_headers: Headers
+) -> None:
+    plan = (await create(client, auth_headers)).json()
+    assert (plan["portal_visible"], plan["requires_approval"]) == (False, False)
+
+
+async def test_offering_a_plan_to_developers_is_recorded(
+    client: AsyncClient, auth_headers: Headers, db: AsyncSession
+) -> None:
+    plan = (await create(client, auth_headers, portal_visible=True)).json()
+    r = await client.patch(
+        f"{URL}/{plan['id']}", json={"requires_approval": True}, headers=auth_headers
+    )
+    assert (r.json()["portal_visible"], r.json()["requires_approval"]) == (True, True)
+    events = (
+        await db.scalars(
+            select(AuditEvent).where(AuditEvent.action.in_(["plan.create", "plan.update"]))
+        )
+    ).all()
+    changes = {e.action: e.changes for e in events}
+    assert changes["plan.create"]["portal_visible"] == [None, True]
+    assert changes["plan.update"] == {"requires_approval": [False, True]}

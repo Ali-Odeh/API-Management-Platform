@@ -28,6 +28,8 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, pool, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
+from app.apis.models import ApiStatus
+from app.apps.models import AppStatus
 from app.audit.models import AuditEvent
 from app.core.config import get_settings
 from app.core.db import SessionLocal
@@ -44,6 +46,7 @@ from tests.conftest import OWNER_URL
 from tests.factories import (
     make_api,
     make_api_key,
+    make_app,
     make_consumer,
     make_developer,
     make_member,
@@ -272,18 +275,22 @@ PLAN_MATRIX: dict[Role, set[str]] = {
     Role.VIEWER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
         "members:read", "workspace:read", "usage:read", "plans:read", "apis:read",
+        "apps:read",
     },
     Role.API_ADMIN: {
         "services:read", "routes:read", "consumers:read", "keys:read",
         "members:read", "workspace:read", "usage:read", "plans:read", "apis:read",
+        "apps:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
-        "plans:write", "apis:write",
+        "plans:write", "apis:write", "apps:write",
     },
     Role.OWNER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
         "members:read", "workspace:read", "usage:read", "plans:read", "apis:read",
+        "apps:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
-        "plans:write", "apis:write", "members:write", "workspace:write", "workspace:delete",
+        "plans:write", "apis:write", "apps:write", "members:write", "workspace:write",
+        "workspace:delete",
     },
 }  # fmt: skip
 
@@ -309,7 +316,9 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     The service has no routes (so it can be deleted) and two targets (so one
     can be removed); the route uses another one. The plan has no consumers
     (so it can be deleted, and a consumer can move onto it). The API is a
-    draft (so it can be published) made of the route.
+    draft (so it can be published) made of the route. The app waits for
+    approval; it was made for its own published API (the draft one can be
+    deleted).
     `user_id` is a Viewer to change or remove; `candidate@acme.test` is a user
     who isn't a member yet, to add.
     """
@@ -322,6 +331,11 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     key = await make_api_key(db, workspace.id, consumer.id)
     plan = await make_plan(db, workspace.id, name="Spare", rate_limit_per_min=100)
     api = await make_api(db, workspace.id, route_ids=(route.id,))
+    shop_api = await make_api(db, workspace.id, slug="shop", status=ApiStatus.PUBLISHED)
+    developer = await make_developer(db, email="builder@portal.test")
+    app_ = await make_app(
+        db, workspace.id, developer_id=developer.id, api_id=shop_api.id, status=AppStatus.PENDING
+    )
     viewer = await make_user(db, email="target@acme.test")
     await make_member(db, workspace.id, viewer.id, Role.VIEWER)
     await make_user(db, email="candidate@acme.test")
@@ -334,6 +348,7 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
         "key_id": key.id,
         "plan_id": plan.id,
         "api_id": api.id,
+        "app_id": app_.id,
         "user_id": viewer.id,
     }
 
@@ -371,6 +386,7 @@ _VALID_BODIES: dict[Endpoint, Callable[[dict[str, uuid.UUID]], dict[str, Any]]] 
         "name": "Billing", "slug": "billing", "openapi": OPENAPI,
     },
     ("PATCH", "/api/v1/workspaces/{slug}/apis/{api_id}"): lambda ids: {"status": "published"},
+    ("PATCH", "/api/v1/workspaces/{slug}/apps/{app_id}"): lambda ids: {"status": "approved"},
     ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): lambda ids: {"name": "k"},
     ("POST", "/api/v1/workspaces/{slug}/members"): lambda ids: {
         "email": "candidate@acme.test", "role": "viewer",
@@ -472,6 +488,8 @@ async def tenants(db: AsyncSession) -> Tenants:
     key = await make_api_key(db, globex.id, consumer.id)
     plan = await make_plan(db, globex.id)
     api = await make_api(db, globex.id, route_ids=(route.id,))
+    their_developer = await make_developer(db, email="globex-dev@portal.test")
+    their_app = await make_app(db, globex.id, developer_id=their_developer.id, api_id=api.id)
     their_member = await make_user(db, email="member@globex.test")
     await make_member(db, globex.id, their_member.id, Role.VIEWER)
     theirs = {
@@ -482,6 +500,7 @@ async def tenants(db: AsyncSession) -> Tenants:
         "key_id": key.id,
         "plan_id": plan.id,
         "api_id": api.id,
+        "app_id": their_app.id,
         "route_ids": route.id,  # a body field holding a list of route ids
         "user_id": their_member.id,
     }
@@ -508,7 +527,7 @@ def test_isolation_knows_every_kind_of_id() -> None:
     # A new kind of object in a URL must get an object of `globex` in `tenants`.
     known = {
         "service_id", "target_id", "route_id", "consumer_id", "key_id", "plan_id", "api_id",
-        "user_id",
+        "app_id", "user_id",
     }  # fmt: skip
     assert {p for e in WORKSPACE_ENDPOINTS for p in _path_ids(e[1])} <= known
 
@@ -624,7 +643,10 @@ async def test_filtering_by_another_workspaces_object_is_422(
 
 # ---- Audit guard: every change leaves exactly one event (decision 11)
 
-MUTATING = sorted(e for e in SIGNED_IN if e[0] in {"POST", "PATCH", "DELETE"})
+# Portal writes are checked in test_portal_guards.py, done by a developer.
+MUTATING = sorted(
+    e for e in SIGNED_IN if e[0] in {"POST", "PATCH", "DELETE"} and e not in set(PORTAL)
+)
 # Portal reads are checked in test_portal_guards.py, with a developer's token.
 GETS = sorted(e for e in SIGNED_IN if e[0] == "GET" and e not in set(PORTAL))
 
@@ -659,6 +681,7 @@ _ACTIONS: dict[Endpoint, str] = {
     ("POST", "/api/v1/workspaces/{slug}/apis"): "api.create",
     ("PATCH", "/api/v1/workspaces/{slug}/apis/{api_id}"): "api.update",
     ("DELETE", "/api/v1/workspaces/{slug}/apis/{api_id}"): "api.delete",
+    ("PATCH", "/api/v1/workspaces/{slug}/apps/{app_id}"): "app.update",
     ("PATCH", "/api/v1/developers/{developer_id}"): "developer.block",
     ("POST", "/api/v1/workspaces/{slug}/members"): "member.add",
     ("PATCH", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.role_change",
@@ -821,6 +844,7 @@ _TABLES = {
     "plan": "plans",
     "api": "apis",
     "developer": "developers",
+    "app": "apps",
 }
 
 

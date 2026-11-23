@@ -223,7 +223,7 @@ The MVP is the smallest set that makes one request flow end to end. MT makes it 
 | Developer catalog | A workspace's published APIs, with their docs, for signed-in developers | Portal (P.1) |
 | Developer accounts | Sign-up and login through the developers' own GoTrue | Portal (P.1) |
 | Developer apps and keys | Apps on a plan (approval when the plan needs it), own keys, own usage and quota | Portal (P.2) |
-| Backup and restore | A tested script: dump, restore into a fresh stack, rotate the config generation | Portal (P.2) |
+| Backup and restore | Tested scripts (`scripts/backup.ps1`, `scripts/restore.ps1`): dump the three databases, restore into a fresh stack only, rotate the config generation | Portal (P.2) |
 
 ## 5. Database design
 
@@ -454,7 +454,8 @@ The one-shot `control-plane-db-init` service creates or updates its logins with 
 | `developers` | `auth_user_id` (unique, NOT NULL, the developers' GoTrue `sub`), `email` (unique, CHECK lowercase), `status` (`active`, `blocked`, CHECK) | Not workspace members and never in `users`: two kinds of people with separate GoTrue instances. Created just in time on the first portal request (`developer.create`, a platform-level event by the developer); a token of another account whose email a row holds gets `403 account_conflict`, as for users. Not tenant data (no `workspace_id`) |
 | `apis` | `workspace_id` (FK), `name` (1–100), `slug` (unique per workspace, immutable), `description` (≤ 2,000, default empty), `status` (`draft`, `published`, `deprecated`, CHECK; default `draft`), `openapi` (jsonb, NULL = none; CHECK: an object of at most 2 MiB as Postgres prints it) | What the catalog shows. Only `published` and `deprecated` reach developers; `deprecated` takes no new apps. Unique (`id`, `workspace_id`) as the target of `api_routes`. Not config: no config triggers |
 | `api_routes` | `route_id` (PK), `api_id`, `workspace_id`, `created_at` | The routes that make up an API. The primary key on `route_id` makes a route part of at most one API. Composite FKs (`api_id`, `workspace_id`) → `apis` and (`route_id`, `workspace_id`) → `routes` (which gains unique (`id`, `workspace_id`)), both ON DELETE CASCADE: deleting an API or a route removes the link only |
-| `apps` | `workspace_id` (FK), `developer_id` (FK), `consumer_id` (FK, unique), `name`, `status` (`pending`, `approved`, `rejected`) | A developer's app in one workspace, backed by a consumer, so the gateway, plans, quotas and keys work unchanged. An app on a plan that `requires_approval` starts `pending` with its consumer `blocked` until an API Admin approves |
+| `apps` | `workspace_id` (FK), `developer_id` (FK → `developers`, RESTRICT), `consumer_id` (unique; composite FK (`consumer_id`, `workspace_id`) → `consumers`, ON DELETE CASCADE), `api_id` (composite FK (`api_id`, `workspace_id`) → `apis`, RESTRICT: an API with apps is `409 api_in_use`), `name` (1–100, unique per developer in a workspace), `status` (`pending`, `approved`, `rejected`, CHECK) | A developer's app in one workspace, for one of its APIs, backed by a consumer (named `app-<app id>`, the developer's email, the chosen plan), so the gateway, plans, quotas and keys work unchanged. Its consumer is active exactly while the app is `approved` and its developer isn't blocked. An app on a plan that `requires_approval` starts `pending`. Not config itself: the consumer's status is. `apps` joins the purge's tables |
+| `plans` (P.2) | + `portal_visible`, `requires_approval` (both default false) | Developers see and choose only `portal_visible` plans. Neither is a config column |
 
 The exact columns of the Portal tables are confirmed in P.1 and P.2 and recorded in the ROADMAP decisions log; the rules above (separate identities, an app is a consumer, workspace-scoped composite keys) are fixed.
 
@@ -541,7 +542,7 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | GET, POST, PATCH, DELETE | `/api/v1/workspaces/{slug}/apis[/{id}]` | `apis:*` | APIs, their routes, OpenAPI document and status (P.1; below) |
 | GET | `/api/v1/developers` | Platform Admin | Developers who signed up on the portal, newest first; `?status=` filters (P.1) |
 | PATCH | `/api/v1/developers/{id}` | Platform Admin | Block or unblock a developer `{status}`: a blocked one gets `403 developer_blocked` on every portal request (P.1) |
-| GET, PATCH | `/api/v1/workspaces/{slug}/apps[/{id}]` | `apps:*` | Developers' apps: approve, reject, block (P.2) |
+| GET, PATCH | `/api/v1/workspaces/{slug}/apps[/{id}]` | `apps:*` | Developers' apps (`?status=pending`: the approval queue); `PATCH {status: approved \| rejected}` approves, or rejects (also later, to take access away) (P.2) |
 | various | `/api/v1/portal/...` | developer JWT | The developer portal API (below; P.1, P.2) |
 | PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}`; also bans or unbans them in GoTrue (an account not linked yet is found by exact email). The row is locked across the GoTrue calls. Disabling yourself → `409`. GoTrue failing or timing out (the lookup or the ban) → `502` with the safe side kept: a disable stays (repeat to finish the ban), an enable isn't made |
 | GET | `/internal/config` | internal token | Config for the gateway |
@@ -619,9 +620,13 @@ Transition rules (MT.5):
 - `GET /api/v1/portal/me`: the developer (made on their first request). A blocked developer gets `403 developer_blocked` everywhere in the portal.
 - `GET /api/v1/portal/workspaces`: the active workspaces with at least one published or deprecated API (`slug`, `name`, `apis`: how many), by name, paged.
 - `GET /api/v1/portal/workspaces/{slug}/apis` lists a workspace's published and deprecated APIs by name, without their documents (`has_openapi`), with their routes (`path_prefix`, `methods`, `auth_required`); `GET .../apis/{api_id}` adds the OpenAPI document. A draft, another workspace's API, and an unknown id are the same `404 API not found`; a workspace that isn't active (suspended, deleted) or doesn't exist is `404 Workspace not found`. Reading writes no audit event.
-- `/api/v1/portal/apps` (create in a workspace on a portal-visible plan, list own), `/apps/{id}/keys` (generate and revoke, the admin API's key rules), `/apps/{id}/usage` (requests over time, quota used). A developer sees only their own apps (`404` otherwise).
-- A plan with `requires_approval` makes a new app `pending` until an API Admin approves it.
-- Developer writes are audited in the workspace's log with `actor_type` `developer` (the CHECK gained it in P.1, for `developer.create`).
+- `GET /api/v1/portal/workspaces/{slug}/plans`: the workspace's `portal_visible` plans (`name`, `rate_limit_per_min`, `monthly_quota`, `requires_approval`).
+- `/api/v1/portal/apps`: `POST {workspace, api_id, plan_id, name}` creates an app (below), `GET` lists the developer's own (newest first, in workspaces not deleted); `GET`, `DELETE /apps/{id}` (deleting takes its consumer and keys with it); `/apps/{id}/keys` (`GET`, `POST`; `DELETE .../keys/{key_id}`: the admin API's key rules, a key of another app is `404`); `/apps/{id}/usage` (`from`, `to`, `interval` as the analytics: the app's requests over time, and `quota` {`monthly_quota`, `used`, `remaining`, `resets_at`}). A developer sees only their own apps (`404 App not found` otherwise, a guard test over every portal endpoint).
+- Creating an app: the workspace must be active, the API published (draft or unknown: `422 API not found`; deprecated: `409 api_deprecated`), the plan offered (`422 Plan not found`), all in that workspace (`422`, as for every reference). It counts against the workspace's consumers quota, and a developer has at most 10 apps per workspace (`409 quota_exceeded`). A plan with `requires_approval` makes the app `pending` (its consumer blocked) until an API Admin approves it; otherwise it is `approved` at once.
+- Keys only for an approved app (`409 app_pending`, `409 app_rejected`). In a suspended workspace a developer's writes are `403 workspace_suspended`; reads still work.
+- `quota.used` counts this UTC month's request-log rows of the app's consumer that the gateway let through (`ratelimit` = `ok`): the gateway's Redis counter decides, this view can trail it by the seconds the log takes and misses events lost while Redis was down.
+- Blocking a developer (`PATCH /api/v1/developers/{id}`) also blocks the consumers of their approved apps in every workspace; unblocking makes them active again. Approving an app of a blocked developer keeps its consumer blocked.
+- Developer writes are audited in the workspace's log with `actor_type` `developer` (the CHECK gained it in P.1, for `developer.create`): `app.create`, `app.delete`, `key.create`, `key.revoke`; members' decisions are `app.update`.
 
 **APIs (P.1)**
 
@@ -1177,7 +1182,7 @@ Fewer, larger steps than MT: each one is a self-contained piece of work that an 
 **Portal: developer portal (planned Nov 22, 2026)**
 
 - [x] P.1 Developers and catalog: the developers' GoTrue, `developers`, APIs with their routes, OpenAPI documents and lifecycle, the catalog
-- [ ] P.2 Self-service and Portal end to end: apps on plans (with approval), own keys and usage, the Portal definition of done as e2e, backup and restore
+- [x] P.2 Self-service and Portal end to end: apps on plans (with approval), own keys and usage, the Portal definition of done as e2e, backup and restore
 
 **FE: Frontend (Claude, after the Portal)**
 

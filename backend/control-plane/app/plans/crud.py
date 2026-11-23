@@ -35,7 +35,14 @@ from app.plans.schemas import PlanCreate, PlanUpdate
 from app.workspaces.limits import effective_limits
 from app.workspaces.models import Workspace
 
-AUDIT_FIELDS = ("name", "rate_limit_per_min", "monthly_quota", "is_default")
+AUDIT_FIELDS = (
+    "name",
+    "rate_limit_per_min",
+    "monthly_quota",
+    "is_default",
+    "portal_visible",
+    "requires_approval",
+)
 PLAN_NOT_FOUND = "Plan not found"
 DEFAULT_PLAN = "default_plan"  # 409: the default plan can't be deleted
 PLAN_IN_USE = "plan_in_use"  # 409: consumers are on it
@@ -83,6 +90,18 @@ async def get_plan(db: AsyncSession, workspace_id: uuid.UUID, *, plan_id: uuid.U
     if plan is None:
         raise NotFoundError(PLAN_NOT_FOUND)
     return plan
+
+
+async def list_offered_plans(
+    db: AsyncSession, workspace_id: uuid.UUID, *, page: PageParams
+) -> tuple[list[Plan], int]:
+    """The plans developers may choose on the portal, by rate limit."""
+    query = (
+        select(Plan)
+        .where(Plan.workspace_id == workspace_id, Plan.portal_visible)
+        .order_by(Plan.rate_limit_per_min, Plan.name)
+    )
+    return await paginate(db, query, page)
 
 
 async def get_default_plan(db: AsyncSession, workspace_id: uuid.UUID) -> Plan:

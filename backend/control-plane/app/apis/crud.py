@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.apis.models import PK_API_ROUTES, UQ_API_SLUG, Api, ApiRoute, ApiStatus
 from app.apis.schemas import ApiCreate, ApiUpdate
+from app.apps.models import FK_APP_API
 from app.audit import crud as audit
 from app.audit.changes import Changes, created, deleted, updated
 from app.audit.context import AuditContext
@@ -32,6 +33,7 @@ from app.core.pagination import PageParams, paginate
 from app.routes.models import Route
 
 API_NOT_FOUND = "API not found"
+API_IN_USE = "api_in_use"  # 409: developers' apps were made for it
 ROUTE_NOT_FOUND = "Route not found"
 # The moves the lifecycle allows; staying where it is changes nothing.
 _TRANSITIONS = {
@@ -45,6 +47,7 @@ def _errors(slug: str) -> dict[str, AppError]:
     return {
         UQ_API_SLUG: ConflictError(f"An API with the slug '{slug}' already exists"),
         PK_API_ROUTES: ConflictError("A route can be part of one API only"),
+        FK_APP_API: ConflictError(API_IN_USE),  # developers' apps were made for it (P.2)
     }
 
 

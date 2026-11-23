@@ -41,3 +41,6 @@ Thumbs.db
 
 # ---- Claude Code local settings ----
 .claude/settings.local.json
+
+# ---- Backups (scripts/backup.ps1): real data, never in git ----
+backups/

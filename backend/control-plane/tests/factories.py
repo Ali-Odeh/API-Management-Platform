@@ -16,7 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.apis.models import Api, ApiRoute, ApiStatus
-from app.consumers.models import Consumer
+from app.apps.models import App, AppStatus
+from app.consumers.models import Consumer, ConsumerStatus
 from app.core.db import violated_constraint
 from app.core.permissions import Role
 from app.core.security import generate_api_key, hash_api_key
@@ -164,6 +165,35 @@ async def make_api(
     for route_id in route_ids:
         await _save(db, ApiRoute(api_id=api.id, route_id=route_id, workspace_id=workspace_id))
     return api
+
+
+async def make_app(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    developer_id: uuid.UUID,
+    api_id: uuid.UUID,
+    name: str = "My app",
+    status: AppStatus = AppStatus.APPROVED,
+    **consumer_fields: Any,
+) -> App:
+    """A developer's app with its own consumer (on the default plan unless
+    `plan_id` is given; blocked unless the app is approved)."""
+    consumer_fields.setdefault(
+        "status", ConsumerStatus.ACTIVE if status.consumer_active else ConsumerStatus.BLOCKED
+    )
+    consumer = await make_consumer(db, workspace_id, name=f"app-{uuid.uuid4()}", **consumer_fields)
+    return await _save(
+        db,
+        App(
+            workspace_id=workspace_id,
+            developer_id=developer_id,
+            consumer_id=consumer.id,
+            api_id=api_id,
+            name=name,
+            status=status,
+        ),
+    )
 
 
 async def expect_violation(db: AsyncSession, constraint: str, action: Awaitable[Any]) -> None:

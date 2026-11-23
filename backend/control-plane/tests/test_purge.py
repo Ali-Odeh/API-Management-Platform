@@ -20,7 +20,8 @@ from tests.conftest import OWNER_URL
 from tests.factories import (
     make_api,
     make_api_key,
-    make_consumer,
+    make_app,
+    make_developer,
     make_member,
     make_route,
     make_service,
@@ -36,9 +37,10 @@ async def _populated(db: AsyncSession, slug: str) -> Workspace:
     workspace = await make_workspace(db, slug=slug)
     service = await make_service(db, workspace.id)
     route = await make_route(db, workspace.id, service.id)
-    await make_api(db, workspace.id, route_ids=(route.id,))
-    consumer = await make_consumer(db, workspace.id)
-    await make_api_key(db, workspace.id, consumer.id)
+    api = await make_api(db, workspace.id, route_ids=(route.id,))
+    developer = await make_developer(db, email=f"dev@{slug}.test")
+    app = await make_app(db, workspace.id, developer_id=developer.id, api_id=api.id)
+    await make_api_key(db, workspace.id, app.consumer_id)  # the app's consumer is the one
     person = await make_user(db, email=f"owner@{slug}.test")
     await make_member(db, workspace.id, person.id, Role.OWNER)
     owner = create_async_engine(OWNER_URL, poolclass=pool.NullPool)

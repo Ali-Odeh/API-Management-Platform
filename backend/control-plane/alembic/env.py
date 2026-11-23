@@ -20,6 +20,7 @@ from app.core.db import Base
 # Import every feature's models here so Base.metadata knows their tables
 # and `alembic revision --autogenerate` can see them.
 from app.apis import models as api_models  # noqa: F401
+from app.apps import models as app_models  # noqa: F401
 from app.audit import models as audit_models  # noqa: F401
 from app.consumers import models as consumer_models  # noqa: F401
 from app.developers import models as developer_models  # noqa: F401
