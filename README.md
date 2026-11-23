@@ -101,6 +101,7 @@ docker compose up -d --build --wait
 
 | | Address |
 | --- | --- |
+| The app: dashboard and Platform pages (sign in as the Platform Admin) | `http://localhost:5173` |
 | Gateway (send API calls here) | `http://localhost:8081` |
 | Admin API and Swagger UI | `http://localhost:8000/docs` |
 | Login (GoTrue) | `http://localhost:9999` |
@@ -186,6 +187,8 @@ Tests, quality checks, migrations, the race detector, fuzzing and the load test 
 .\backend\control-plane\scripts\check.ps1   # ruff, mypy strict, pytest
 .\backend\gateway\scripts\check.ps1         # gofmt, go vet, go test
 docker compose run --rm e2e                 # end-to-end tests
+docker compose run --rm e2e-browser         # the React app in Chromium
+.\frontend\scripts\check.ps1                # frontend checks (local Node 22)
 docker compose run --rm loadtest            # k6 load test
 ```
 
