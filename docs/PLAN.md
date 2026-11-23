@@ -1154,7 +1154,7 @@ Each step is one self-contained piece of work that an AI agent finishes complete
 Fewer, larger steps than MT: each one is a self-contained piece of work that an AI agent finishes completely (code, migrations, tests, e2e, docs, logical commits), planning its own sub-tasks. Outcomes and done criteria are in ROADMAP.md.
 
 - [x] V2.1 Usage and analytics: usage events over a Redis Stream, the `usage-ingest` worker, `request_logs` by month with retention, `last_used_at`, analytics and request-log endpoints
-- [ ] V2.2 Plans and protection: plans per workspace, consumers on plans (migration), monthly quotas, per-IP limits on public routes, failed-key limits
+- [x] V2.2 Plans and protection: plans per workspace, consumers on plans (migration), monthly quotas, per-IP limits on public routes, failed-key limits
 - [ ] V2.3 Metrics and v2 end to end: Prometheus metrics, the v2 definition of done as e2e, the load test again
 
 **Portal: developer portal (planned Nov 22, 2026)**

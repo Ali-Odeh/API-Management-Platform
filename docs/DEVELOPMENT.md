@@ -201,6 +201,15 @@ docker compose exec redis redis-cli XINFO GROUPS usage:events  # the group, pend
 docker compose logs usage-ingest --since 5m
 ```
 
+Plans (V2.2): every consumer is on a plan of its workspace (`/plans`), which
+sets its rate limit and monthly quota. Public routes are also limited per
+client IP (`PUBLIC_RATE_LIMIT_PER_IP_PER_MIN`, default 600), and an IP that
+sends more than `AUTH_FAIL_LIMIT_PER_IP` (default 20) wrong keys in 5 minutes
+gets 429 until the 5 minutes are over. The e2e runner clears those counters
+when it starts. For the full load test, raise the per-IP limit first (k6
+sends from one IP): set `PUBLIC_RATE_LIMIT_PER_IP_PER_MIN=1000000` in `.env`,
+`docker compose up -d control-plane`, run it, then put it back.
+
 Events written while the worker is down wait in the stream (up to about
 200,000), and it stores them when it comes back. Its tests read a real
 stream in Redis database 15 (`REDIS_TEST_URL`, set for the database setup
