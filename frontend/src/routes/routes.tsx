@@ -34,6 +34,10 @@ const dashboardPages: RouteObject[] = [
     async () => (await import('@/features/consumers/consumer-detail')).ConsumerDetailPage,
   ),
   page('plans', async () => (await import('@/features/plans/plans-page')).PlansPage),
+  page('members', async () => (await import('@/features/members/members-page')).MembersPage),
+  page('activity', async () => (await import('@/features/audit/activity-page')).ActivityPage),
+  page('logs', async () => (await import('@/features/logs/logs-page')).LogsPage),
+  page('settings', async () => (await import('@/features/workspace/settings-page')).SettingsPage),
 ]
 
 /**

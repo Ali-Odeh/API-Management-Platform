@@ -10,9 +10,9 @@ describe('workspace layout', () => {
     expect(await screen.findByRole('heading', { name: 'Acme' })).toBeInTheDocument()
     expect(screen.getAllByText('Owner').length).toBeGreaterThan(0)
     expect(screen.getAllByRole('link', { name: 'Overview' })[0]).toHaveAttribute('href', '/w/acme')
-    expect(screen.getAllByRole('link', { name: 'Routes' })[0]).toHaveAttribute(
+    expect(screen.getAllByRole('link', { name: 'Settings' })[0]).toHaveAttribute(
       'href',
-      '/w/acme/routes',
+      '/w/acme/settings',
     )
     expect(await screen.findByText('2 of 100')).toBeInTheDocument()
     expect(await screen.findByText('No requests in this period')).toBeInTheDocument()
