@@ -13,7 +13,7 @@ import jwt
 
 from app.core.config import get_settings
 from app.core.errors import UpstreamError
-from app.core.identity import JWT_ALGORITHM, JWT_AUDIENCE
+from app.core.identity import JWT_ALGORITHM, JWT_AUDIENCE, PORTAL_JWT_AUDIENCE
 
 
 def make_token(
@@ -44,6 +44,14 @@ def make_token(
     }
     payload = {k: v for k, v in payload.items() if v is not None}
     return jwt.encode(payload, secret or get_settings().gotrue_jwt_secret, JWT_ALGORITHM)
+
+
+def make_developer_token(auth_user_id: uuid.UUID | str, email: str, /, **claims: Any) -> str:
+    """An access token shaped like the developers' GoTrue's (auth-portal, P.1):
+    its own secret and audience. Keyword arguments as for make_token."""
+    claims.setdefault("aud", PORTAL_JWT_AUDIENCE)
+    claims.setdefault("secret", get_settings().portal_gotrue_jwt_secret)
+    return make_token(auth_user_id, email, **claims)
 
 
 def bearer(token: str) -> dict[str, str]:

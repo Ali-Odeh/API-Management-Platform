@@ -6,6 +6,9 @@ x-control-plane-environment: &control-plane-environment
   GOTRUE_URL: ${GOTRUE_URL:-http://auth:9999}
   GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:?set GOTRUE_JWT_SECRET in .env}
   GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:?set GOTRUE_SERVICE_ROLE_KEY in .env}
+  # The developers' GoTrue (P.1): only to verify its tokens on the portal API.
+  # The control plane never calls it, so it gets no URL and no admin key.
+  PORTAL_GOTRUE_JWT_SECRET: ${PORTAL_GOTRUE_JWT_SECRET:?set PORTAL_GOTRUE_JWT_SECRET in .env}
   PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:?set PLATFORM_ADMIN_EMAIL in .env}
   PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
   # Workspace defaults and the restore period (MT.5); see .env.example.
@@ -59,10 +62,11 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
       PGDATABASE: ${POSTGRES_DB}
       GOTRUE_DB_PASSWORD: ${GOTRUE_DB_PASSWORD:?set GOTRUE_DB_PASSWORD in .env}
+      PORTAL_GOTRUE_DB_PASSWORD: ${PORTAL_GOTRUE_DB_PASSWORD:?set PORTAL_GOTRUE_DB_PASSWORD in .env}
     command: >-
       sh -c 'psql --quiet -v ON_ERROR_STOP=1
-      -v auth_password="$$GOTRUE_DB_PASSWORD" -v apim_db="$$PGDATABASE"
-      -f /init-db.sql'
+      -v auth_password="$$GOTRUE_DB_PASSWORD" -v portal_password="$$PORTAL_GOTRUE_DB_PASSWORD"
+      -v apim_db="$$PGDATABASE" -f /init-db.sql'
     volumes:
       - ./backend/auth/init-db.sql:/init-db.sql:ro
     depends_on:
@@ -109,6 +113,55 @@ services:
       - "9999:9999"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9999/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      auth-db-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+
+  # The developers' GoTrue (P.1), the same pinned image with other settings:
+  # anyone may sign up (with a confirmed email), and its tokens carry their
+  # own audience and secret, so they open the portal API and nothing else.
+  # Its own login and database (auth_portal). No MFA: developers hold no
+  # power over a workspace beyond their own apps.
+  auth-portal:
+    image: supabase/gotrue:v2.197.0
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      PORT: "9998"
+      API_EXTERNAL_URL: http://localhost:9998
+      GOTRUE_SITE_URL: http://localhost:5173/portal   # the portal pages (FE milestone)
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://gotrue_portal:${PORTAL_GOTRUE_DB_PASSWORD}@postgres:5432/auth_portal?sslmode=disable
+      GOTRUE_JWT_SECRET: ${PORTAL_GOTRUE_JWT_SECRET:?set PORTAL_GOTRUE_JWT_SECRET in .env}
+      GOTRUE_JWT_EXP: "600"
+      GOTRUE_JWT_AUD: developer               # the control plane's PORTAL_JWT_AUDIENCE
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      # Open sign-up, confirmed by email: a token only after the link is opened.
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "false"
+      GOTRUE_PASSWORD_MIN_LENGTH: "12"
+      GOTRUE_SECURITY_REFRESH_TOKEN_ROTATION_ENABLED: "true"
+      GOTRUE_SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: "10"
+      GOTRUE_MFA_TOTP_ENROLL_ENABLED: "false"
+      GOTRUE_MFA_TOTP_VERIFY_ENABLED: "false"
+      # Brute force and sign-up abuse: /token 30 calls per 5 minutes per IP,
+      # as for members; confirmation and recovery emails 30 an hour (GoTrue's
+      # default, written down because open sign-up depends on it).
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: "30"
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: "30"
+      GOTRUE_SMTP_HOST: mailpit
+      GOTRUE_SMTP_PORT: "1025"
+      GOTRUE_SMTP_ADMIN_EMAIL: no-reply@apim.localhost
+      GOTRUE_SMTP_SENDER_NAME: API Platform Developer Portal
+    ports:
+      - "9998:9998"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9998/health"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -319,10 +372,14 @@ services:
       PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
       PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
       GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:-}
+      # To remove the developer accounts the portal stories sign up (P.1).
+      PORTAL_GOTRUE_SERVICE_ROLE_KEY: ${PORTAL_GOTRUE_SERVICE_ROLE_KEY:-}
     volumes:
       - ./e2e:/e2e
     depends_on:
       auth:
+        condition: service_healthy
+      auth-portal:
         condition: service_healthy
       control-plane:
         condition: service_healthy

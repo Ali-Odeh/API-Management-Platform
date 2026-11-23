@@ -1,5 +1,12 @@
 """Who is calling: verifying GoTrue's access tokens (PLAN.md section 6, step 1).
 
+Two GoTrue instances issue tokens, and each kind opens only its own API:
+- `auth`: workspace members and the Platform Admin (the admin API);
+- `auth-portal` (P.1): developers, with open sign-up (the portal API).
+They sign with different secrets and put different audiences on their
+tokens, so a token of one never passes as the other's, even if one setting
+were copied by mistake.
+
 GoTrue issues the token at login; the control plane only checks it. It
 never issues tokens itself, and it reads what a person may do from its own
 tables, never from the token (decision 4: no token exchange).
@@ -17,6 +24,8 @@ JWT_ALGORITHM = "HS256"
 # GoTrue puts this audience on every token it gives a signed-in person. Its
 # service-role key has none, so that key can never pass as a person.
 JWT_AUDIENCE = "authenticated"
+# The developers' GoTrue is configured with its own audience (GOTRUE_JWT_AUD).
+PORTAL_JWT_AUDIENCE = "developer"
 # Authenticator assurance level: aal1 = password only, aal2 = password + MFA.
 MFA_LEVEL = "aal2"
 
@@ -37,7 +46,19 @@ class TokenClaims:
 
 
 def verify_access_token(token: str) -> TokenClaims | None:
-    """The token's claims if GoTrue signed it and it is still valid, else None.
+    """A member's token (the admin API): its claims, or None if `auth` didn't sign it."""
+    return _verify(token, secret=get_settings().gotrue_jwt_secret, audience=JWT_AUDIENCE)
+
+
+def verify_developer_token(token: str) -> TokenClaims | None:
+    """A developer's token (the portal API): its claims, or None if `auth-portal` didn't sign it."""
+    return _verify(
+        token, secret=get_settings().portal_gotrue_jwt_secret, audience=PORTAL_JWT_AUDIENCE
+    )
+
+
+def _verify(token: str, *, secret: str, audience: str) -> TokenClaims | None:
+    """The token's claims if it is signed with `secret` for `audience` and still valid.
 
     PyJWT checks the signature, `exp` and the audience. Anything wrong or
     missing (tampered, expired, another audience, no email) gives None, and
@@ -46,9 +67,9 @@ def verify_access_token(token: str) -> TokenClaims | None:
     try:
         payload = jwt.decode(
             token,
-            get_settings().gotrue_jwt_secret,
+            secret,
             algorithms=[JWT_ALGORITHM],  # never let the token choose the algorithm
-            audience=JWT_AUDIENCE,
+            audience=audience,
             options={"require": ["exp", "sub", "aud"]},
         )
         auth_user_id = uuid.UUID(payload["sub"])

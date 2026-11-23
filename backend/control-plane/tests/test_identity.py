@@ -8,8 +8,8 @@ import jwt
 import pytest
 
 from app.core.config import get_settings
-from app.core.identity import verify_access_token
-from tests.fakes import make_token
+from app.core.identity import verify_access_token, verify_developer_token
+from tests.fakes import make_developer_token, make_token
 
 USER_ID = uuid.uuid4()
 EMAIL = "dev@test.local"
@@ -71,3 +71,30 @@ def test_unsigned_token_is_rejected() -> None:
     payload["exp"] = 9999999999
     unsigned = jwt.encode(payload, key=None, algorithm="none")  # type: ignore[arg-type]
     assert verify_access_token(unsigned) is None
+
+
+# ---- The developers' GoTrue (P.1): its tokens and the members' never pass as each other
+
+
+def test_a_developer_token_gives_the_claims() -> None:
+    claims = verify_developer_token(make_developer_token(USER_ID, EMAIL))
+    assert claims is not None
+    assert (claims.auth_user_id, claims.email) == (USER_ID, EMAIL)
+
+
+@pytest.mark.parametrize(
+    ("label", "token"),
+    [
+        ("a member's token", make_token(USER_ID, EMAIL)),
+        ("the members' secret", make_developer_token(USER_ID, EMAIL, secret="x" * 40)),
+        ("the members' audience", make_developer_token(USER_ID, EMAIL, aud="authenticated")),
+        ("expired", make_developer_token(USER_ID, EMAIL, expires_in=timedelta(seconds=-1))),
+        ("no email", make_developer_token(USER_ID, EMAIL, email=None)),
+    ],
+)
+def test_untrusted_developer_tokens_are_rejected(label: str, token: str) -> None:
+    assert verify_developer_token(token) is None, label
+
+
+def test_a_developer_token_is_not_a_members() -> None:
+    assert verify_access_token(make_developer_token(USER_ID, EMAIL)) is None

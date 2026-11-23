@@ -6,7 +6,8 @@
 # database, the four database URLs (owner, API, audit retention, workspace
 # purge) with their
 # passwords, the internal token, GoTrue's database
-# password, JWT secret and service-role key, and the first Platform Admin
+# password, JWT secret and service-role key (for the members' GoTrue and the
+# developers' one), and the first Platform Admin
 # (admin@example.com with a random password, printed once at the end).
 # Never overwrites an existing .env. Needs openssl (for the service-role key).
 set -eu
@@ -41,6 +42,7 @@ pg_user=app
 pg_password=$(secret 16)
 pg_db=apim
 gotrue_jwt_secret=$(secret 32)
+portal_jwt_secret=$(secret 32)
 admin_password=$(secret 12)
 
 # Keep every line and comment of the example; fill only the empty KEY= lines.
@@ -51,6 +53,9 @@ sed \
   -e "s|^GOTRUE_DB_PASSWORD=\$|GOTRUE_DB_PASSWORD=$(secret 16)|" \
   -e "s|^GOTRUE_JWT_SECRET=\$|GOTRUE_JWT_SECRET=$gotrue_jwt_secret|" \
   -e "s|^GOTRUE_SERVICE_ROLE_KEY=\$|GOTRUE_SERVICE_ROLE_KEY=$(service_role_key "$gotrue_jwt_secret")|" \
+  -e "s|^PORTAL_GOTRUE_DB_PASSWORD=\$|PORTAL_GOTRUE_DB_PASSWORD=$(secret 16)|" \
+  -e "s|^PORTAL_GOTRUE_JWT_SECRET=\$|PORTAL_GOTRUE_JWT_SECRET=$portal_jwt_secret|" \
+  -e "s|^PORTAL_GOTRUE_SERVICE_ROLE_KEY=\$|PORTAL_GOTRUE_SERVICE_ROLE_KEY=$(service_role_key "$portal_jwt_secret")|" \
   -e "s|^MIGRATION_DATABASE_URL=\$|MIGRATION_DATABASE_URL=postgresql+asyncpg://$pg_user:$pg_password@postgres:5432/$pg_db|" \
   -e "s|^DATABASE_URL=\$|DATABASE_URL=postgresql+asyncpg://apim_app:$(secret 16)@postgres:5432/$pg_db|" \
   -e "s|^AUDIT_RETENTION_DATABASE_URL=\$|AUDIT_RETENTION_DATABASE_URL=postgresql+asyncpg://apim_retention:$(secret 16)@postgres:5432/$pg_db|" \

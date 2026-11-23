@@ -26,6 +26,14 @@ def test_settings_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.database_url == "postgresql+asyncpg://u:p@db:5432/x"
 
 
+def test_settings_refuse_one_secret_for_both_gotrues(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Members' and developers' tokens must never be checked with the same key.
+    monkeypatch.setenv("PORTAL_GOTRUE_JWT_SECRET", "s" * 40)
+    monkeypatch.setenv("GOTRUE_JWT_SECRET", "s" * 40)
+    with pytest.raises(ValidationError, match="PORTAL_GOTRUE_JWT_SECRET must differ"):
+        Settings(_env_file=None)
+
+
 def test_settings_read_the_upstream_allow_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("UPSTREAM_ALLOW", "mock-backend, 10.20.0.0/16")
     allow = Settings(_env_file=None).allowed_upstreams

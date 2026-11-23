@@ -6,7 +6,8 @@
     Fills every empty value of .env.example: the Postgres user, password and
     database, the four database URLs (owner, API, audit retention, workspace purge) with their
     passwords, the internal token, GoTrue's database
-    password, JWT secret and service-role key, and the first Platform Admin
+    password, JWT secret and service-role key (for the members' GoTrue and the
+    developers' one), and the first Platform Admin
     (admin@example.com with a random password, printed once at the end).
     Never overwrites an existing .env.
 
@@ -53,6 +54,7 @@ $pgUser = "app"
 $pgPassword = New-Secret 16
 $pgDb = "apim"
 $gotrueJwtSecret = New-Secret 32
+$portalJwtSecret = New-Secret 32
 $adminPassword = New-Secret 12
 $values = @{
     POSTGRES_USER           = $pgUser
@@ -61,6 +63,9 @@ $values = @{
     GOTRUE_DB_PASSWORD      = New-Secret 16
     GOTRUE_JWT_SECRET       = $gotrueJwtSecret
     GOTRUE_SERVICE_ROLE_KEY = New-ServiceRoleKey $gotrueJwtSecret
+    PORTAL_GOTRUE_DB_PASSWORD      = New-Secret 16
+    PORTAL_GOTRUE_JWT_SECRET       = $portalJwtSecret
+    PORTAL_GOTRUE_SERVICE_ROLE_KEY = New-ServiceRoleKey $portalJwtSecret
     MIGRATION_DATABASE_URL  = "postgresql+asyncpg://${pgUser}:${pgPassword}@postgres:5432/${pgDb}"
     DATABASE_URL            = "postgresql+asyncpg://apim_app:$(New-Secret 16)@postgres:5432/${pgDb}"
     AUDIT_RETENTION_DATABASE_URL = "postgresql+asyncpg://apim_retention:$(New-Secret 16)@postgres:5432/${pgDb}"
