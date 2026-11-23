@@ -940,6 +940,20 @@
       "LimitOverrides": {
         "description": "The workspace's own limits; null = the platform default.",
         "properties": {
+          "ip_rate_limit_per_min": {
+            "anyOf": [
+              {
+                "description": "Requests per minute from one client IP, public routes",
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip Rate Limit Per Min"
+          },
           "max_concurrent": {
             "anyOf": [
               {
@@ -1014,6 +1028,10 @@
       "Limits": {
         "description": "The limits as they apply: the workspace's own, or the platform default.",
         "properties": {
+          "ip_rate_limit_per_min": {
+            "title": "Ip Rate Limit Per Min",
+            "type": "integer"
+          },
           "max_concurrent": {
             "title": "Max Concurrent",
             "type": "integer"
@@ -1040,7 +1058,8 @@
           "max_concurrent",
           "max_services",
           "max_routes",
-          "max_consumers"
+          "max_consumers",
+          "ip_rate_limit_per_min"
         ],
         "title": "Limits",
         "type": "object"
@@ -1048,6 +1067,20 @@
       "LimitsUpdate": {
         "description": "Only the limits sent change. Unlike other PATCHes, null is allowed: it\nputs the limit back to the platform default. Lowering a quota below what\nthe workspace has refuses new objects, never removes existing ones.",
         "properties": {
+          "ip_rate_limit_per_min": {
+            "anyOf": [
+              {
+                "description": "Requests per minute from one client IP, public routes",
+                "maximum": 1000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ip Rate Limit Per Min"
+          },
           "max_concurrent": {
             "anyOf": [
               {

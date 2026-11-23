@@ -298,6 +298,7 @@ _CONFIG_CHANGES = [
     ("workspaces", "slug", "'acme-two'"),
     ("workspaces", "rate_limit_per_min", "7"),
     ("workspaces", "max_concurrent", "7"),
+    ("workspaces", "ip_rate_limit_per_min", "7"),
 ]
 _THROUGH_THE_API = {("routes", "service_id"), ("consumers", "status"), ("consumers", "plan_id"),
                     ("api_keys", "consumer_id"), ("workspaces", "status"),
@@ -581,3 +582,21 @@ async def test_a_changed_per_ip_limit_bumps_every_served_workspace(
     await watch.assert_bumped(i["default"], i["rate"], i["concurrent"], i["body"], i["none"])
     _, answer = await read_answer(engine, since=watch.seq - 1, slugs=None, cache=WorkspaceCache())
     assert {getattr(w.limits, field) for w in answer.workspaces} == {7}
+
+
+async def test_a_workspaces_own_ip_limit_keeps_it_out_of_a_default_change(
+    db: AsyncSession, inheriting: dict[str, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # V2.3: a workspace may set its own per-IP limit (a NAT, a load test).
+    shared = await make_workspace(db, slug="w-nat", ip_rate_limit_per_min=50_000)
+    await apply_config_defaults(engine, get_settings())
+    watch = await Watch().start()
+    monkeypatch.setattr(get_settings(), "public_rate_limit_per_ip_per_min", 7)
+
+    await apply_config_defaults(engine, get_settings())
+
+    i = inheriting
+    await watch.assert_bumped(i["default"], i["rate"], i["concurrent"], i["body"], i["none"])
+    _, answer = await read_answer(engine, since=0, slugs=None, cache=WorkspaceCache())
+    [own] = [w for w in answer.workspaces if w.id == shared.id]
+    assert own.limits.ip_rate_limit_per_min == 50_000

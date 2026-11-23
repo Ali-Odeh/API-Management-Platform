@@ -228,3 +228,22 @@ func TestConcurrentBalancerAndSync(t *testing.T) {
 	})
 	wg.Wait()
 }
+
+func TestEachTargetReportsWhetherItTakesTraffic(t *testing.T) {
+	r := newTestRegistry(t)
+	svc := service("s", config.Health{}, 1, 1)
+	r.Sync(snapshot(config.WorkspaceActive, svc))
+	b, _ := r.load("s")
+	b.setHealthy(b.targets[1], false, "test")
+
+	got := map[string]bool{}
+	r.EachTarget(func(ws, service, target string, usable bool) {
+		if ws != "ws1" || service != "s" {
+			t.Errorf("target of %s/%s", ws, service)
+		}
+		got[target] = usable
+	})
+	if len(got) != 2 || !got[b.targets[0].target.ID] || got[b.targets[1].target.ID] {
+		t.Errorf("EachTarget = %v", got)
+	}
+}

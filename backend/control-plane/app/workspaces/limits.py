@@ -28,9 +28,13 @@ COUNTED: dict[str, type[Service] | type[Route] | type[Consumer]] = {
 }
 
 
+# Limit columns whose platform default has a name of its own.
+_DEFAULT_SETTINGS = {"ip_rate_limit_per_min": "public_rate_limit_per_ip_per_min"}
+
+
 def default_limit(column: str) -> int:
     """The platform default for a limit column, e.g. WORKSPACE_MAX_SERVICES."""
-    value: int = getattr(get_settings(), f"workspace_{column}")
+    value: int = getattr(get_settings(), _DEFAULT_SETTINGS.get(column, f"workspace_{column}"))
     return value
 
 

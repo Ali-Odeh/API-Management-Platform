@@ -61,7 +61,7 @@ func TestAPIHandlerEndToEnd(t *testing.T) {
 		Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive}},
 	})
 	var logs bytes.Buffer
-	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, log: slog.New(slog.NewJSONHandler(&logs, nil))})
+	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, inFlight: &inflight.Limiter{}, log: slog.New(slog.NewJSONHandler(&logs, nil))})
 
 	tests := []struct {
 		name         string
@@ -122,7 +122,7 @@ func TestAPIHandlerTimesTheBackend(t *testing.T) {
 		ID: "r1", PathPrefix: "/", Methods: []string{"GET"}, AuthRequired: false, Service: serviceOf(upstream, 5*time.Second),
 	}}})
 	var logs bytes.Buffer
-	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, log: slog.New(slog.NewJSONHandler(&logs, nil))})
+	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, inFlight: &inflight.Limiter{}, log: slog.New(slog.NewJSONHandler(&logs, nil))})
 
 	api.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
@@ -168,7 +168,7 @@ func TestAPIHandlerUnderLoadWhileConfigChanges(t *testing.T) {
 	a, b := version(1, "consumer-a", 5*time.Second), version(2, "consumer-b", 4*time.Second)
 	source := &swappingSource{}
 	source.current.Store(a)
-	api := apiHandler(deps{source: source, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, log: slog.New(slog.DiscardHandler)})
+	api := apiHandler(deps{source: source, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, inFlight: &inflight.Limiter{}, log: slog.New(slog.DiscardHandler)})
 
 	stopSwapping := make(chan struct{})
 	swapped := make(chan struct{})
@@ -320,7 +320,7 @@ func TestAPIHandlerKeepsWorkspacesApart(t *testing.T) {
 		tenantWith("w-globex", "globex", globexKey, backend("globex")),
 	)
 	var logs bytes.Buffer
-	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, log: slog.New(slog.NewJSONHandler(&logs, nil))})
+	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, inFlight: &inflight.Limiter{}, log: slog.New(slog.NewJSONHandler(&logs, nil))})
 
 	call := func(host, key string) (int, string, map[string]any) {
 		logs.Reset()
@@ -393,7 +393,7 @@ func TestAPIHandlerSlowWorkspaceCantStarveTheOthers(t *testing.T) {
 		workspace("slow", slow.URL, config.Limits{RateLimitPerMin: 6000, MaxConcurrent: slowShare}),
 		workspace("fast", fast.URL, roomyLimits),
 	)
-	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, log: slog.New(slog.DiscardHandler)})
+	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: allowAll{}, inFlight: &inflight.Limiter{}, log: slog.New(slog.DiscardHandler)})
 	call := func(host string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/v1/x", nil)
 		req.Host = host
@@ -475,7 +475,7 @@ func TestAPIHandlerCORSAndBodyLimit(t *testing.T) {
 	}}, Keys: map[string]config.Key{sha256Hex(testKey): {ID: "k1", ConsumerID: "c1", ConsumerStatus: config.ConsumerActive, RateLimitPerMin: 60}}})
 	limiter := &countingLimiter{}
 	var logs bytes.Buffer
-	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: limiter, log: slog.New(slog.NewJSONHandler(&logs, nil))})
+	api := apiHandler(deps{source: staticSource{snap}, baseDomain: "localhost", egress: testBackends, targets: testRegistry(t), limiter: limiter, inFlight: &inflight.Limiter{}, log: slog.New(slog.NewJSONHandler(&logs, nil))})
 	do := func(req *http.Request) *httptest.ResponseRecorder {
 		logs.Reset()
 		rec := httptest.NewRecorder()

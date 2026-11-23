@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -354,5 +355,54 @@ func TestServeWritesUsageEventsToRedis(t *testing.T) {
 			t.Errorf("request %d: event %v", i, e.Values)
 		}
 		rdb.XDel(context.Background(), "usage:events", e.ID)
+	}
+}
+
+// The real program serves /metrics on its own port (V2.3), not on the API's.
+func TestServeExposesMetricsOnTheirOwnPort(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+	cfg := settings.Settings{
+		ListenAddr: freeAddr(t), MetricsAddr: freeAddr(t), ShutdownTimeout: 2 * time.Second,
+		ControlPlaneURL: fakeControlPlane(t, backend.URL, 1000).URL, InternalToken: "s3cret", Egress: testBackends,
+		ConfigWait: time.Second, RedisURL: "redis://127.0.0.1:1/0", // Redis down: fail open
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	exit := make(chan int, 1)
+	go func() { exit <- serve(ctx, cfg, slog.New(slog.DiscardHandler)) }()
+	defer func() {
+		http.DefaultClient.CloseIdleConnections()
+		cancel()
+		<-exit
+	}()
+
+	get := func(url string, key bool) (int, string) {
+		req, _ := http.NewRequest("GET", url, nil)
+		if key {
+			req.Header.Set("X-API-Key", testKey)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, ""
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if status, _ := get("http://"+cfg.ListenAddr+"/v1/orders/1", true); status == http.StatusOK {
+			break
+		}
+	}
+
+	status, body := get("http://"+cfg.MetricsAddr+"/metrics", false)
+	if status != http.StatusOK || !strings.Contains(body, `gateway_requests_total{route="r1",status="2xx",workspace="`+servedWorkspace+`"}`) ||
+		!strings.Contains(body, "gateway_config_seq 1") {
+		t.Errorf("metrics %d:\n%s", status, body)
+	}
+	if status, _ := get("http://"+cfg.ListenAddr+"/metrics", false); status == http.StatusOK {
+		t.Error("/metrics answered on the public port")
 	}
 }

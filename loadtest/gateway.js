@@ -185,7 +185,8 @@ export function setup() {
   // so a failure after this point deletes the workspace at once.
   admin('POST', '/workspaces', { name: 'Load test', slug: WORKSPACE, owner_email: __ENV.PLATFORM_ADMIN_EMAIL }, token);
   try {
-    admin('PATCH', `/workspaces/${WORKSPACE}/limits`, { rate_limit_per_min: WORKSPACE_RATE_LIMIT_PER_MIN }, token);
+    // k6 sends every request from one IP: its own per-IP limit (V2.3) is raised too.
+    admin('PATCH', `/workspaces/${WORKSPACE}/limits`, { rate_limit_per_min: WORKSPACE_RATE_LIMIT_PER_MIN, ip_rate_limit_per_min: WORKSPACE_RATE_LIMIT_PER_MIN }, token);
     return { token, userId, ...createTestObjects(token) };
   } catch (e) {
     deleteWorkspace(WORKSPACE, token);

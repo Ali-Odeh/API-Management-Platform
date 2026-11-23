@@ -126,6 +126,20 @@ func (r *Registry) ensureLocked(svc *config.Service) *Balancer {
 	return b
 }
 
+// EachTarget calls fn with every target of the current config's services
+// and whether it takes traffic right now (healthy and not set aside). For
+// the metrics.
+func (r *Registry) EachTarget(fn func(workspaceID, serviceID, targetID string, usable bool)) {
+	now := r.now().UnixNano()
+	r.balancers.Range(func(_, v any) bool {
+		b := v.(*Balancer)
+		for _, m := range b.targets {
+			fn(b.workspaceID, b.serviceID, m.target.ID, m.usable(now))
+		}
+		return true
+	})
+}
+
 func (r *Registry) load(id string) (*Balancer, bool) {
 	v, ok := r.balancers.Load(id)
 	if !ok {

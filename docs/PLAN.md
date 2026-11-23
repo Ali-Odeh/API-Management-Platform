@@ -849,10 +849,11 @@ Details (MT.8): when the request is allowed, `remaining` is the consumer's bucke
 
 **Metrics (V2.3)**
 
-- `GET /metrics` on its own listen address (`METRICS_ADDR`, default `:9091`), not on the public port, in the Prometheus text format (the official Go client).
+- `GET /metrics` on its own listen address (`METRICS_ADDR`, default `:9091`), not on the public port, in the Prometheus text format (the official Go client). Metric names: `gateway_requests_total{workspace,route,status}`, `gateway_request_duration_seconds` and `gateway_upstream_duration_seconds{workspace}`, `gateway_ratelimit_refusals_total{workspace,reason}`, `gateway_requests_in_flight{workspace}`, `gateway_target_up{workspace,service,target}`, `gateway_config_seq`, `gateway_config_last_sync_timestamp_seconds`, `gateway_usage_events_written_total`, `gateway_usage_events_dropped_total`.
 - `gateway_requests_total` by workspace, route and status class; latency histograms (total and upstream) by workspace; rate-limit refusals by reason (consumer, workspace, quota, IP); target health; in-flight per workspace; config sequence and last sync time; dropped usage events.
 - Labels stay bounded: workspace and route ids come from the config, never from the request; unmatched requests share one label.
-- The control plane adds `usage-ingest` lag and batch counts. Compose runs Prometheus to scrape both. A Grafana dashboard is *out of plan*.
+- The `usage-ingest` worker serves `usage_ingest_events_stored_total`, `_repeated_total`, `_dropped_total`, `usage_ingest_batches_total` and `usage_ingest_stream_length` on `INGEST_METRICS_PORT` (9092). Compose runs Prometheus to scrape both (UI on 127.0.0.1:9090). A Grafana dashboard is *out of plan*.
+- A workspace may set its own per-IP limit, `ip_rate_limit_per_min` (`PATCH /limits`, Platform Admin; NULL = the platform default); decided in V2.3.
 
 **Error responses**
 
@@ -1155,7 +1156,7 @@ Fewer, larger steps than MT: each one is a self-contained piece of work that an 
 
 - [x] V2.1 Usage and analytics: usage events over a Redis Stream, the `usage-ingest` worker, `request_logs` by month with retention, `last_used_at`, analytics and request-log endpoints
 - [x] V2.2 Plans and protection: plans per workspace, consumers on plans (migration), monthly quotas, per-IP limits on public routes, failed-key limits
-- [ ] V2.3 Metrics and v2 end to end: Prometheus metrics, the v2 definition of done as e2e, the load test again
+- [x] V2.3 Metrics and v2 end to end: Prometheus metrics, the v2 definition of done as e2e, the load test again
 
 **Portal: developer portal (planned Nov 22, 2026)**
 

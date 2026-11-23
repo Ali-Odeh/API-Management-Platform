@@ -82,6 +82,10 @@ MaxConcurrent = Annotated[int, Field(ge=1, le=10_000, description="Requests in f
 MaxServices = Annotated[int, Field(ge=1, le=10_000)]
 MaxRoutes = Annotated[int, Field(ge=1, le=100_000)]
 MaxConsumers = Annotated[int, Field(ge=1, le=1_000_000)]
+IPRateLimit = Annotated[
+    int,
+    Field(ge=1, le=1_000_000, description="Requests per minute from one client IP, public routes"),
+]
 
 
 class Limits(BaseModel):
@@ -92,6 +96,7 @@ class Limits(BaseModel):
     max_services: int
     max_routes: int
     max_consumers: int
+    ip_rate_limit_per_min: int
 
 
 class LimitOverrides(BaseModel):
@@ -102,6 +107,7 @@ class LimitOverrides(BaseModel):
     max_services: MaxServices | None = None
     max_routes: MaxRoutes | None = None
     max_consumers: MaxConsumers | None = None
+    ip_rate_limit_per_min: IPRateLimit | None = None
 
 
 class LimitsUpdate(LimitOverrides):

@@ -83,6 +83,7 @@ func (p *Poller) Run(ctx context.Context) {
 				"error", err, "retry_in", wait.Round(time.Millisecond).String(), "seq", p.currentSeq())
 		} else {
 			p.backoff.reset()
+			p.store.markSynced(time.Now())
 		}
 
 		if !sleep(ctx, wait) {

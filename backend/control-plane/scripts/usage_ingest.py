@@ -13,6 +13,7 @@ import os
 import signal
 import socket
 
+from prometheus_client import start_http_server
 from redis.asyncio import Redis
 
 from app.usage.ingest import DEFAULT_RETENTION_DAYS, Ingester, open_pool
@@ -28,6 +29,8 @@ async def main() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
+    # Prometheus scrapes the worker here (V2.3).
+    start_http_server(int(os.environ.get("INGEST_METRICS_PORT") or 9092))
     ingester = Ingester(redis, pool, consumer=socket.gethostname(), retention_days=days)
     logging.getLogger("usage_ingest").info(
         "usage ingest started as %s, keeping %d days", ingester.consumer, days

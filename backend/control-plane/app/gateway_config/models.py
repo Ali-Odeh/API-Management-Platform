@@ -55,7 +55,13 @@ CONFIG_COLUMNS: dict[str, tuple[str, ...]] = {
     "consumers": ("status", "plan_id"),
     "plans": ("rate_limit_per_min", "monthly_quota"),
     "api_keys": ("consumer_id", "key_hash", "revoked_at"),
-    "workspaces": ("slug", "status", "rate_limit_per_min", "max_concurrent"),
+    "workspaces": (
+        "slug",
+        "status",
+        "rate_limit_per_min",
+        "max_concurrent",
+        "ip_rate_limit_per_min",
+    ),
 }
 
 # The Postgres NOTIFY channel the triggers send to.

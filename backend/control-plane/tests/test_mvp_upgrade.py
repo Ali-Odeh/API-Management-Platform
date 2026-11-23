@@ -38,6 +38,7 @@ CONFIG_TABLES = ("workspaces", "services", "routes", "consumers", "api_keys")
 NEW_WORKSPACE_COLUMNS = (
     "status_reason", "deleted_at", "purge_after",
     "rate_limit_per_min", "max_concurrent", "max_services", "max_routes", "max_consumers",
+    "ip_rate_limit_per_min",
 )  # fmt: skip
 
 ADMIN_ID = uuid.UUID("087ab0d5-9592-4f88-8ab0-240ead00642f")

@@ -16,6 +16,7 @@ from typing import Any
 
 import asyncpg
 import pytest
+from prometheus_client import REGISTRY
 from redis.asyncio import Redis
 from redis.exceptions import ResponseError
 from sqlalchemy import select, text
@@ -455,3 +456,26 @@ def test_the_worker_needs_none_of_the_apis_settings() -> None:
         check=False,
     )
     assert done.returncode == 0, done.stderr
+
+
+async def test_the_worker_counts_what_it_does_for_prometheus(
+    ingester: Ingester, redis: Redis, stream: str
+) -> None:
+    names = (
+        "usage_ingest_events_stored_total",
+        "usage_ingest_batches_total",
+        "usage_ingest_events_dropped_total",
+    )
+
+    def moved() -> dict[str, float]:
+        return {n: (REGISTRY.get_sample_value(n) or 0.0) - before[n] for n in names}
+
+    before = {n: REGISTRY.get_sample_value(n) or 0.0 for n in names}
+    await redis.xadd(stream, event())
+    await redis.xadd(stream, event(v="9"))  # dropped
+
+    await ingest_all(ingester)
+
+    stored, batches, dropped = (moved()[n] for n in names)
+    assert (stored, dropped) == (1, 1)
+    assert batches >= 1
