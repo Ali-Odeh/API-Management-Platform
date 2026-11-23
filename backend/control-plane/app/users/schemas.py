@@ -5,7 +5,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.core.permissions import Role
 from app.core.schemas import PartialUpdate
+from app.workspaces.models import WorkspaceStatus
 
 
 class UserOut(BaseModel):
@@ -16,6 +18,21 @@ class UserOut(BaseModel):
     is_platform_admin: bool
     is_active: bool
     created_at: datetime
+
+
+class Membership(BaseModel):
+    """One workspace a person belongs to, with their role there."""
+
+    slug: str
+    name: str
+    role: Role
+    status: WorkspaceStatus
+
+
+class UserListItem(UserOut):
+    """GET /api/v1/users: a person and their workspaces (deleted ones included)."""
+
+    workspaces: list[Membership]
 
 
 class UserUpdate(PartialUpdate):

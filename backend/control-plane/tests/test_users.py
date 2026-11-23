@@ -14,11 +14,12 @@ from app.audit.models import ActorType
 from app.core.db import SessionLocal
 from app.core.errors import ForbiddenError
 from app.core.identity import TokenClaims
+from app.core.permissions import Role
 from app.users import crud as users_crud
 from app.users.crud import DISABLED_NOT_BANNED
 from app.users.models import User
 from app.workspaces.models import Workspace
-from tests.factories import make_user
+from tests.factories import make_member, make_user, make_workspace
 from tests.fakes import FakeGoTrue, bearer, make_token
 
 ME = "/api/v1/me"
@@ -441,3 +442,89 @@ async def test_row_made_between_our_two_lookups_is_returned(
         )
 
     assert user.id == competitor.id
+
+
+# ---- GET /api/v1/users: everyone, for the Platform Admin (FE.3)
+
+
+async def test_list_users_shows_everyone_with_their_workspaces(
+    client: AsyncClient, db: AsyncSession, admin: User, mfa_headers: Headers
+) -> None:
+    acme = await make_workspace(db, "acme")
+    globex = await make_workspace(db, "globex", status="suspended")
+    ana = await make_user(db, email="ana@example.com")
+    bo = await make_user(db, email="bo@example.com", is_active=False)
+    await make_member(db, acme.id, ana.id, Role.OWNER)
+    await make_member(db, globex.id, ana.id, Role.VIEWER)
+
+    r = await client.get(USERS, params={"page_size": 100}, headers=mfa_headers)
+
+    assert r.status_code == 200
+    body = r.json()
+    by_email = {u["email"]: u for u in body["items"]}
+    assert body["total"] == len(body["items"])
+    assert by_email["ana@example.com"]["workspaces"] == [
+        {"slug": "acme", "name": "Acme", "role": "owner", "status": "active"},
+        {"slug": "globex", "name": "Globex", "role": "viewer", "status": "suspended"},
+    ]
+    assert by_email["bo@example.com"] == {
+        "id": str(bo.id),
+        "email": "bo@example.com",
+        "is_platform_admin": False,
+        "is_active": False,
+        "created_at": by_email["bo@example.com"]["created_at"],
+        "workspaces": [],
+    }
+    assert by_email[admin.email]["is_platform_admin"] is True
+    # Newest first.
+    created = [u["created_at"] for u in body["items"]]
+    assert created == sorted(created, reverse=True)
+
+
+async def test_list_users_filters_by_status_and_part_of_the_email(
+    client: AsyncClient, db: AsyncSession, mfa_headers: Headers
+) -> None:
+    await make_user(db, email="ana@example.com")
+    await make_user(db, email="bo@example.com", is_active=False)
+    await make_user(db, email="ana_b@other.com")
+
+    disabled = await client.get(USERS, params={"is_active": "false"}, headers=mfa_headers)
+    assert [u["email"] for u in disabled.json()["items"]] == ["bo@example.com"]
+
+    found = await client.get(USERS, params={"email": "  ANA "}, headers=mfa_headers)
+    assert sorted(u["email"] for u in found.json()["items"]) == [
+        "ana@example.com",
+        "ana_b@other.com",
+    ]
+    # `_` and `%` are matched as themselves, not as SQL wildcards.
+    literal = await client.get(USERS, params={"email": "a_b"}, headers=mfa_headers)
+    assert [u["email"] for u in literal.json()["items"]] == ["ana_b@other.com"]
+
+
+async def test_list_users_pages(
+    client: AsyncClient, db: AsyncSession, mfa_headers: Headers
+) -> None:
+    for n in range(3):
+        await make_user(db, email=f"p{n}@example.com")
+    first = (await client.get(USERS, params={"page_size": 2}, headers=mfa_headers)).json()
+    second = (
+        await client.get(USERS, params={"page_size": 2, "page": 2}, headers=mfa_headers)
+    ).json()
+    assert len(first["items"]) == 2
+    assert first["total"] == second["total"] >= 3
+    assert not {u["id"] for u in first["items"]} & {u["id"] for u in second["items"]}
+
+
+async def test_list_users_is_for_the_platform_admin_with_mfa(
+    client: AsyncClient, db: AsyncSession, auth_headers: Headers
+) -> None:
+    r = await client.get(USERS, headers=auth_headers)
+    assert r.status_code == 403
+    assert r.json() == {"detail": "mfa_required"}
+
+    other = await make_user(db, email="other@example.com")
+    assert other.auth_user_id is not None
+    token = make_token(other.auth_user_id, other.email, aal="aal2")
+    r = await client.get(USERS, headers=bearer(token))
+    assert r.status_code == 403
+    assert r.json() == {"detail": "platform_admin_required"}

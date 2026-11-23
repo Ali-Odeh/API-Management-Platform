@@ -544,6 +544,7 @@ The **Platform Admin** (`users.is_platform_admin`) may do everything in every wo
 | PATCH | `/api/v1/developers/{id}` | Platform Admin | Block or unblock a developer `{status}`: a blocked one gets `403 developer_blocked` on every portal request (P.1) |
 | GET, PATCH | `/api/v1/workspaces/{slug}/apps[/{id}]` | `apps:*` | Developers' apps (`?status=pending`: the approval queue); `PATCH {status: approved \| rejected}` approves, or rejects (also later, to take access away) (P.2) |
 | various | `/api/v1/portal/...` | developer JWT | The developer portal API (below; P.1, P.2) |
+| GET | `/api/v1/users` | Platform Admin | Everyone with an account, newest first, with their workspaces (`slug`, `name`, `role`, `status`); `?is_active=` and `?email=` (part of the address, any case) filter (added in FE.3) |
 | PATCH | `/api/v1/users/{id}` | Platform Admin | Disable or enable a user `{is_active}`; also bans or unbans them in GoTrue (an account not linked yet is found by exact email). The row is locked across the GoTrue calls. Disabling yourself → `409`. GoTrue failing or timing out (the lookup or the ban) → `502` with the safe side kept: a disable stays (repeat to finish the ban), an enable isn't made |
 | GET | `/internal/config` | internal token | Config for the gateway |
 | GET | `/health` | none | Liveness |

@@ -2058,6 +2058,33 @@
         "title": "MemberUpdate",
         "type": "object"
       },
+      "Membership": {
+        "description": "One workspace a person belongs to, with their role there.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkspaceStatus"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "role",
+          "status"
+        ],
+        "title": "Membership",
+        "type": "object"
+      },
       "MyWorkspaceOut": {
         "description": "A workspace I belong to, and my role there.",
         "properties": {
@@ -2541,6 +2568,27 @@
           "total"
         ],
         "title": "Page[TargetOut]",
+        "type": "object"
+      },
+      "Page_UserListItem_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserListItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[UserListItem]",
         "type": "object"
       },
       "Page_WorkspaceOut_": {
@@ -4007,6 +4055,50 @@
           "consumers"
         ],
         "title": "Usage",
+        "type": "object"
+      },
+      "UserListItem": {
+        "description": "GET /api/v1/users: a person and their workspaces (deleted ones included).",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "is_platform_admin": {
+            "title": "Is Platform Admin",
+            "type": "boolean"
+          },
+          "workspaces": {
+            "items": {
+              "$ref": "#/components/schemas/Membership"
+            },
+            "title": "Workspaces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "is_platform_admin",
+          "is_active",
+          "created_at",
+          "workspaces"
+        ],
+        "title": "UserListItem",
         "type": "object"
       },
       "UserOut": {
@@ -6220,6 +6312,129 @@
         "summary": "List Plans",
         "tags": [
           "portal"
+        ]
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "description": "Everyone with an account, newest first, with the workspaces they belong to.",
+        "operationId": "list_users_api_v1_users_get",
+        "parameters": [
+          {
+            "description": "Only enabled or disabled people",
+            "in": "query",
+            "name": "is_active",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only enabled or disabled people",
+              "title": "Is Active"
+            }
+          },
+          {
+            "description": "Part of the email address, any case",
+            "in": "query",
+            "name": "email",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 255,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Part of the email address, any case",
+              "title": "Email"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_UserListItem_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Users",
+        "tags": [
+          "platform"
         ]
       }
     },

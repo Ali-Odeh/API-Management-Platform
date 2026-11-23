@@ -20,9 +20,12 @@ from app.core.errors import (
     UpstreamError,
 )
 from app.core.identity import TokenClaims
+from app.core.pagination import PageParams, paginate
 from app.gotrue.client import GoTrueAdmin
+from app.members.models import WorkspaceMember
 from app.users.models import UQ_USER_AUTH_USER_ID, UQ_USER_EMAIL, User
-from app.users.schemas import UserUpdate
+from app.users.schemas import Membership, UserUpdate
+from app.workspaces.models import Workspace
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,44 @@ async def get_user(db: AsyncSession, user_id: uuid.UUID, *, lock: bool = False) 
     if user is None:
         raise NotFoundError("User not found")
     return user
+
+
+async def list_users(
+    db: AsyncSession,
+    *,
+    page: PageParams,
+    is_active: bool | None = None,
+    email: str | None = None,
+) -> tuple[list[User], int]:
+    """One page of everyone, newest first; `email` matches part of the address."""
+    query = select(User).order_by(User.created_at.desc(), User.id)
+    if is_active is not None:
+        query = query.where(User.is_active == is_active)
+    if email:
+        query = query.where(User.email.contains(normalize_email(email), autoescape=True))
+    return await paginate(db, query, page)
+
+
+async def memberships_of(
+    db: AsyncSession, user_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[Membership]]:
+    """The workspaces each of these people belongs to, by name. One query for the page."""
+    rows = await db.execute(
+        select(
+            WorkspaceMember.user_id,
+            Workspace.slug,
+            Workspace.name,
+            WorkspaceMember.role,
+            Workspace.status,
+        )
+        .join(Workspace, Workspace.id == WorkspaceMember.workspace_id)
+        .where(WorkspaceMember.user_id.in_(user_ids))
+        .order_by(Workspace.name, Workspace.slug)
+    )
+    found: dict[uuid.UUID, list[Membership]] = {user_id: [] for user_id in user_ids}
+    for user_id, slug, name, role, status in rows:
+        found[user_id].append(Membership(slug=slug, name=name, role=role, status=status))
+    return found
 
 
 async def _by_auth_user_id(db: AsyncSession, auth_user_id: uuid.UUID) -> User | None:
