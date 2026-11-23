@@ -433,7 +433,36 @@ services:
       redis:
         condition: service_healthy
 
-  # dashboard (5173) is added in v2.
+  # The React app (FE): dashboard, platform pages and developer portal, on
+  # http://localhost:5173. Vite's dev server forwards /api to the control
+  # plane and /auth/v1, /portal-auth/v1 to the two GoTrue servers, so the
+  # browser talks to one origin (no CORS). Edits reload in the browser.
+  frontend:
+    build: ./frontend
+    environment:
+      API_PROXY_TARGET: http://control-plane:8000
+      AUTH_PROXY_TARGET: http://auth:9999
+      PORTAL_AUTH_PROXY_TARGET: http://auth-portal:9998
+      # Docker Desktop on Windows passes no file events into containers.
+      VITE_POLL: "true"
+    volumes:
+      - ./frontend:/app
+      # Hides the host's node_modules; the image's are in /node_modules.
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:5173/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      auth-portal:
+        condition: service_healthy
 
 volumes:
   pgdata:
