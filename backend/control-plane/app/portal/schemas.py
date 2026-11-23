@@ -17,6 +17,18 @@ class CatalogWorkspaceOut(BaseModel):
     apis: int  # published and deprecated APIs
 
 
+class OfferedPlan(BaseModel):
+    """A plan a developer may choose for an app (P.2)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    rate_limit_per_min: int
+    monthly_quota: int | None  # none: no monthly quota
+    requires_approval: bool  # an app on it waits for an API Admin
+
+
 class CatalogRoute(BaseModel):
     """Where to call an API through the gateway, on the workspace's host."""
 

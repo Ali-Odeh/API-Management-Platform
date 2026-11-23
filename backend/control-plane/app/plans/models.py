@@ -55,3 +55,7 @@ class Plan(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
     rate_limit_per_min: Mapped[int] = mapped_column(Integer)
     monthly_quota: Mapped[int | None] = mapped_column(BigInteger)  # NULL: no monthly quota
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # The developer portal (P.2): developers may choose it for their apps, and
+    # an app on it waits for an API Admin's approval. Neither is gateway config.
+    portal_visible: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    requires_approval: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

@@ -16,6 +16,7 @@ from app.core.deps import DbSession
 from app.core.openapi import error_responses
 from app.core.pagination import Page, Pagination
 from app.developers.schemas import DeveloperOut
+from app.plans import crud as plans_crud
 from app.portal import crud
 from app.portal.deps import CurrentDeveloper
 from app.portal.schemas import (
@@ -23,6 +24,7 @@ from app.portal.schemas import (
     CatalogApiSummary,
     CatalogRoute,
     CatalogWorkspaceOut,
+    OfferedPlan,
 )
 from app.routes.models import Route
 
@@ -88,3 +90,13 @@ async def get_api(
     api = await apis_crud.get_api(db, workspace_id, api_id=api_id, statuses=crud.CATALOG_STATUSES)
     routes = await apis_crud.routes_of(db, workspace_id, [api.id])
     return CatalogApi(**_summary(api, routes.get(api.id, [])).model_dump(), openapi=api.openapi)
+
+
+@router.get("/workspaces/{slug}/plans", responses=_WORKSPACE_NOT_FOUND)
+async def list_plans(
+    slug: str, caller: CurrentDeveloper, db: DbSession, page: Pagination
+) -> Page[OfferedPlan]:
+    """The plans a developer may choose for an app in this workspace (P.2)."""
+    workspace_id = await crud.get_catalog_workspace_id(db, slug)
+    plans, total = await plans_crud.list_offered_plans(db, workspace_id, page=page)
+    return Page[OfferedPlan](items=[OfferedPlan.model_validate(p) for p in plans], total=total)

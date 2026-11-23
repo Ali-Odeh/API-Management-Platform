@@ -154,6 +154,34 @@
         "title": "ApiOut",
         "type": "object"
       },
+      "ApiRef": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApiStatus"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "status"
+        ],
+        "title": "ApiRef",
+        "type": "object"
+      },
       "ApiRouteOut": {
         "properties": {
           "auth_required": {
@@ -338,6 +366,186 @@
           }
         },
         "title": "ApiUpdate",
+        "type": "object"
+      },
+      "AppAdminOut": {
+        "description": "An app as the workspace's members see it: also who made it and its consumer.",
+        "properties": {
+          "api": {
+            "$ref": "#/components/schemas/ApiRef"
+          },
+          "consumer_id": {
+            "format": "uuid",
+            "title": "Consumer Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "developer_email": {
+            "title": "Developer Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanRef"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AppStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "developer_email",
+          "consumer_id",
+          "api",
+          "plan",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AppAdminOut",
+        "type": "object"
+      },
+      "AppCreate": {
+        "description": "A new app in a workspace, for one of its published APIs, on one of the\nplans it offers developers.",
+        "properties": {
+          "api_id": {
+            "format": "uuid",
+            "title": "Api Id",
+            "type": "string"
+          },
+          "name": {
+            "examples": [
+              "My shop's backend"
+            ],
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Name",
+            "type": "string"
+          },
+          "plan_id": {
+            "format": "uuid",
+            "title": "Plan Id",
+            "type": "string"
+          },
+          "workspace": {
+            "description": "The workspace's slug",
+            "examples": [
+              "acme"
+            ],
+            "title": "Workspace",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace",
+          "api_id",
+          "plan_id",
+          "name"
+        ],
+        "title": "AppCreate",
+        "type": "object"
+      },
+      "AppDecision": {
+        "description": "PATCH /workspaces/{slug}/apps/{id}: approve (its keys work) or reject\n(they stop working). Either can be changed again later.",
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Decision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "AppDecision",
+        "type": "object"
+      },
+      "AppOut": {
+        "description": "An app as its developer sees it.",
+        "properties": {
+          "api": {
+            "$ref": "#/components/schemas/ApiRef"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/PlanRef"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AppStatus"
+          },
+          "workspace": {
+            "$ref": "#/components/schemas/WorkspaceRef"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "workspace",
+          "api",
+          "plan",
+          "created_at"
+        ],
+        "title": "AppOut",
+        "type": "object"
+      },
+      "AppStatus": {
+        "enum": [
+          "pending",
+          "approved",
+          "rejected"
+        ],
+        "title": "AppStatus",
+        "type": "string"
+      },
+      "AppUsage": {
+        "properties": {
+          "quota": {
+            "$ref": "#/components/schemas/Quota"
+          },
+          "traffic": {
+            "$ref": "#/components/schemas/TrafficOut"
+          }
+        },
+        "required": [
+          "traffic",
+          "quota"
+        ],
+        "title": "AppUsage",
         "type": "object"
       },
       "AuditEventOut": {
@@ -1062,6 +1270,15 @@
         ],
         "title": "Counts",
         "type": "object"
+      },
+      "Decision": {
+        "description": "What an API Admin can decide about an app.",
+        "enum": [
+          "approved",
+          "rejected"
+        ],
+        "title": "Decision",
+        "type": "string"
       },
       "DeveloperOut": {
         "properties": {
@@ -1927,6 +2144,48 @@
         "title": "MyWorkspaceOut",
         "type": "object"
       },
+      "OfferedPlan": {
+        "description": "A plan a developer may choose for an app (P.2).",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "monthly_quota": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Quota"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rate_limit_per_min": {
+            "title": "Rate Limit Per Min",
+            "type": "integer"
+          },
+          "requires_approval": {
+            "title": "Requires Approval",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "rate_limit_per_min",
+          "monthly_quota",
+          "requires_approval"
+        ],
+        "title": "OfferedPlan",
+        "type": "object"
+      },
       "Page_ApiSummary_": {
         "properties": {
           "items": {
@@ -1946,6 +2205,48 @@
           "total"
         ],
         "title": "Page[ApiSummary]",
+        "type": "object"
+      },
+      "Page_AppAdminOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AppAdminOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[AppAdminOut]",
+        "type": "object"
+      },
+      "Page_AppOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AppOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[AppOut]",
         "type": "object"
       },
       "Page_AuditEventOut_": {
@@ -2116,6 +2417,27 @@
         "title": "Page[MyWorkspaceOut]",
         "type": "object"
       },
+      "Page_OfferedPlan_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/OfferedPlan"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[OfferedPlan]",
+        "type": "object"
+      },
       "Page_PlanOut_": {
         "properties": {
           "items": {
@@ -2273,12 +2595,24 @@
             "title": "Name",
             "type": "string"
           },
+          "portal_visible": {
+            "default": false,
+            "description": "Developers may choose it for their apps on the portal",
+            "title": "Portal Visible",
+            "type": "boolean"
+          },
           "rate_limit_per_min": {
             "description": "Requests per minute for each consumer on the plan, all its keys together; at most the workspace's own limit",
             "maximum": 100000.0,
             "minimum": 1.0,
             "title": "Rate Limit Per Min",
             "type": "integer"
+          },
+          "requires_approval": {
+            "default": false,
+            "description": "A developer's app on it waits for an API Admin's approval",
+            "title": "Requires Approval",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2319,9 +2653,17 @@
             "title": "Name",
             "type": "string"
           },
+          "portal_visible": {
+            "title": "Portal Visible",
+            "type": "boolean"
+          },
           "rate_limit_per_min": {
             "title": "Rate Limit Per Min",
             "type": "integer"
+          },
+          "requires_approval": {
+            "title": "Requires Approval",
+            "type": "boolean"
           },
           "updated_at": {
             "format": "date-time",
@@ -2335,10 +2677,48 @@
           "rate_limit_per_min",
           "monthly_quota",
           "is_default",
+          "portal_visible",
+          "requires_approval",
           "created_at",
           "updated_at"
         ],
         "title": "PlanOut",
+        "type": "object"
+      },
+      "PlanRef": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "monthly_quota": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Quota"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "rate_limit_per_min": {
+            "title": "Rate Limit Per Min",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "rate_limit_per_min",
+          "monthly_quota"
+        ],
+        "title": "PlanRef",
         "type": "object"
       },
       "PlanUpdate": {
@@ -2386,6 +2766,17 @@
             ],
             "title": "Name"
           },
+          "portal_visible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Portal Visible"
+          },
           "rate_limit_per_min": {
             "anyOf": [
               {
@@ -2399,9 +2790,64 @@
               }
             ],
             "title": "Rate Limit Per Min"
+          },
+          "requires_approval": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requires Approval"
           }
         },
         "title": "PlanUpdate",
+        "type": "object"
+      },
+      "Quota": {
+        "description": "This calendar month (UTC), counted from the request log: requests the\ngateway let through on the app's keys. The gateway's own counter decides;\nthis can trail it by the few seconds the log takes, or miss events lost\nwhile Redis was down.",
+        "properties": {
+          "monthly_quota": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monthly Quota"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining"
+          },
+          "resets_at": {
+            "format": "date-time",
+            "title": "Resets At",
+            "type": "string"
+          },
+          "used": {
+            "title": "Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "monthly_quota",
+          "used",
+          "remaining",
+          "resets_at"
+        ],
+        "title": "Quota",
         "type": "object"
       },
       "RequestLogOut": {
@@ -3936,6 +4382,24 @@
         "title": "WorkspaceOut",
         "type": "object"
       },
+      "WorkspaceRef": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name"
+        ],
+        "title": "WorkspaceRef",
+        "type": "object"
+      },
       "WorkspaceStatus": {
         "description": "Where a workspace is in its life (decision 10).",
         "enum": [
@@ -4609,6 +5073,725 @@
         ]
       }
     },
+    "/api/v1/portal/apps": {
+      "get": {
+        "description": "My apps, in every workspace, newest first.",
+        "operationId": "list_apps_api_v1_portal_apps_get",
+        "parameters": [
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AppOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "List Apps",
+        "tags": [
+          "portal"
+        ]
+      },
+      "post": {
+        "description": "A new app. On a plan that requires approval it waits (`pending`) for an API\nAdmin; otherwise it is `approved` and can get keys at once.",
+        "operationId": "create_app_api_v1_portal_apps_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "api_deprecated, quota_exceeded (the workspace's consumers, or 10 apps of yours in it) or a name you already use there"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "A workspace, API or plan that isn't offered (unknown, a draft, a plan not shown to developers)"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Create App",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/apps/{app_id}": {
+      "delete": {
+        "description": "Delete an app and its keys: they stop working at once.",
+        "operationId": "delete_app_api_v1_portal_apps__app_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "workspace_suspended: the app's workspace is read-only"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Delete App",
+        "tags": [
+          "portal"
+        ]
+      },
+      "get": {
+        "operationId": "get_app_api_v1_portal_apps__app_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Get App",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/apps/{app_id}/keys": {
+      "get": {
+        "operationId": "list_keys_api_v1_portal_apps__app_id__keys_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_KeyOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "List Keys",
+        "tags": [
+          "portal"
+        ]
+      },
+      "post": {
+        "description": "Generate a key for an approved app. **The `key` field is shown only in this response.**",
+        "operationId": "create_key_api_v1_portal_apps__app_id__keys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "workspace_suspended: the app's workspace is read-only"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "app_pending or app_rejected, or already the maximum of active keys"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Create Key",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/apps/{app_id}/keys/{key_id}": {
+      "delete": {
+        "description": "Revoke a key of the app. Revoking again changes nothing.",
+        "operationId": "revoke_key_api_v1_portal_apps__app_id__keys__key_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Key Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "workspace_suspended: the app's workspace is read-only"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Revoke Key",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/apps/{app_id}/usage": {
+      "get": {
+        "description": "The app's requests over time (from the request log) and its monthly quota.",
+        "operationId": "usage_api_v1_portal_apps__app_id__usage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "interval",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Interval",
+              "default": "hour"
+            }
+          },
+          {
+            "description": "At or after this time (default: a day before `to`)",
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "At or after this time (default: a day before `to`)",
+              "title": "From"
+            }
+          },
+          {
+            "description": "Before this time (default: now)",
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Before this time (default: now)",
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppUsage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Usage",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
     "/api/v1/portal/me": {
       "get": {
         "description": "The signed-in developer (their row is made on their first request).",
@@ -4930,6 +6113,111 @@
           }
         ],
         "summary": "Get Api",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/workspaces/{slug}/plans": {
+      "get": {
+        "description": "The plans a developer may choose for an app in this workspace (P.2).",
+        "operationId": "list_plans_api_v1_portal_workspaces__slug__plans_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_OfferedPlan_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "List Plans",
         "tags": [
           "portal"
         ]
@@ -6368,6 +7656,312 @@
         "summary": "Update Api",
         "tags": [
           "apis"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/apps": {
+      "get": {
+        "description": "Developers' apps in this workspace, newest first.",
+        "operationId": "list_apps_api_v1_workspaces__slug__apps_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "`pending`: the approval queue",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AppStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "`pending`: the approval queue",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_AppAdminOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Apps",
+        "tags": [
+          "apps"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/apps/{app_id}": {
+      "get": {
+        "operationId": "get_app_api_v1_workspaces__slug__apps__app_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppAdminOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get App",
+        "tags": [
+          "apps"
+        ]
+      },
+      "patch": {
+        "description": "Approve (`{\"status\": \"approved\"}`: its keys work) or reject an app (they stop working).",
+        "operationId": "decide_api_v1_workspaces__slug__apps__app_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "app_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "App Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppAdminOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "App not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide",
+        "tags": [
+          "apps"
         ]
       }
     },

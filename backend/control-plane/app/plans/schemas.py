@@ -41,6 +41,12 @@ class PlanCreate(BaseModel):
     rate_limit_per_min: RateLimit
     monthly_quota: MonthlyQuota | None = None  # none: no monthly quota
     is_default: bool = False  # true moves the default here from the current one
+    portal_visible: bool = Field(
+        default=False, description="Developers may choose it for their apps on the portal"
+    )
+    requires_approval: bool = Field(
+        default=False, description="A developer's app on it waits for an API Admin's approval"
+    )
 
 
 class PlanUpdate(PartialUpdate):
@@ -53,6 +59,8 @@ class PlanUpdate(PartialUpdate):
     rate_limit_per_min: RateLimit | None = None
     monthly_quota: MonthlyQuota | None = None
     is_default: bool | None = None
+    portal_visible: bool | None = None
+    requires_approval: bool | None = None
 
 
 class PlanOut(BaseModel):
@@ -63,5 +71,7 @@ class PlanOut(BaseModel):
     rate_limit_per_min: int
     monthly_quota: int | None
     is_default: bool
+    portal_visible: bool
+    requires_approval: bool
     created_at: datetime
     updated_at: datetime

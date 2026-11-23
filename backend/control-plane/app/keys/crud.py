@@ -104,16 +104,20 @@ async def _lock_consumer(
 
 
 async def revoke_key(
-    db: AsyncSession, workspace_id: uuid.UUID, *, key_id: uuid.UUID, audit: AuditContext
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    *,
+    key_id: uuid.UUID,
+    audit: AuditContext,
+    consumer_id: uuid.UUID | None = None,
 ) -> None:
     """Mark a key revoked. Idempotent: revoking again keeps the first revoked_at
-    (and, since nothing changes, writes no second audit event)."""
-    key = await db.scalar(
-        select(ApiKey)
-        .where(ApiKey.id == key_id, ApiKey.workspace_id == workspace_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
+    (and, since nothing changes, writes no second audit event). With
+    `consumer_id`, only that consumer's key (a developer's app, P.2)."""
+    query = select(ApiKey).where(ApiKey.id == key_id, ApiKey.workspace_id == workspace_id)
+    if consumer_id is not None:
+        query = query.where(ApiKey.consumer_id == consumer_id)
+    key = await db.scalar(query.with_for_update().execution_options(populate_existing=True))
     if key is None:
         raise NotFoundError("API key not found")
     if key.revoked_at is None:

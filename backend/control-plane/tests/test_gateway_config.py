@@ -326,6 +326,8 @@ _NOT_CONFIG = [
     ("workspaces", "updated_at", "now() + interval '1 hour'"),
     ("plans", "name", "name || ' renamed'"),
     ("plans", "is_default", "false"),
+    ("plans", "portal_visible", "true"),  # the portal's, not the gateway's (P.2)
+    ("plans", "requires_approval", "true"),
     ("plans", "updated_at", "now() + interval '1 hour'"),
 ]
 # Lifecycle details: they change only together with `status`, which bumps.
