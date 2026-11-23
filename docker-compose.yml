@@ -397,6 +397,37 @@ services:
       prometheus:
         condition: service_healthy
 
+  # Browser end-to-end stories (FE): Chromium uses the React app like a
+  # person, with the helpers of the API stories. "test" profile; run with:
+  #   docker compose run --rm e2e-browser
+  e2e-browser:
+    build:
+      context: ./e2e
+      dockerfile: browser/Dockerfile
+    profiles: ["test"]
+    environment:
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+      GOTRUE_SERVICE_ROLE_KEY: ${GOTRUE_SERVICE_ROLE_KEY:-}
+      PORTAL_GOTRUE_SERVICE_ROLE_KEY: ${PORTAL_GOTRUE_SERVICE_ROLE_KEY:-}
+    # Chromium needs more shared memory than Docker's default 64 MB.
+    ipc: host
+    volumes:
+      - ./e2e:/e2e
+    depends_on:
+      frontend:
+        condition: service_healthy
+      auth:
+        condition: service_healthy
+      auth-portal:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+      gateway:
+        condition: service_healthy
+      mock-backend:
+        condition: service_healthy
+
   # Load test with k6 (step 4.4), also in the "test" profile. Run with:
   #   docker compose run --rm loadtest
   # or with another rate / duration per run:
