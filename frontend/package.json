@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
-    "api:types": "openapi-typescript ../backend/control-plane/openapi.json -o src/api/schema.d.ts"
+    "api:types": "openapi-typescript ../backend/control-plane/openapi.json -o src/api/schema.d.ts --default-non-nullable false"
   },
   "dependencies": {
     "@hookform/resolvers": "5.9.2",

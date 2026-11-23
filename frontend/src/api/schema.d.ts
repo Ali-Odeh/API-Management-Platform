@@ -1008,7 +1008,7 @@ export interface components {
              * Description
              * @default
              */
-            description: string;
+            description?: string;
             /**
              * Name
              * @example Orders API
@@ -1023,7 +1023,7 @@ export interface components {
              * @description The routes the API is made of
              * @default []
              */
-            route_ids: string[];
+            route_ids?: string[];
             /**
              * Slug
              * @description Lowercase letters, digits, '-' and '_'
@@ -1403,7 +1403,7 @@ export interface components {
             /** Plan Id */
             plan_id?: string | null;
             /** @default active */
-            status: components["schemas"]["ConsumerStatus"];
+            status?: components["schemas"]["ConsumerStatus"];
         };
         /** ConsumerOut */
         ConsumerOut: {
@@ -1475,7 +1475,7 @@ export interface components {
              * @description Allow cookies and authorization headers (not with '*')
              * @default false
              */
-            credentials: boolean;
+            credentials?: boolean;
             /**
              * Headers
              * @description Request headers a browser may send
@@ -1485,19 +1485,19 @@ export interface components {
              *       "X-API-Key"
              *     ]
              */
-            headers: string[];
+            headers?: string[];
             /**
              * Max Age
              * @description Seconds a browser may cache a preflight answer
              * @default 600
              */
-            max_age: number;
+            max_age?: number;
             /**
              * Methods
              * @description Methods a browser may use; empty: the route's own methods
              * @default []
              */
-            methods: string[];
+            methods?: string[];
             /**
              * Origins
              * @default []
@@ -1505,7 +1505,7 @@ export interface components {
              *       "https://app.example.com"
              *     ]
              */
-            origins: string[];
+            origins?: string[];
         };
         /**
          * CorsConfig
@@ -2038,7 +2038,7 @@ export interface components {
              * Is Default
              * @default false
              */
-            is_default: boolean;
+            is_default?: boolean;
             /** Monthly Quota */
             monthly_quota?: number | null;
             /**
@@ -2051,7 +2051,7 @@ export interface components {
              * @description Developers may choose it for their apps on the portal
              * @default false
              */
-            portal_visible: boolean;
+            portal_visible?: boolean;
             /**
              * Rate Limit Per Min
              * @description Requests per minute for each consumer on the plan, all its keys together; at most the workspace's own limit
@@ -2062,7 +2062,7 @@ export interface components {
              * @description A developer's app on it waits for an API Admin's approval
              * @default false
              */
-            requires_approval: boolean;
+            requires_approval?: boolean;
         };
         /** PlanOut */
         PlanOut: {
@@ -2226,7 +2226,7 @@ export interface components {
              * @description Require a valid X-API-Key
              * @default true
              */
-            auth_required: boolean;
+            auth_required?: boolean;
             /**
              * @default {
              *       "credentials": false,
@@ -2236,12 +2236,12 @@ export interface components {
              *       "origins": []
              *     }
              */
-            cors: components["schemas"]["Cors"];
+            cors?: components["schemas"]["Cors"];
             /**
              * Is Active
              * @default true
              */
-            is_active: boolean;
+            is_active?: boolean;
             /** Max Body Bytes */
             max_body_bytes?: number | null;
             /**
@@ -2268,7 +2268,7 @@ export interface components {
              * @description Remove path_prefix before forwarding to the service
              * @default false
              */
-            strip_prefix: boolean;
+            strip_prefix?: boolean;
         };
         /** RouteOut */
         RouteOut: {
@@ -2366,36 +2366,36 @@ export interface components {
              * Hc Healthy Threshold
              * @default 2
              */
-            hc_healthy_threshold: number;
+            hc_healthy_threshold?: number;
             /**
              * Hc Interval S
              * @description Seconds between active checks
              * @default 10
              */
-            hc_interval_s: number;
+            hc_interval_s?: number;
             /**
              * Hc Path
              * @description Path the gateway calls on each target: 2xx or 3xx is healthy
              * @default /health
              * @example /health
              */
-            hc_path: string;
+            hc_path?: string;
             /**
              * Hc Unhealthy Threshold
              * @default 3
              */
-            hc_unhealthy_threshold: number;
+            hc_unhealthy_threshold?: number;
             /**
              * Is Active
              * @default true
              */
-            is_active: boolean;
+            is_active?: boolean;
             /**
              * Lb Algorithm
              * @default round_robin
              * @constant
              */
-            lb_algorithm: "round_robin";
+            lb_algorithm?: "round_robin";
             /**
              * Name
              * @description Lowercase letters, digits, '-' and '_'
@@ -2407,13 +2407,13 @@ export interface components {
              * @description Seconds a target is set aside
              * @default 30
              */
-            passive_eject_s: number;
+            passive_eject_s?: number;
             /**
              * Passive Failures
              * @description Failed requests in a row that set a target aside
              * @default 5
              */
-            passive_failures: number;
+            passive_failures?: number;
             /** Targets */
             targets: components["schemas"]["TargetCreate"][];
             /**
@@ -2421,7 +2421,7 @@ export interface components {
              * @description 100 ms to 60 s
              * @default 5000
              */
-            timeout_ms: number;
+            timeout_ms?: number;
         };
         /** ServiceOut */
         ServiceOut: {
@@ -2519,7 +2519,7 @@ export interface components {
              * Is Active
              * @default true
              */
-            is_active: boolean;
+            is_active?: boolean;
             /**
              * Url
              * @example http://mock-backend:9000
@@ -2530,7 +2530,7 @@ export interface components {
              * @description Share of the requests, relative to the other targets
              * @default 100
              */
-            weight: number;
+            weight?: number;
         };
         /** TargetOut */
         TargetOut: {

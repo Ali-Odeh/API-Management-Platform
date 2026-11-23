@@ -47,7 +47,7 @@ Invoke-Check "api types match openapi.json" {
     # The types are generated from the committed API contract; a stale copy
     # would let the app compile against an API that no longer exists.
     $fresh = Join-Path ([IO.Path]::GetTempPath()) "apim-schema.d.ts"
-    npx openapi-typescript ../backend/control-plane/openapi.json -o $fresh --silent
+    npx openapi-typescript ../backend/control-plane/openapi.json -o $fresh --silent --default-non-nullable false
     if ((Get-Content $fresh -Raw) -ne (Get-Content src/api/schema.d.ts -Raw)) {
         Write-Host "src/api/schema.d.ts is out of date (run with -Fix)" -ForegroundColor Yellow
         $global:LASTEXITCODE = 1
