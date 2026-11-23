@@ -21,7 +21,9 @@ export interface AuthState {
   linkError: string | null
   client: GoTrueClient
   signIn: (email: string, password: string) => Promise<void>
-  verifyMfa: (code: string) => Promise<void>
+  /** The person's verified authenticator apps, to pick one when there are several. */
+  listAuthenticators: () => Promise<Authenticator[]>
+  verifyMfa: (code: string, factorId: string) => Promise<void>
   signOut: (scope?: 'local' | 'global') => Promise<void>
   /** Reads the session again, after a change the client made itself (MFA setup). */
   refresh: () => Promise<void>
@@ -48,13 +50,15 @@ async function readSnapshot(client: GoTrueClient): Promise<Snapshot> {
   return { status, session, aal, mfaEnrolled }
 }
 
-/** The first verified TOTP factor: the one the sign-in step asks a code for. */
-async function verifiedTotpFactor(client: GoTrueClient): Promise<string> {
+export interface Authenticator {
+  id: string
+  name: string
+}
+
+async function verifiedAuthenticators(client: GoTrueClient): Promise<Authenticator[]> {
   const { data, error } = await client.mfa.listFactors()
   if (error) throw error
-  const factor = data.totp[0]
-  if (!factor) throw new Error('No authenticator app is set up for this account.')
-  return factor.id
+  return data.totp.map((f) => ({ id: f.id, name: f.friendly_name ?? 'Authenticator app' }))
 }
 
 function readFlag(key: string): boolean {
@@ -138,8 +142,9 @@ export function createAuth(client: GoTrueClient, name: string) {
       setSnapshot(await readSnapshot(client))
     }, [])
 
-    const verifyMfa = useCallback(async (code: string) => {
-      const factorId = await verifiedTotpFactor(client)
+    const listAuthenticators = useCallback(() => verifiedAuthenticators(client), [])
+
+    const verifyMfa = useCallback(async (code: string, factorId: string) => {
       const { error } = await client.mfa.challengeAndVerify({ factorId, code })
       if (error) throw error
       setSnapshot(await readSnapshot(client))
@@ -166,6 +171,7 @@ export function createAuth(client: GoTrueClient, name: string) {
         linkError,
         client,
         signIn,
+        listAuthenticators,
         verifyMfa,
         signOut,
         refresh,
@@ -176,6 +182,7 @@ export function createAuth(client: GoTrueClient, name: string) {
         passwordSetupPending,
         linkError,
         signIn,
+        listAuthenticators,
         verifyMfa,
         signOut,
         refresh,

@@ -207,6 +207,7 @@ export class FakeGoTrue {
         if (!session) return this.error(401, 'bad_jwt', 'invalid JWT')
         const body = (await request.json()) as { code: string }
         log('factor:verify')
+        log(`factor:verify:${String(params.id)}`)
         if (body.code !== VALID_CODE) {
           return this.error(422, 'mfa_verification_failed', 'Invalid TOTP code entered')
         }

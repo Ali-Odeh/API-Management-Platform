@@ -3,8 +3,9 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { Link } from 'react-router'
 import { z } from 'zod'
+import { useQuery } from '@tanstack/react-query'
 import { FormError } from '@/components/form-error'
-import { Spinner } from '@/components/states'
+import { LoadingState, Spinner } from '@/components/states'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -16,6 +17,14 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { authErrorMessage } from '@/lib/auth/errors'
 import type { AuthState } from '@/lib/auth/session'
 
@@ -104,20 +113,52 @@ export function MfaCodeForm({
 }) {
   const [error, setError] = useState<string | null>(null)
   const form = useForm({ resolver: zodResolver(codeSchema), defaultValues: { code: '' } })
+  const { listAuthenticators } = auth
+  const authenticators = useQuery({
+    queryKey: ['auth', 'authenticators'],
+    queryFn: listAuthenticators,
+    // Never shown from a cache: the list belongs to whoever is signing in now.
+    gcTime: 0,
+  })
+  const [chosen, setChosen] = useState<string | null>(null)
+  const factorId = chosen ?? authenticators.data?.[0]?.id
 
   async function submit(values: z.infer<typeof codeSchema>) {
     setError(null)
     try {
-      await auth.verifyMfa(values.code)
+      if (!factorId) throw new Error('No authenticator app is set up for this account.')
+      await auth.verifyMfa(values.code, factorId)
     } catch (e) {
       setError(authErrorMessage(e))
       form.reset({ code: '' })
     }
   }
 
+  if (authenticators.isPending) return <LoadingState />
+  if (authenticators.error) {
+    return <FormError message={authErrorMessage(authenticators.error)} />
+  }
+
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(submit)} className="grid gap-4" noValidate>
+        {authenticators.data.length > 1 && (
+          <div className="grid gap-2">
+            <Label htmlFor="authenticator">Authenticator</Label>
+            <Select value={factorId} onValueChange={setChosen}>
+              <SelectTrigger id="authenticator" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {authenticators.data.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <FormField
           control={form.control}
           name="code"

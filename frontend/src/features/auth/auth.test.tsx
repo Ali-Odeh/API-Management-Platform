@@ -64,6 +64,23 @@ describe('login', () => {
     expect(await screen.findByRole('heading', { name: 'My workspaces' })).toBeInTheDocument()
   })
 
+  it('lets a person with several authenticators choose one', async () => {
+    const admin = memberGoTrue.addUser('admin@example.test', PASSWORD, { mfa: true })
+    const [phone] = admin.factors
+    if (!phone) throw new Error('fake user has no factor')
+    admin.factors.push({ ...phone, id: 'factor-laptop', friendly_name: 'Laptop' })
+    memberGoTrue.storeSession(MEMBER_STORAGE_KEY, 'admin@example.test', 'aal1')
+    const { user } = renderApp('/login')
+
+    await user.click(await screen.findByLabelText('Authenticator'))
+    await user.click(await screen.findByRole('option', { name: 'Laptop' }))
+    await user.type(screen.getByLabelText('Authentication code'), VALID_CODE)
+    await user.click(screen.getByRole('button', { name: 'Verify' }))
+
+    expect(await screen.findByRole('heading', { name: 'My workspaces' })).toBeInTheDocument()
+    expect(memberGoTrue.calls).toContain('factor:verify:factor-laptop')
+  })
+
   it('rejects a code that is not 6 digits without calling GoTrue', async () => {
     memberGoTrue.addUser('admin@example.test', PASSWORD, { mfa: true })
     memberGoTrue.storeSession(MEMBER_STORAGE_KEY, 'admin@example.test', 'aal1')
