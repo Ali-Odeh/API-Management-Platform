@@ -148,7 +148,9 @@ type Key struct {
 	ID              string
 	ConsumerID      string
 	ConsumerStatus  ConsumerStatus
-	RateLimitPerMin int
+	PlanID          string // the consumer's plan (V2.2), for the log
+	RateLimitPerMin int    // the plan's requests per minute
+	MonthlyQuota    int64  // the plan's requests per calendar month; 0: none
 }
 
 // Limits are the workspace's limits as they apply (its own or the platform
@@ -156,6 +158,10 @@ type Key struct {
 type Limits struct {
 	RateLimitPerMin int
 	MaxConcurrent   int
+	// Platform-wide protection (V2.2); 0 when the control plane sends none
+	// (an older one): no such limit.
+	IPRateLimitPerMin int // per client IP on public routes, per minute
+	AuthFailLimit     int // failed key attempts per IP before it is refused
 }
 
 // Workspace is one workspace's whole config at one version. Like a

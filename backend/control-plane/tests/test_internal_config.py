@@ -27,6 +27,7 @@ from tests.conftest import OWNER_URL
 from tests.factories import (
     make_api_key,
     make_consumer,
+    make_plan,
     make_route,
     make_service,
     make_target,
@@ -63,7 +64,12 @@ async def test_a_full_answer_has_every_served_workspace(workspace: Workspace) ->
         "status": WorkspaceStatus.ACTIVE,
         "version": 1,
         "hosts": ["default"],
-        "limits": {"rate_limit_per_min": 6000, "max_concurrent": 200},
+        "limits": {
+            "rate_limit_per_min": 6000,
+            "max_concurrent": 200,
+            "ip_rate_limit_per_min": 600,
+            "auth_fail_limit": 20,
+        },
         "services": [],
         "routes": [],
         "keys": [],
@@ -83,7 +89,8 @@ async def test_services_routes_and_keys(db: AsyncSession, workspace: Workspace) 
         strip_prefix=True,
         auth_required=False,
     )
-    consumer = await make_consumer(db, workspace.id, rate_limit_per_min=120)
+    plan = await make_plan(db, workspace.id, rate_limit_per_min=120, monthly_quota=1000)
+    consumer = await make_consumer(db, workspace.id, plan_id=plan.id)
     key = await make_api_key(db, workspace.id, consumer.id)
 
     [default] = (await _answer()).workspaces
@@ -128,7 +135,9 @@ async def test_services_routes_and_keys(db: AsyncSession, workspace: Workspace) 
             "key_hash": key.key_hash,
             "consumer_id": consumer.id,
             "consumer_status": "active",
+            "plan_id": plan.id,
             "rate_limit_per_min": 120,
+            "monthly_quota": 1000,
         }
     ]
 
@@ -171,7 +180,12 @@ async def test_effective_limits(db: AsyncSession, workspace: Workspace) -> None:
     acme = _by_slug(await _answer())["acme"]
 
     # Its own value, or the platform default: the gateway never needs the defaults.
-    assert acme.limits.model_dump() == {"rate_limit_per_min": 10, "max_concurrent": 200}
+    assert acme.limits.model_dump() == {
+        "rate_limit_per_min": 10,
+        "max_concurrent": 200,
+        "ip_rate_limit_per_min": 600,
+        "auth_fail_limit": 20,
+    }
 
 
 async def test_each_workspace_holds_only_its_own(

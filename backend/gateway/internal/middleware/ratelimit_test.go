@@ -55,7 +55,7 @@ func newLimitedGateway(t *testing.T, limiter Allower, log *slog.Logger) (http.Ha
 		*called = true
 		w.WriteHeader(http.StatusOK)
 	})
-	chain := Auth(log)(RateLimit(limiter, log)(backend))
+	chain := Auth(log, nil)(RateLimit(limiter, log)(backend))
 	return tenant.Middleware(staticSource{snap}, "localhost")(proxy.NewRouter(chain)), called
 }
 

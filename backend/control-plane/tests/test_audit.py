@@ -218,7 +218,7 @@ async def test_target_credentials_of_older_services_stay_out_of_audit_events(
     [
         ("services", {"timeout_ms": 5000}),
         ("routes", {"methods": ["GET", "POST"]}),
-        ("consumers", {"rate_limit_per_min": 60}),
+        ("consumers", {"status": "active"}),
     ],
 )
 async def test_unchanged_patch_writes_no_event(
@@ -233,7 +233,7 @@ async def test_unchanged_patch_writes_no_event(
     ids = {
         "services": service.id,
         "routes": (await make_route(db, workspace.id, service.id, methods=["GET", "POST"])).id,
-        "consumers": (await make_consumer(db, workspace.id, rate_limit_per_min=60)).id,
+        "consumers": (await make_consumer(db, workspace.id)).id,
     }
     seen = await _ids(db)
     url = f"/api/v1/workspaces/default/{kind}/{ids[kind]}"

@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import os
+import socket
 import struct
 import time
 import uuid
@@ -29,6 +30,9 @@ GOTRUE_URL = os.environ.get("GOTRUE_URL", "http://auth:9999")
 # Mailpit catches the emails GoTrue sends (invitations); its API lists them.
 MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://mailpit:8025")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8080")
+# The gateway's Redis (its database 0), for one thing only: see
+# _forget_failed_key_attempts.
+REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 # The backend as the gateway reaches it.
 MOCK_BACKEND_URL = os.environ.get("MOCK_BACKEND_URL", "http://mock-backend:9000")
 # Its second copy (MT.10), for load balancing.
@@ -58,6 +62,8 @@ class World:
     base: str = "/workspaces/default"  # the workspace the objects live in
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex[:6])
     _routes: list[str] = field(default_factory=list)
+    _plans: dict[int, str] = field(default_factory=dict)  # rate limit -> plan id
+    _extra_plans: list[str] = field(default_factory=list)  # plans with a quota
     _services: list[str] = field(default_factory=list)
     _consumers: list[str] = field(default_factory=list)
 
@@ -111,11 +117,28 @@ class World:
         self._routes.append(route["id"])
         return route
 
-    def consumer(self, label: str, rate_limit_per_min: int = 1000) -> dict[str, Any]:
+    def plan(self, rate_limit_per_min: int, monthly_quota: int | None = None) -> str:
+        """A plan of this run with that limit (V2.2: consumers' limits come from plans)."""
+        if monthly_quota is not None or rate_limit_per_min not in self._plans:
+            body = {
+                "name": self.name(f"{rate_limit_per_min}-per-min-{uuid.uuid4().hex[:4]}"),
+                "rate_limit_per_min": rate_limit_per_min,
+                "monthly_quota": monthly_quota,
+            }
+            plan_id = self._create("/plans", body)["id"]
+            if monthly_quota is not None:
+                self._extra_plans.append(plan_id)
+                return plan_id
+            self._plans[rate_limit_per_min] = plan_id
+        return self._plans[rate_limit_per_min]
+
+    def consumer(
+        self, label: str, rate_limit_per_min: int = 1000, *, plan_id: str | None = None
+    ) -> dict[str, Any]:
         body = {
             "name": self.name(label),
             "email": "e2e@example.com",
-            "rate_limit_per_min": rate_limit_per_min,
+            "plan_id": plan_id or self.plan(rate_limit_per_min),
         }
         consumer = self._create("/consumers", body)
         self._consumers.append(consumer["id"])
@@ -133,11 +156,12 @@ class World:
 
     def cleanup(self) -> None:
         # Routes first: a service that still has routes can't be deleted.
-        # Deleting a consumer also deletes its keys.
+        # Deleting a consumer also deletes its keys; plans go after their consumers.
         for path, ids in (
             ("/routes", self._routes),
             ("/services", self._services),
             ("/consumers", self._consumers),
+            ("/plans", [*self._plans.values(), *self._extra_plans]),
         ):
             for id_ in reversed(ids):
                 r = self.admin.delete(f"{self.base}{path}/{id_}")
@@ -170,6 +194,36 @@ def _wait_until_up(url: str) -> None:
             pass
         time.sleep(0.5)
     pytest.exit(f"{url} is not up after {STACK_START_TIMEOUT:.0f} s; is the stack running?")
+
+
+# Deletes every failed-key counter (V2.2) in one atomic script.
+_FORGET_FAILURES = (
+    "for _, k in ipairs(redis.call('KEYS', 'authfail:*')) do redis.call('DEL', k) end return 0"
+)
+
+
+def _forget_failed_key_attempts() -> None:
+    """Start every run with no failed key attempts counted.
+
+    All requests of the e2e tests come from one IP, and some stories send
+    wrong keys on purpose (or a new key before the gateway knows it). Two
+    runs within the gateway's 5-minute window would add up past the limit,
+    and the IP would be refused in `default`. The counters are short-lived
+    protection state, not data. Sent with Redis's own protocol (RESP), so
+    the runner needs no Redis library.
+    """
+    command = ["EVAL", _FORGET_FAILURES, "0"]
+    payload = f"*{len(command)}\r\n" + "".join(f"${len(c)}\r\n{c}\r\n" for c in command)
+    with socket.create_connection((REDIS_HOST, 6379), timeout=5) as conn:
+        conn.sendall(payload.encode())
+        reply = conn.recv(64)
+    if not reply.startswith(b":"):
+        pytest.exit(f"could not reset the failed-key counters in Redis: {reply!r}", returncode=2)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_failed_key_attempts() -> None:
+    _forget_failed_key_attempts()
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -381,7 +435,25 @@ def admin(platform_admin_session: Session) -> Iterator[httpx.Client]:
 def gateway() -> Iterator[httpx.Client]:
     _wait_until_up(GATEWAY_URL)
     with httpx.Client(base_url=GATEWAY_URL, timeout=10) as client:
+        _wait_for_config(client)
         yield client
+
+
+def _wait_for_config(client: httpx.Client) -> None:
+    """Until the gateway serves its first config.
+
+    /health answers as soon as the gateway runs, config or not. On a fresh
+    stack the gateway often starts before the control plane, and its first
+    config requests fail and back off (up to about 10 s), so a test could
+    meet 503 config_not_loaded. Any other answer means a config is loaded.
+    """
+    deadline = time.monotonic() + STACK_START_TIMEOUT
+    while time.monotonic() < deadline:
+        r = client.get("/")
+        if not (r.status_code == 503 and r.json().get("error") == "config_not_loaded"):
+            return
+        time.sleep(0.5)
+    pytest.exit(f"the gateway has no config after {STACK_START_TIMEOUT:.0f} s")
 
 
 @pytest.fixture(scope="session")

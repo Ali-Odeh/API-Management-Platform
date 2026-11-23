@@ -19,6 +19,11 @@ x-control-plane-environment: &control-plane-environment
   # most it may set. The gateway gets each route's limit in its config.
   MAX_REQUEST_BODY: ${MAX_REQUEST_BODY:-10MiB}
   MAX_REQUEST_BODY_CEILING: ${MAX_REQUEST_BODY_CEILING:-100MiB}
+  # Protection of every workspace (V2.2): requests per minute from one client
+  # IP on a public route, and failed key attempts from one IP (in 5 minutes)
+  # before it is refused for a while. The gateway gets them in its config.
+  PUBLIC_RATE_LIMIT_PER_IP_PER_MIN: ${PUBLIC_RATE_LIMIT_PER_IP_PER_MIN:-600}
+  AUTH_FAIL_LIMIT_PER_IP: ${AUTH_FAIL_LIMIT_PER_IP:-20}
   # Internal upstreams the Platform Admin allows (MT.9); the gateway gets the
   # same value. The control plane refuses other internal IP literals and
   # names (localhost, *.internal) with 422 when a service is saved.

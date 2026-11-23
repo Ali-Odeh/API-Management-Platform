@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.consumers.models import Consumer, ConsumerStatus
 from app.keys.models import ApiKey
+from app.plans.crud import get_default_plan
 from app.workspaces.models import Workspace
-from tests.factories import expect_violation, make_api_key, make_consumer
+from tests.factories import expect_violation, make_api_key, make_consumer, make_plan, make_workspace
 
 URL = "/api/v1/workspaces/default/consumers"
 Headers = dict[str, str]
@@ -27,7 +28,7 @@ async def test_defaults(db: AsyncSession, workspace: Workspace) -> None:
     consumer = await make_consumer(db, workspace.id)
     await db.refresh(consumer)
     assert consumer.status is ConsumerStatus.ACTIVE  # a real enum, not just a string
-    assert consumer.rate_limit_per_min == 60  # plan default
+    assert consumer.plan_id == (await get_default_plan(db, workspace.id)).id
 
 
 async def test_name_unique_per_workspace(
@@ -55,11 +56,13 @@ async def test_unknown_status_rejected(db: AsyncSession, workspace: Workspace) -
     )
 
 
-async def test_rate_limit_must_be_positive(db: AsyncSession, workspace: Workspace) -> None:
+async def test_the_plan_must_be_in_the_consumers_workspace(
+    db: AsyncSession, workspace: Workspace
+) -> None:
+    other = await make_workspace(db, slug="globex")
+    theirs = await make_plan(db, other.id)
     await expect_violation(
-        db,
-        "ck_consumers_rate_limit_positive",
-        make_consumer(db, workspace.id, rate_limit_per_min=0),
+        db, "fk_consumers_plan", make_consumer(db, workspace.id, plan_id=theirs.id)
     )
 
 
@@ -90,20 +93,25 @@ async def create(client: AsyncClient, headers: Headers, **overrides: Any) -> Res
 # ---- Create
 
 
-async def test_create_returns_201_with_defaults(client: AsyncClient, auth_headers: Headers) -> None:
+async def test_create_returns_201_with_defaults(
+    client: AsyncClient, auth_headers: Headers, db: AsyncSession, workspace: Workspace
+) -> None:
     r = await create(client, auth_headers, email="Dev@Example.COM")
     assert r.status_code == 201
     body = r.json()
     assert body["name"] == "mobile-app"
     assert body["email"] == "dev@example.com"  # stored lowercase
     assert body["status"] == "active"
-    assert body["rate_limit_per_min"] == 60
+    assert body["plan_id"] == str((await get_default_plan(db, workspace.id)).id)
 
 
-async def test_create_can_set_status_and_limit(client: AsyncClient, auth_headers: Headers) -> None:
-    r = await create(client, auth_headers, status="blocked", rate_limit_per_min=500)
+async def test_create_can_set_status_and_plan(
+    client: AsyncClient, auth_headers: Headers, db: AsyncSession, workspace: Workspace
+) -> None:
+    pro = await make_plan(db, workspace.id)
+    r = await create(client, auth_headers, status="blocked", plan_id=str(pro.id))
     assert r.json()["status"] == "blocked"
-    assert r.json()["rate_limit_per_min"] == 500
+    assert r.json()["plan_id"] == str(pro.id)
 
 
 @pytest.mark.parametrize(
@@ -113,8 +121,8 @@ async def test_create_can_set_status_and_limit(client: AsyncClient, auth_headers
         {"email": "not-an-email"},
         {"email": "dev@"},
         {"status": "deleted"},
-        {"rate_limit_per_min": 0},
-        {"rate_limit_per_min": 100_001},
+        {"plan_id": "not-a-uuid"},
+        {"plan_id": str(uuid.uuid4())},  # no such plan here
     ],
 )
 async def test_create_invalid_input_is_422(
@@ -180,20 +188,23 @@ async def test_block_and_unblock(client: AsyncClient, auth_headers: Headers) -> 
     blocked = await client.patch(path, json={"status": "blocked"}, headers=auth_headers)
     assert blocked.status_code == 200
     assert blocked.json()["status"] == "blocked"
-    assert blocked.json()["rate_limit_per_min"] == 60  # untouched
+    assert blocked.json()["plan_id"] == created["plan_id"]  # untouched
 
     unblocked = await client.patch(path, json={"status": "active"}, headers=auth_headers)
     assert unblocked.json()["status"] == "active"
 
 
-async def test_patch_rate_limit_and_email(client: AsyncClient, auth_headers: Headers) -> None:
+async def test_patch_plan_and_email(
+    client: AsyncClient, auth_headers: Headers, db: AsyncSession, workspace: Workspace
+) -> None:
+    pro = await make_plan(db, workspace.id)
     created = (await create(client, auth_headers)).json()
     r = await client.patch(
         f"{URL}/{created['id']}",
-        json={"rate_limit_per_min": 200, "email": "NEW@example.com"},
+        json={"plan_id": str(pro.id), "email": "NEW@example.com"},
         headers=auth_headers,
     )
-    assert r.json()["rate_limit_per_min"] == 200
+    assert r.json()["plan_id"] == str(pro.id)
     assert r.json()["email"] == "new@example.com"
     assert r.json()["name"] == "mobile-app"
 
@@ -205,7 +216,7 @@ async def test_patch_to_taken_name_is_409(client: AsyncClient, auth_headers: Hea
     assert r.status_code == 409
 
 
-@pytest.mark.parametrize("field", ["name", "email", "status", "rate_limit_per_min"])
+@pytest.mark.parametrize("field", ["name", "email", "status", "plan_id"])
 async def test_patch_explicit_null_is_422(
     client: AsyncClient, auth_headers: Headers, field: str
 ) -> None:

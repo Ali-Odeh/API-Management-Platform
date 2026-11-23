@@ -13,10 +13,11 @@ from app.consumers.schemas import ConsumerCreate, ConsumerUpdate
 from app.core.db import commit_or_raise
 from app.core.errors import AppError, ConflictError, NotFoundError
 from app.core.pagination import PageParams, paginate
+from app.plans import crud as plans_crud
 from app.workspaces.limits import check_quota
 
 # What a consumer's audit events record (blocking is a `status` change).
-AUDIT_FIELDS = ("name", "email", "status", "rate_limit_per_min")
+AUDIT_FIELDS = ("name", "email", "status", "plan_id")
 
 
 def _name_taken(name: str) -> dict[str, AppError]:
@@ -59,7 +60,13 @@ async def create_consumer(
     db: AsyncSession, workspace_id: uuid.UUID, *, data: ConsumerCreate, audit: AuditContext
 ) -> Consumer:
     await check_quota(db, workspace_id, "max_consumers")
-    consumer = Consumer(id=uuid.uuid4(), workspace_id=workspace_id, **data.model_dump())
+    plan = await plans_crud.plan_for_consumer(db, workspace_id, data.plan_id)
+    consumer = Consumer(
+        id=uuid.uuid4(),
+        workspace_id=workspace_id,
+        **data.model_dump(exclude={"plan_id"}),
+        plan_id=plan.id,
+    )
     db.add(consumer)
     _record(db, audit, consumer, "consumer.create", created(snapshot(consumer, AUDIT_FIELDS)))
     await commit_or_raise(db, _name_taken(data.name))
@@ -77,7 +84,10 @@ async def update_consumer(
 ) -> Consumer:
     consumer = await get_consumer(db, workspace_id=workspace_id, consumer_id=consumer_id)
     before = snapshot(consumer, AUDIT_FIELDS)
-    for field, value in data.model_dump(exclude_unset=True).items():
+    sent = data.model_dump(exclude_unset=True)
+    if "plan_id" in sent:
+        sent["plan_id"] = (await plans_crud.plan_for_consumer(db, workspace_id, sent["plan_id"])).id
+    for field, value in sent.items():
         setattr(consumer, field, value)
     if changes := updated(before, snapshot(consumer, AUDIT_FIELDS)):
         _record(db, audit, consumer, "consumer.update", changes)

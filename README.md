@@ -68,8 +68,8 @@ flowchart LR
 | **Config propagation** | An admin change reaches the gateway in about **4 ms** (only the changed workspace is sent) |
 | **Route matching** | 0.4 µs for 100 routes, no memory allocations (Go benchmark) |
 | **Gateway tests** | 575 tests and table cases, **98% coverage**, the race detector, 9 fuzz tests |
-| **Control plane tests** | 1,553 tests, **99% coverage**, mypy strict; permission, isolation and audit guards over every endpoint |
-| **End to end** | 58 stories on the real stack (GoTrue login with MFA, two tenants on their own subdomains, roles, audit log, invitations, lifecycle, limits, SSRF, load balancing, CORS, the request log and analytics), in CI on every push |
+| **Control plane tests** | 1,679 tests, **99% coverage**, mypy strict; permission, isolation and audit guards over every endpoint |
+| **End to end** | 62 stories on the real stack (GoTrue login with MFA, two tenants on their own subdomains, roles, audit log, invitations, lifecycle, limits, SSRF, load balancing, CORS, the request log and analytics), in CI on every push |
 
 The load test ran on one laptop with Docker Desktop; the differences between runs (with and without the gateway) are the meaningful part.
 
@@ -190,5 +190,5 @@ docker compose run --rm loadtest            # k6 load test
 
 The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT) is done** too: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), SSRF protection (MT.9), load balancing over several targets with active and passive health checks (MT.10), CORS per route with request body limits (MT.11), and the MT definition of done proven end to end on every push, with the load test measured again on a tenant's subdomain and two targets (MT.12). Next on the [roadmap](docs/ROADMAP.md):
 
-- **v2, in progress:** every request is in its workspace's request log, with analytics on top (V2.1, done: the gateway writes usage events to a Redis Stream, a worker stores them in Postgres by month). Next: plans with monthly quotas and per-IP protection (V2.2), then Prometheus metrics (V2.3).
+- **v2, in progress:** every request is in its workspace's request log, with analytics on top (V2.1, done: the gateway writes usage events to a Redis Stream, a worker stores them in Postgres by month). Plans with monthly quotas and per-IP protection (V2.2) are in too. Next: Prometheus metrics (V2.3).
 - Then the developer portal, and finally the React app.

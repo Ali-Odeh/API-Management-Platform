@@ -46,6 +46,12 @@ class Settings(BaseSettings):
     workspace_max_routes: int = Field(default=500, gt=0)
     workspace_max_consumers: int = Field(default=5000, gt=0)
 
+    # Protection of every workspace (V2.2): requests per minute from one
+    # client IP on a public route, and failed key attempts from one IP (in
+    # the gateway's 5-minute window) before that IP is refused for a while.
+    public_rate_limit_per_ip_per_min: int = Field(default=600, gt=0)
+    auth_fail_limit_per_ip: int = Field(default=20, gt=0)
+
     # A deleted workspace can be restored this long; then the purge job
     # deletes its data (decision 10).
     purge_after_days: int = Field(default=30, ge=1)

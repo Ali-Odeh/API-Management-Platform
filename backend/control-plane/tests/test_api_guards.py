@@ -40,6 +40,7 @@ from tests.factories import (
     make_api_key,
     make_consumer,
     make_member,
+    make_plan,
     make_route,
     make_service,
     make_target,
@@ -209,18 +210,19 @@ async def test_platform_endpoint_refuses_everyone_else(
 PLAN_MATRIX: dict[Role, set[str]] = {
     Role.VIEWER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read", "usage:read",
+        "members:read", "workspace:read", "usage:read", "plans:read",
     },
     Role.API_ADMIN: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read", "usage:read",
+        "members:read", "workspace:read", "usage:read", "plans:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
+        "plans:write",
     },
     Role.OWNER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read", "usage:read",
+        "members:read", "workspace:read", "usage:read", "plans:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
-        "members:write", "workspace:write", "workspace:delete",
+        "plans:write", "members:write", "workspace:write", "workspace:delete",
     },
 }  # fmt: skip
 
@@ -244,7 +246,8 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     """Workspace `acme` with one object of each kind: path parameter -> its id.
 
     The service has no routes (so it can be deleted) and two targets (so one
-    can be removed); the route uses another one.
+    can be removed); the route uses another one. The plan has no consumers
+    (so it can be deleted, and a consumer can move onto it).
     `user_id` is a Viewer to change or remove; `candidate@acme.test` is a user
     who isn't a member yet, to add.
     """
@@ -255,6 +258,7 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     route = await make_route(db, workspace.id, routed.id)
     consumer = await make_consumer(db, workspace.id)
     key = await make_api_key(db, workspace.id, consumer.id)
+    plan = await make_plan(db, workspace.id, name="Spare", rate_limit_per_min=100)
     viewer = await make_user(db, email="target@acme.test")
     await make_member(db, workspace.id, viewer.id, Role.VIEWER)
     await make_user(db, email="candidate@acme.test")
@@ -265,6 +269,7 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
         "route_id": route.id,
         "consumer_id": consumer.id,
         "key_id": key.id,
+        "plan_id": plan.id,
         "user_id": viewer.id,
     }
 
@@ -290,8 +295,12 @@ _VALID_BODIES: dict[Endpoint, Callable[[dict[str, uuid.UUID]], dict[str, Any]]] 
         "name": "new-app", "email": "dev@example.com",
     },
     ("PATCH", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): lambda ids: {
-        "rate_limit_per_min": 100,
+        "plan_id": str(ids["plan_id"]),
     },
+    ("POST", "/api/v1/workspaces/{slug}/plans"): lambda ids: {
+        "name": "Gold", "rate_limit_per_min": 100, "monthly_quota": 1000,
+    },
+    ("PATCH", "/api/v1/workspaces/{slug}/plans/{plan_id}"): lambda ids: {"rate_limit_per_min": 120},
     ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): lambda ids: {"name": "k"},
     ("POST", "/api/v1/workspaces/{slug}/members"): lambda ids: {
         "email": "candidate@acme.test", "role": "viewer",
@@ -391,6 +400,7 @@ async def tenants(db: AsyncSession) -> Tenants:
     target = await make_target(db, globex.id, service.id)
     consumer = await make_consumer(db, globex.id)
     key = await make_api_key(db, globex.id, consumer.id)
+    plan = await make_plan(db, globex.id)
     their_member = await make_user(db, email="member@globex.test")
     await make_member(db, globex.id, their_member.id, Role.VIEWER)
     theirs = {
@@ -399,6 +409,7 @@ async def tenants(db: AsyncSession) -> Tenants:
         "route_id": route.id,
         "consumer_id": consumer.id,
         "key_id": key.id,
+        "plan_id": plan.id,
         "user_id": their_member.id,
     }
     return Tenants(alice=alice, acme_id=acme.id, theirs=theirs)
@@ -422,7 +433,7 @@ ENDPOINTS_WITH_IDS = [e for e in WORKSPACE_ENDPOINTS if _path_ids(e[1])]
 
 def test_isolation_knows_every_kind_of_id() -> None:
     # A new kind of object in a URL must get an object of `globex` in `tenants`.
-    known = {"service_id", "target_id", "route_id", "consumer_id", "key_id", "user_id"}
+    known = {"service_id", "target_id", "route_id", "consumer_id", "key_id", "plan_id", "user_id"}
     assert {p for e in WORKSPACE_ENDPOINTS for p in _path_ids(e[1])} <= known
 
 
@@ -449,6 +460,11 @@ _REFERENCES: dict[Endpoint, tuple[str, dict[str, Any]]] = {
         {"path_prefix": "/v1/x", "methods": ["GET"]},
     ),
     ("PATCH", "/api/v1/workspaces/{slug}/routes/{route_id}"): ("service_id", {}),
+    ("POST", "/api/v1/workspaces/{slug}/consumers"): (
+        "plan_id",
+        {"name": "x", "email": "x@example.com"},
+    ),
+    ("PATCH", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): ("plan_id", {}),
 }
 
 
@@ -477,6 +493,8 @@ async def test_naming_another_workspaces_object_is_422(
     if "{route_id}" in path:  # point one of alice's own routes elsewhere
         service = await make_service(db, tenants.acme_id, name="own")
         ids["route_id"] = (await make_route(db, tenants.acme_id, service.id)).id
+    if "{consumer_id}" in path:  # move one of alice's own consumers onto their plan
+        ids["consumer_id"] = (await make_consumer(db, tenants.acme_id, name="own")).id
     payload = {**body, field: str(tenants.theirs[field])}
 
     r = await client.request(
@@ -553,6 +571,9 @@ _ACTIONS: dict[Endpoint, str] = {
     ("DELETE", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): "consumer.delete",
     ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): "key.create",
     ("DELETE", "/api/v1/workspaces/{slug}/keys/{key_id}"): "key.revoke",
+    ("POST", "/api/v1/workspaces/{slug}/plans"): "plan.create",
+    ("PATCH", "/api/v1/workspaces/{slug}/plans/{plan_id}"): "plan.update",
+    ("DELETE", "/api/v1/workspaces/{slug}/plans/{plan_id}"): "plan.delete",
     ("POST", "/api/v1/workspaces/{slug}/members"): "member.add",
     ("PATCH", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.role_change",
     ("DELETE", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.remove",
@@ -701,6 +722,7 @@ _TABLES = {
     "consumer": "consumers",
     "key": "api_keys",
     "member": "workspace_members",
+    "plan": "plans",
 }
 
 

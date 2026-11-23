@@ -1,12 +1,11 @@
+import uuid
 from enum import StrEnum
 
-from sqlalchemy import CheckConstraint, Enum, Integer, String, UniqueConstraint
+from sqlalchemy import Enum, ForeignKeyConstraint, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
 from app.core.models import TimestampMixin, UUIDPrimaryKeyMixin, WorkspaceMixin
-
-DEFAULT_RATE_LIMIT_PER_MIN = 60
 
 # Constraint names, used by crud.py to turn violations into clear 409 errors.
 UQ_CONSUMER_NAME = "uq_consumers_workspace_id_name"
@@ -26,7 +25,14 @@ class Consumer(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
         # Target for the (consumer_id, workspace_id) foreign key in api_keys,
         # which guarantees a key is always in its consumer's workspace.
         UniqueConstraint("id", "workspace_id", name="uq_consumers_id_workspace_id"),
-        CheckConstraint("rate_limit_per_min > 0", name="rate_limit_positive"),
+        # Composite FK: the plan is always in the consumer's own workspace.
+        # RESTRICT: a plan with consumers can't be deleted (V2.2).
+        ForeignKeyConstraint(
+            ["plan_id", "workspace_id"],
+            ["plans.id", "plans.workspace_id"],
+            name="fk_consumers_plan",
+            ondelete="RESTRICT",
+        ),
     )
 
     name: Mapped[str] = mapped_column(String(100))
@@ -44,8 +50,5 @@ class Consumer(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
         default=ConsumerStatus.ACTIVE,
         server_default=ConsumerStatus.ACTIVE.value,
     )
-    rate_limit_per_min: Mapped[int] = mapped_column(
-        Integer,
-        default=DEFAULT_RATE_LIMIT_PER_MIN,
-        server_default=str(DEFAULT_RATE_LIMIT_PER_MIN),
-    )
+    # Its rate limit and monthly quota come from the plan (V2.2).
+    plan_id: Mapped[uuid.UUID] = mapped_column(index=True)

@@ -387,3 +387,38 @@ func TestParseRouteBodyLimitAndCORS(t *testing.T) {
 		}
 	}
 }
+
+// V2.2: a key carries its plan's quota (null: none); the per-IP limits come
+// with the workspace (missing from an older control plane: none).
+func TestKeysCarryTheirPlansQuotaAndWorkspacesTheIPLimits(t *testing.T) {
+	quota := int64(1000)
+	zero := int64(0)
+	for name, tc := range map[string]struct {
+		in   wireKey
+		want int64
+		bad  bool
+	}{
+		"a quota":    {wireKey{KeyHash: "h", ConsumerStatus: "active", PlanID: "p1", MonthlyQuota: &quota}, 1000, false},
+		"no quota":   {wireKey{KeyHash: "h", ConsumerStatus: "active", PlanID: "p1"}, 0, false},
+		"zero quota": {wireKey{KeyHash: "h", ConsumerStatus: "active", MonthlyQuota: &zero}, 0, true},
+	} {
+		key, err := tc.in.toKey()
+		if (err != nil) != tc.bad || key.MonthlyQuota != tc.want {
+			t.Errorf("%s: %+v, %v", name, key, err)
+		}
+		if !tc.bad && key.PlanID != tc.in.PlanID {
+			t.Errorf("%s: plan %q", name, key.PlanID)
+		}
+	}
+
+	ws := wireWorkspace{ID: "w", Slug: "acme", Status: "active",
+		Limits: wireLimits{RateLimitPerMin: 10, MaxConcurrent: 5, IPRateLimitPerMin: 30, AuthFailLimit: 20}}
+	got, _, err := ws.toWorkspace()
+	if err != nil || got.Limits.IPRateLimitPerMin != 30 || got.Limits.AuthFailLimit != 20 {
+		t.Errorf("limits %+v, %v", got, err)
+	}
+	ws.Limits.AuthFailLimit = -1
+	if _, _, err := ws.toWorkspace(); err == nil {
+		t.Error("a negative auth_fail_limit was accepted")
+	}
+}

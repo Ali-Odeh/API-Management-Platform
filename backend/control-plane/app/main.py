@@ -25,6 +25,7 @@ from app.gotrue.client import GoTrueAdmin
 from app.keys.router import router as keys_router
 from app.members import crud as members_crud
 from app.members.router import router as members_router
+from app.plans.router import router as plans_router
 from app.routes.router import router as routes_router
 from app.services.router import router as services_router
 from app.usage.router import router as usage_router
@@ -123,6 +124,7 @@ app.include_router(keys_router, responses=_IN_WORKSPACE)
 app.include_router(members_router, responses=_IN_WORKSPACE)
 app.include_router(audit_router, responses=_IN_WORKSPACE)
 app.include_router(usage_router, responses=_IN_WORKSPACE)
+app.include_router(plans_router, responses=_IN_WORKSPACE)
 app.include_router(gateway_config_router)  # documents its own 401 (internal token)
 
 

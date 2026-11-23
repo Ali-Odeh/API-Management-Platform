@@ -141,7 +141,24 @@ async def _check_upgraded(before: dict[str, list[dict[str, Any]]], gotrue: FakeG
         # MT.10 moved each service's upstream_url into its one target, with the
         # service's id (the target id the gateway already used), weight 100.
         upstream_urls = {row["id"]: row.pop("upstream_url") for row in before["services"]}
+        # V2.2 moved each consumer's own limit onto a plan of its workspace.
+        limits = {row["id"]: row.pop("rate_limit_per_min") for row in before["consumers"]}
         assert _columns_of(after, before) == before
+        async with engine.connect() as conn:
+            plans = (
+                await conn.execute(
+                    text(
+                        "SELECT c.id, p.name, p.rate_limit_per_min, p.monthly_quota "
+                        "FROM consumers c JOIN plans p ON p.id = c.plan_id"
+                    )
+                )
+            ).all()
+            defaults = await conn.scalar(text("SELECT count(*) FROM plans WHERE is_default"))
+        # No consumer's limit changed: 120/min is its own legacy plan, no quota.
+        assert {(p.id, p.name, p.rate_limit_per_min, p.monthly_quota) for p in plans} == {
+            (CONSUMER_ID, f"Legacy {limits[CONSUMER_ID]}/min", limits[CONSUMER_ID], None)
+        }
+        assert defaults == 1  # `default` got its default plan
         async with engine.connect() as conn:
             targets = (await conn.execute(text("SELECT * FROM service_targets"))).all()
         assert [(t.id, t.service_id, t.url, t.weight, t.is_active) for t in targets] == [

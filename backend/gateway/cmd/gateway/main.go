@@ -165,11 +165,12 @@ func serve(ctx context.Context, cfg settings.Settings, log *slog.Logger) int {
 // recorder (V2.1), which writes it to Redis in the background.
 func apiHandler(d deps) http.Handler {
 	log := d.log
+	failures, _ := d.limiter.(middleware.FailureCounter) // the real limiter counts wrong keys
 	afterMatch := middleware.Chain(
 		proxy.NewForwarder(log, d.egress, d.targets),
 		middleware.CORS(log),
 		middleware.BodyLimit(log),
-		middleware.Auth(log),
+		middleware.Auth(log, failures),
 		middleware.RateLimit(d.limiter, log),
 		middleware.InFlight(&inflight.Limiter{}, log),
 	)
