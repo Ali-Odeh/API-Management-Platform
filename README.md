@@ -18,6 +18,7 @@ It is a learning project, built step by step with production habits: tests at ev
 - **Reverse proxy:** per-route timeouts (`504`), dead backends (`502`), optional prefix stripping, trusted `X-Forwarded-*` headers. The backend never sees the API key; it gets `X-Consumer-ID`.
 - **Observability:** a request ID on every call, and one JSON log line per request with the route, the consumer, the status and how long the backend and the gateway each took.
 - **Login:** GoTrue handles passwords, TOTP MFA, rotating refresh tokens and emails; the control plane verifies its tokens and decides what each person may do from its own tables. A disabled person is refused on their very next request.
+- **Developer portal:** developers sign up on their own GoTrue (open sign-up, confirmed by email; never mixed with workspace members) and browse each workspace's catalog: the APIs it has published, with their OpenAPI documents. Drafts stay hidden, deprecated APIs are marked.
 - **Live configuration:** admins change services, routes, consumers and keys through a REST API (GoTrue JWT). The gateway long-polls the control plane and swaps in the new config without locks: a revoked key stops working in about 70 ms.
 
 ## Architecture
@@ -102,7 +103,8 @@ docker compose up -d --build --wait
 | Gateway (send API calls here) | `http://localhost:8081` |
 | Admin API and Swagger UI | `http://localhost:8000/docs` |
 | Login (GoTrue) | `http://localhost:9999` |
-| Emails GoTrue sends (Mailpit) | `http://localhost:8025` |
+| Developer sign-up and login (the portal's own GoTrue) | `http://localhost:9998` |
+| Emails both GoTrues send (Mailpit) | `http://localhost:8025` |
 | Mock backend (an echo service) | `http://localhost:9000` |
 
 ## Try it (2 minutes, PowerShell)
@@ -167,8 +169,8 @@ Some decisions worth a look (all of them, with reasons, are in the [decisions lo
 | Folder | What |
 | --- | --- |
 | [`backend/gateway/`](backend/gateway) | The Go gateway: `cmd/gateway` (main) and `internal/` (config, proxy, middleware, ratelimit, ...) |
-| [`backend/control-plane/`](backend/control-plane) | The FastAPI admin API, organized by feature (users, services, routes, consumers, keys, gateway_config) |
-| [`backend/auth/`](backend/auth) | Prepares GoTrue's own database on the shared Postgres |
+| [`backend/control-plane/`](backend/control-plane) | The FastAPI admin API and the developer portal API, organized by feature (users, services, routes, consumers, keys, plans, usage, apis, developers, portal, gateway_config) |
+| [`backend/auth/`](backend/auth) | Prepares both GoTrue databases (members' and developers') on the shared Postgres |
 | [`backend/mock-backend/`](backend/mock-backend) | A small echo service to proxy to (two copies in Compose, for load balancing) |
 | [`e2e/`](e2e) | End-to-end tests against the whole stack |
 | [`loadtest/`](loadtest) | The k6 load test and its results |
@@ -190,5 +192,5 @@ docker compose run --rm loadtest            # k6 load test
 
 The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT) is done** too: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), SSRF protection (MT.9), load balancing over several targets with active and passive health checks (MT.10), CORS per route with request body limits (MT.11), and the MT definition of done proven end to end on every push, with the load test measured again on a tenant's subdomain and two targets (MT.12). Next on the [roadmap](docs/ROADMAP.md):
 
-- **v2, in progress:** every request is in its workspace's request log, with analytics on top (V2.1, done: the gateway writes usage events to a Redis Stream, a worker stores them in Postgres by month). Plans with monthly quotas and per-IP protection (V2.2) and Prometheus metrics (V2.3) are in too: **v2 is complete**. Next: the developer portal.
-- Then the developer portal, and finally the React app.
+- **v2 is complete:** every request is in its workspace's request log, with analytics on top (V2.1: the gateway writes usage events to a Redis Stream, a worker stores them in Postgres by month), plans with monthly quotas and per-IP protection (V2.2), and Prometheus metrics (V2.3).
+- **The developer portal, in progress:** developers sign up on their own GoTrue (open sign-up, email confirmation) and browse each workspace's published APIs with their OpenAPI documents (P.1, done). Next: self-service apps and keys (P.2), then the React app.
