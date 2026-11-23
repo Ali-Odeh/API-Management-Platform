@@ -4,7 +4,9 @@ import { shouldRetry } from '@/app/query-client'
 import { authErrorMessage } from './auth/errors'
 import { needsNewPassword, parseAuthRedirect } from './auth/redirect'
 import { formatDate, formatDateTime, formatNumber, formatRelative, safeNextPath } from './format'
+import { errorRate, formatMs } from './metrics'
 import { decide, type Access } from './permissions'
+import { rangeQuery } from './time-range'
 import { AuthApiError, AuthRetryableFetchError } from '@supabase/auth-js'
 
 describe('ApiError', () => {
@@ -109,6 +111,28 @@ describe('format', () => {
     expect(safeNextPath('https://evil.example')).toBe('/')
     expect(safeNextPath('//evil.example')).toBe('/')
     expect(safeNextPath('/\\evil.example')).toBe('/')
+  })
+})
+
+describe('metrics', () => {
+  it('formats error rates and durations', () => {
+    expect(errorRate({ requests: 0, client_errors: 0, server_errors: 0 })).toBe('—')
+    expect(errorRate({ requests: 3, client_errors: 1, server_errors: 0 })).toBe('33%')
+    expect(errorRate({ requests: 1000, client_errors: 5, server_errors: 1 })).toBe('0.6%')
+    expect(formatMs(null)).toBe('—')
+    expect(formatMs(0.04)).toBe('< 0.1 ms')
+    expect(formatMs(3.62)).toBe('3.6 ms')
+    expect(formatMs(48.4)).toBe('48 ms')
+  })
+
+  it('makes a period end at the next whole minute', () => {
+    const q = rangeQuery('24h', Date.parse('2026-11-23T10:00:30Z'))
+    expect(q).toEqual({
+      from: '2026-11-22T10:01:00.000Z',
+      to: '2026-11-23T10:01:00.000Z',
+      interval: 'hour',
+    })
+    expect(rangeQuery('30d').interval).toBe('day')
   })
 })
 

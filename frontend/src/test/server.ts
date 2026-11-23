@@ -108,7 +108,21 @@ export function resetState() {
   state.workspaces = new Map([['acme', makeWorkspaceDetail()]])
 }
 
+const NO_LATENCY = { p50_ms: null, p95_ms: null, p99_ms: null }
+const NO_COUNTS = { requests: 0, client_errors: 0, server_errors: 0, latency: NO_LATENCY }
+
 const defaultHandlers = [
+  // A workspace without traffic, unless a test says otherwise.
+  http.get(api('/api/v1/workspaces/:slug/analytics/traffic'), () =>
+    json({ start: STAMP, end: STAMP, interval: 'hour', totals: NO_COUNTS, buckets: [] }),
+  ),
+  http.get(api('/api/v1/workspaces/:slug/analytics/routes'), () =>
+    json({ start: STAMP, end: STAMP, items: [] }),
+  ),
+  http.get(api('/api/v1/workspaces/:slug/analytics/consumers'), () =>
+    json({ start: STAMP, end: STAMP, items: [] }),
+  ),
+  http.get(api('/api/v1/workspaces/:slug/request-logs'), () => json(page([]))),
   http.get(api('/api/v1/me'), () => json(state.me)),
   http.get(api('/api/v1/me/workspaces'), () => json(page(state.myWorkspaces))),
   http.get(api('/api/v1/workspaces/:slug'), ({ params }) => {

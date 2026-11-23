@@ -22,6 +22,22 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, 'src') },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // Libraries in their own files: they change less often than the
+        // app, so browsers keep them cached across deploys.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (/[\\/](recharts|d3-[a-z-]+|victory-vendor)[\\/]/.test(id)) return 'charts'
+          if (/[\\/](radix-ui|@radix-ui)[\\/]/.test(id)) return 'radix'
+          if (/[\\/]@supabase[\\/]/.test(id)) return 'auth'
+          if (/[\\/](react|react-dom|react-router|scheduler)[\\/]/.test(id)) return 'react'
+          return 'vendor'
+        },
+      },
+    },
+  },
   server: {
     host: true,
     port: 5173,

@@ -9,7 +9,7 @@ and removed afterwards, like in the API stories.
 import os
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 import httpx
@@ -98,21 +98,33 @@ def platform_admin_ui(
 
 
 @pytest.fixture
-def member(gotrue: GoTrue, admin: httpx.Client, owner: httpx.Client) -> Iterator[Account]:
-    """A new person who is a Viewer of the tests' workspace; removed afterwards."""
+def new_member(
+    gotrue: GoTrue, admin: httpx.Client, owner: httpx.Client
+) -> Iterator[Callable[[str], Account]]:
+    """Makes new people with a role in the tests' workspace; all removed afterwards."""
     del owner  # makes sure the workspace exists
-    email = f"e2e-ui-{uuid.uuid4().hex[:8]}@example.test"
-    password = uuid.uuid4().hex
-    gotrue.ensure_account(email, password)
-    r = admin.post(f"/workspaces/{TENANT}/members", json={"email": email, "role": "viewer"})
-    assert r.status_code == 201, r.text
-    user_id = r.json()["user_id"]
-    try:
-        yield Account(email, password)
-    finally:
+    made: list[tuple[str, str]] = []
+
+    def make(role: str) -> Account:
+        email = f"e2e-ui-{uuid.uuid4().hex[:8]}@example.test"
+        password = uuid.uuid4().hex
+        gotrue.ensure_account(email, password)
+        r = admin.post(f"/workspaces/{TENANT}/members", json={"email": email, "role": role})
+        assert r.status_code == 201, r.text
+        made.append((email, r.json()["user_id"]))
+        return Account(email, password)
+
+    yield make
+    for email, user_id in made:
         admin.delete(f"/workspaces/{TENANT}/members/{user_id}")
         if (account := gotrue.account_id(email)) is not None:
             gotrue.delete_account(account)
+
+
+@pytest.fixture
+def member(new_member: Callable[[str], Account]) -> Account:
+    """A new person who is a Viewer of the tests' workspace."""
+    return new_member("viewer")
 
 
 def sign_in(page: Page, account: Account, path: str = "/") -> None:

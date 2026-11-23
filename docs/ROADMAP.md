@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 23, 2026 · **Current step:** FE.1 done; next: FE.2
+**Last updated:** Nov 23, 2026 · **Current step:** FE.2 done; next: FE.3
 
 ## Overview
 
@@ -15,7 +15,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅✅ 12/12 | ✅ Done |
 | v2: Usage, plans and metrics (backend) | ✅✅✅ 3/3 | ✅ Done |
 | Portal: developer portal (backend) | ✅✅ 2/2 | ✅ Done: **the backend is complete** |
-| FE: Frontend | ✅⬜⬜⬜ 1/4 | 🔨 In progress |
+| FE: Frontend | ✅✅⬜⬜ 2/4 | 🔨 In progress |
 | *Out of plan* | — | Kept for reference, not scheduled (see "Out of plan" below) |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
@@ -58,10 +58,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 68 passing (about 30 s), the whole app rendered against a fake GoTrue and the API faked with MSW: login with and without MFA (wrong code, several authenticators), invitation and recovery links, MFA set-up and removal, password change, sign-out everywhere, my workspaces and leaving one, the role and permission rules, a suspended workspace, the API client's 401 and `user_disabled` handling |
-| Coverage | 97.5% lines (minimum 90%) |
+| Tests | 121 passing (about 50 s), the whole app rendered against a fake GoTrue and the API faked with MSW: login with and without MFA (wrong code, several authenticators), invitation and recovery links, MFA set-up and removal, password change, sign-out everywhere, my workspaces and leaving one, the role and permission rules, a suspended workspace, the API client's 401 and `user_disabled` handling; every dashboard page (FE.2): creating and editing services with targets, routes with CORS and body limits, consumers, keys shown once and revoked, plans, members and roles, the audit log and request log with filters, settings and deleting with the slug typed, APIs with their routes and OpenAPI document, the apps queue; a Viewer seeing no controls |
+| Coverage | 97.5% lines (minimum 90%; functions 91%, branches 92%) |
 | prettier, eslint (strict type-checked), tsc | clean |
-| Browser stories | 3 pass in about 37 s (`docker compose run --rm e2e-browser`) |
+| Browser stories | 5 pass in about 40 s (`docker compose run --rm e2e-browser`) |
 | Run all checks | `.\frontend\scripts\check.ps1` (`-Fix` to format and regenerate the API types) |
 
 **Both**
@@ -420,7 +420,7 @@ Decided Nov 22, 2026: not scheduled, kept in PLAN.md for reference and marked *O
 | # | Step | Status |
 | --- | --- | --- |
 | FE.1 | Foundation: Vite, React, TypeScript, layout, GoTrue login and MFA, account page, workspace switcher, role-aware routing and buttons, generated API types (Vite proxies `/api`, so no CORS is needed) | ✅ |
-| FE.2 | Dashboard: Overview, Services and service detail (targets, health), Routes (CORS, body limit), Consumers and keys, Members, Activity, Settings, Plans, Logs | ⬜ |
+| FE.2 | Dashboard: Overview, Services and service detail (targets, health), Routes (CORS, body limit), Consumers and keys, Members, Activity, Settings, Plans, Logs | ✅ |
 | FE.3 | Platform: Workspaces (create, suspend, restore, limits), Users (disable, enable), platform activity | ⬜ |
 | FE.4 | Developer portal: sign-up and login, API catalog, API docs with try-it, own keys, own usage | ⬜ |
 
@@ -431,6 +431,12 @@ The FE steps are built on stacked branches (`fe1-foundation` → `fe2-dashboard`
 **Done when:** a member and the Platform Admin can sign in (with the authenticator code when they have one), choose a password from an invitation or recovery link, set up and remove MFA, see their workspaces with their role, leave one, and open a workspace's dashboard frame; the frontend checks pass with coverage ≥ 90%; browser stories run on the stack and in CI.
 
 **Status:** ✅ Done (Nov 23). Commits `916bd32` (scaffold), `1cf1f03` (login, MFA, account, workspaces, layout), `d9bff87` (choosing between authenticators), `e79d70d` (types keep defaulted fields optional), `a9a0fd9` (the `frontend` service), `a11441c` (browser stories), `3eefffa` (CI). Checked by hand in a browser against the real stack: sign-in, MFA set-up with the QR code, sign-in with the code, removing the factor.
+
+### FE.2 Dashboard
+
+**Done when:** a workspace member can do everything their role allows from the dashboard: services and targets, routes (CORS, body limit), consumers and keys, plans, APIs and the apps queue, members, settings, and read the overview, activity and logs; a Viewer sees every page without controls; tests and checks pass.
+
+**Status:** ✅ Done (Nov 23). Commits `e45e3ce` (overview, services, routes, consumers, keys, plans, shared tables and dialogs), `5efc60e` (members, activity, logs, settings), `5f5a65b` (APIs and apps), `548134f` (browser stories). Checked by hand against the real stack: a service, route, consumer and key made in the UI, 11 calls through the gateway, then the overview (11 requests, 27% errors, 1 active consumer), the chart, the logs and the activity showing them.
 
 ## Decisions log
 
@@ -705,3 +711,8 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 23 | FE.1 | API types are generated with `--default-non-nullable false` | A request field with a server default is optional, as the API says; the default made every create body repeat all defaults |
 | Nov 23 | FE.1 | Frontend checks run locally with Node (`frontend/scripts/check.ps1`), like the gateway's with Go; tests render the whole app against a fake GoTrue and the API faked with MSW. Coverage gate: lines and statements 90%, functions 85%, branches 80%; the generated shadcn/ui components are left out of coverage and of the strict lint rules | No stack needed for unit tests; the generated components aren't ours to test |
 | Nov 23 | FE.1 | Browser stories with Python Playwright in their own container (`e2e-browser`, test profile), reusing the e2e helpers; the plain e2e run skips them | The same fixtures (GoTrue admin, TOTP) as the API stories; Chromium stays out of the e2e image |
+| Nov 23 | FE.2 | The dashboard gets two pages PLAN.md didn't list: **APIs** (drafts, routes, the OpenAPI document, publish and deprecate) and **Apps** (the approval queue); the sidebar is Overview, Services, Routes, Consumers, Plans, APIs, Apps, Members, Activity, Logs, Settings | The backend has these features (P.1, P.2) and nothing else could use them: without the APIs page nothing ever reaches the portal |
+| Nov 23 | FE.2 | A service's page shows its targets' settings (weight, on/off) and the health-check settings, not live health | The control plane doesn't know a target's health: only each gateway does, in memory. Showing it needs a gateway endpoint or metric, not built |
+| Nov 23 | FE.2 | Overview: "active consumers" counts consumers with requests in the period (from the analytics), "recent errors" are the 4xx/5xx among the newest 100 request-log rows | The API has no count of active consumers and no status-range filter on the request log; both come from data the page already reads |
+| Nov 23 | FE.2 | Pages load when first opened, and libraries are built into their own chunks (react, radix, auth, charts, vendor) | The first download stays small, no chunk is over 500 kB, and library files stay cached across app changes |
+| Nov 23 | FE.2 | A 422's field errors appear under their fields (`lib/forms.ts`); other refusals show above the buttons, in words for the short codes (`quota_exceeded`, `last_owner`, ...) | The server's checks (an internal upstream, an email domain) are the final word; the person sees them where they typed |

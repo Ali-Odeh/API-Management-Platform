@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import { http } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { renderSignedIn } from '@/test/render'
@@ -81,7 +81,9 @@ describe('my workspaces', () => {
     const { user, router } = renderSignedIn('/')
     await user.click(await screen.findByRole('button', { name: 'Select a workspace' }))
     await user.click(await screen.findByRole('menuitem', { name: 'Globex' }))
-    expect(router.state.location.pathname).toBe('/w/globex')
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/w/globex')
+    })
   })
 
   it('changes the theme', async () => {
