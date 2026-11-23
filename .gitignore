@@ -44,3 +44,4 @@ Thumbs.db
 
 # ---- Backups (scripts/backup.ps1): real data, never in git ----
 backups/
+frontend/coverage/
