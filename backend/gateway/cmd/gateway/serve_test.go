@@ -272,3 +272,87 @@ func TestServeRateLimitsWithRealRedis(t *testing.T) {
 	}
 	t.Fatal("Redis was slower than 50 ms in every attempt")
 }
+
+// The real program writes a usage event for each request to the Redis
+// stream (V2.1), the last ones while it stops included. Skipped without
+// REDIS_TEST_URL.
+func TestServeWritesUsageEventsToRedis(t *testing.T) {
+	redisURL := os.Getenv("REDIS_TEST_URL")
+	if redisURL == "" {
+		t.Skip("REDIS_TEST_URL not set")
+	}
+	rdb, err := ratelimit.NewClient(redisURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rdb.Close()
+	// The rate-limit test above drains this consumer's bucket.
+	clearBucket(t, rdb, "rl:"+servedConsumer)
+	clearBucket(t, rdb, "rlws:"+servedWorkspace)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+	cfg := settings.Settings{
+		ListenAddr: freeAddr(t), ShutdownTimeout: 2 * time.Second,
+		ControlPlaneURL: fakeControlPlane(t, backend.URL, 1000).URL, InternalToken: "s3cret", Egress: testBackends,
+		ConfigWait: time.Second, RedisURL: settings.Secret(redisURL),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	exit := make(chan int, 1)
+	go func() { exit <- serve(ctx, cfg, slog.New(slog.DiscardHandler)) }()
+
+	// Its own request ids: other runs' entries may be in the shared stream.
+	run := fmt.Sprintf("usage-test-%d", time.Now().UnixNano())
+	call := func(i int) int {
+		req, _ := http.NewRequest("GET", "http://"+cfg.ListenAddr+"/v1/orders/1", nil)
+		req.Header.Set("X-API-Key", testKey)
+		req.Header.Set("X-Request-ID", fmt.Sprintf("%s-%d", run, i))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		if status := call(0); status != 0 && status != http.StatusServiceUnavailable {
+			break
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		if status := call(i); status != http.StatusOK {
+			t.Fatalf("request %d: %d", i, status)
+		}
+	}
+	http.DefaultClient.CloseIdleConnections()
+	cancel()
+	if code := <-exit; code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+
+	// Events are flushed every second; stopping writes what was queued, so
+	// they are all there as soon as serve has returned.
+	entries, err := rdb.XRevRangeN(context.Background(), "usage:events", "+", "-", 1000).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := map[string]redis.XMessage{}
+	for _, e := range entries {
+		if id, _ := e.Values["request_id"].(string); len(id) > len(run) && id[:len(run)] == run {
+			found[id] = e
+		}
+	}
+	for i := 1; i <= 3; i++ {
+		e, ok := found[fmt.Sprintf("%s-%d", run, i)]
+		if !ok {
+			t.Errorf("no usage event for request %d", i)
+			continue
+		}
+		if e.Values["workspace_id"] != servedWorkspace || e.Values["consumer_id"] != servedConsumer ||
+			e.Values["route_id"] != "r1" || e.Values["status"] != "200" {
+			t.Errorf("request %d: event %v", i, e.Values)
+		}
+		rdb.XDel(context.Background(), "usage:events", e.ID)
+	}
+}

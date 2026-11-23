@@ -26,6 +26,7 @@ docker compose ps
 | `auth` | `auth:9999` | `localhost:9999` | GoTrue: login, MFA, refresh, invitations |
 | `audit-retention` | — | — | Deletes audit events older than `AUDIT_RETENTION_DAYS` (default 365), at start and daily |
 | `workspace-purge` | — | — | Purges workspaces deleted more than `PURGE_AFTER_DAYS` (default 30) ago, at start and daily |
+| `usage-ingest` | — | — | Reads the gateway's usage events from Redis into the request log; drops months older than `REQUEST_LOG_RETENTION_DAYS` (default 90) daily (V2.1) |
 | `mailpit` | `mailpit:1025` (SMTP) | `localhost:8025` | Catches every email GoTrue sends (web UI) |
 | `postgres` | `postgres:5432` | `localhost:5434` | Databases `apim` (config) and `auth` (GoTrue's own), for pgAdmin / DBeaver |
 | `redis` | `redis:6379` | `localhost:6379` | Rate-limit buckets |
@@ -170,7 +171,7 @@ add them to `.env` only to change them (see `.env.example`).
 
 ## Control plane (FastAPI)
 
-Four database logins (PLAN.md section 5): the API uses `apim_app`
+Five database logins (PLAN.md section 5): the API uses `apim_app`
 (`DATABASE_URL`), which can't change or delete audit events; migrations and
 the startup setup (`scripts/prepare_database.py`) run in the one-shot
 `control-plane-db-init` job with `MIGRATION_DATABASE_URL`. The API container
@@ -187,6 +188,23 @@ restore period (`purge_after`) is over. Run a round by hand with:
 ```powershell
 docker compose exec workspace-purge python -m scripts.workspace_purge --once
 ```
+
+The `usage-ingest` container uses `apim_ingest` (insert request log rows, set
+keys' `last_used_at`; nothing else). The gateway writes one usage event per
+request to the Redis stream `usage:events` in small batches; the worker
+stores them a second or two later and logs its totals once a minute. To see
+how far behind it is, and what it did:
+
+```powershell
+docker compose exec redis redis-cli XLEN usage:events          # waiting events (0 when caught up)
+docker compose exec redis redis-cli XINFO GROUPS usage:events  # the group, pending entries, lag
+docker compose logs usage-ingest --since 5m
+```
+
+Events written while the worker is down wait in the stream (up to about
+200,000), and it stores them when it comes back. Its tests read a real
+stream in Redis database 15 (`REDIS_TEST_URL`, set for the database setup
+container in Compose and in CI), each test with its own stream key.
 
 The code is mounted into the container and uvicorn runs with `--reload`, so
 saving a `.py` file restarts the app. The database setup job applies

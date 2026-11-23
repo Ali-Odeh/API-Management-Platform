@@ -8,7 +8,14 @@ import (
 	"time"
 
 	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/reqctx"
+	"github.com/Ali-Odeh/API-Management-Platform/backend/gateway/internal/usage"
 )
+
+// UsageRecorder takes each answered request's usage event (V2.1).
+// *usage.Recorder fits it; Record must never block.
+type UsageRecorder interface {
+	Record(usage.Event)
+}
 
 // Logger writes one JSON line per request once the answer is done
 // (PLAN.md section 7):
@@ -21,7 +28,11 @@ import (
 // gateway_ms is the difference: the time the gateway itself added. The query
 // string is never logged (it can hold tokens or personal data), and neither
 // is the API key.
-func Logger(log *slog.Logger) Middleware {
+//
+// The same facts go to recorder as a usage event (V2.1), for every request
+// whose workspace is known: a request refused before that (unknown host) is
+// in the log only. A nil recorder records nothing.
+func Logger(log *slog.Logger, recorder UsageRecorder) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -35,7 +46,11 @@ func Logger(log *slog.Logger) Middleware {
 			// aborts a broken answer (http.ErrAbortHandler).
 			defer func() {
 				p := recover()
-				logRequest(log, r, info, sw, time.Since(start), p != nil)
+				latency := time.Since(start)
+				logRequest(log, r, info, sw, latency, p != nil)
+				if recorder != nil && info.Workspace != nil {
+					recorder.Record(usageEvent(r, info, sw, start, latency))
+				}
 				if p != nil {
 					panic(p) // let net/http close the connection
 				}
@@ -72,6 +87,28 @@ func logRequest(log *slog.Logger, r *http.Request, info *reqctx.Info, sw *status
 		attrs = append(attrs, slog.Bool("aborted", true))
 	}
 	log.LogAttrs(r.Context(), slog.LevelInfo, "request", attrs...)
+}
+
+// usageEvent is the request log line as a usage event, timed at its start.
+func usageEvent(r *http.Request, info *reqctx.Info, sw *statusWriter, start time.Time, latency time.Duration) usage.Event {
+	return usage.Event{
+		ID:          usage.NewID(start),
+		Time:        start,
+		WorkspaceID: info.Workspace.ID,
+		RequestID:   info.RequestID,
+		Method:      r.Method,
+		Path:        r.URL.Path,
+		RouteID:     info.RouteID,
+		TargetID:    info.TargetID,
+		ConsumerID:  info.ConsumerID,
+		KeyID:       info.KeyID,
+		Status:      sw.finalStatus(),
+		LatencyMS:   millis(latency),
+		UpstreamMS:  millis(info.Upstream),
+		Bytes:       sw.bytes,
+		ClientIP:    clientIP(r),
+		RateLimit:   info.RateLimit,
+	}
 }
 
 // millis turns a duration into milliseconds with microsecond precision

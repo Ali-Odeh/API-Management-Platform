@@ -26,6 +26,7 @@ from app.keys import models as key_models  # noqa: F401
 from app.members import models as member_models  # noqa: F401
 from app.routes import models as route_models  # noqa: F401
 from app.services import models as service_models  # noqa: F401
+from app.usage import models as usage_models  # noqa: F401
 from app.users import models as user_models  # noqa: F401
 from app.workspaces import models as workspace_models  # noqa: F401
 

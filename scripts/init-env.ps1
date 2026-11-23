@@ -65,6 +65,7 @@ $values = @{
     DATABASE_URL            = "postgresql+asyncpg://apim_app:$(New-Secret 16)@postgres:5432/${pgDb}"
     AUDIT_RETENTION_DATABASE_URL = "postgresql+asyncpg://apim_retention:$(New-Secret 16)@postgres:5432/${pgDb}"
     PURGE_DATABASE_URL      = "postgresql+asyncpg://apim_purge:$(New-Secret 16)@postgres:5432/${pgDb}"
+    INGEST_DATABASE_URL     = "postgresql+asyncpg://apim_ingest:$(New-Secret 16)@postgres:5432/${pgDb}"
     INTERNAL_TOKEN          = New-Secret 24
     PLATFORM_ADMIN_EMAIL    = "admin@example.com"
     PLATFORM_ADMIN_PASSWORD = $adminPassword

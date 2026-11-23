@@ -27,6 +27,7 @@ from app.members import crud as members_crud
 from app.members.router import router as members_router
 from app.routes.router import router as routes_router
 from app.services.router import router as services_router
+from app.usage.router import router as usage_router
 from app.users import crud as users_crud
 from app.users.router import router as users_router
 from app.workspaces.crud import get_or_create_default_workspace
@@ -121,6 +122,7 @@ app.include_router(consumers_router, responses=_IN_WORKSPACE)
 app.include_router(keys_router, responses=_IN_WORKSPACE)
 app.include_router(members_router, responses=_IN_WORKSPACE)
 app.include_router(audit_router, responses=_IN_WORKSPACE)
+app.include_router(usage_router, responses=_IN_WORKSPACE)
 app.include_router(gateway_config_router)  # documents its own 401 (internal token)
 
 

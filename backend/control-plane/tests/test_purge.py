@@ -31,7 +31,7 @@ PURGE_URL = os.environ["PURGE_DATABASE_URL"]
 
 
 async def _populated(db: AsyncSession, slug: str) -> Workspace:
-    """A workspace with one of everything, and an event in its own log."""
+    """A workspace with one of everything, an event in its own log and a request logged."""
     workspace = await make_workspace(db, slug=slug)
     service = await make_service(db, workspace.id)
     await make_route(db, workspace.id, service.id)
@@ -46,6 +46,17 @@ async def _populated(db: AsyncSession, slug: str) -> Workspace:
                 "INSERT INTO audit_events (id, workspace_id, actor_type, action, target_type, "
                 "changes) VALUES (gen_random_uuid(), :ws, 'user', 'service.create', 'service', "
                 "'{}')"
+            ),
+            {"ws": workspace.id},
+        )
+        # The worker inserts these as apim_ingest; the month's partition
+        # comes from the same function it calls.
+        await conn.execute(text("SELECT ensure_request_log_partitions(ARRAY[current_date])"))
+        await conn.execute(
+            text(
+                "INSERT INTO request_logs (event_id, ts, workspace_id, method, path, status, "
+                "latency_ms, upstream_ms, bytes) VALUES (gen_random_uuid(), now(), :ws, 'GET', "
+                "'/v1/orders', 200, 1, 0, 0)"
             ),
             {"ws": workspace.id},
         )

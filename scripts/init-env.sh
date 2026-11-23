@@ -55,6 +55,7 @@ sed \
   -e "s|^DATABASE_URL=\$|DATABASE_URL=postgresql+asyncpg://apim_app:$(secret 16)@postgres:5432/$pg_db|" \
   -e "s|^AUDIT_RETENTION_DATABASE_URL=\$|AUDIT_RETENTION_DATABASE_URL=postgresql+asyncpg://apim_retention:$(secret 16)@postgres:5432/$pg_db|" \
   -e "s|^PURGE_DATABASE_URL=\$|PURGE_DATABASE_URL=postgresql+asyncpg://apim_purge:$(secret 16)@postgres:5432/$pg_db|" \
+  -e "s|^INGEST_DATABASE_URL=\$|INGEST_DATABASE_URL=postgresql+asyncpg://apim_ingest:$(secret 16)@postgres:5432/$pg_db|" \
   -e "s|^INTERNAL_TOKEN=\$|INTERNAL_TOKEN=$(secret 24)|" \
   -e "s|^PLATFORM_ADMIN_EMAIL=\$|PLATFORM_ADMIN_EMAIL=admin@example.com|" \
   -e "s|^PLATFORM_ADMIN_PASSWORD=\$|PLATFORM_ADMIN_PASSWORD=$admin_password|" \

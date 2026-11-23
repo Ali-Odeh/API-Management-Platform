@@ -12,13 +12,19 @@ import pytest
 from sqlalchemy import make_url
 
 from app.core.db import driver_dsn
-from app.core.db_roles import APP_ROLE, PURGE_ROLE, RETENTION_ROLE, prepare_roles
+from app.core.db_roles import APP_ROLE, INGEST_ROLE, PURGE_ROLE, RETENTION_ROLE, prepare_roles
 from tests.conftest import OWNER_URL
 
 APP_URL = os.environ["DATABASE_URL"]
 RETENTION_URL = os.environ["AUDIT_RETENTION_DATABASE_URL"]
 PURGE_URL = os.environ["PURGE_DATABASE_URL"]
-URLS = {"app_url": APP_URL, "retention_url": RETENTION_URL, "purge_url": PURGE_URL}
+INGEST_URL = os.environ["INGEST_DATABASE_URL"]
+URLS = {
+    "app_url": APP_URL,
+    "retention_url": RETENTION_URL,
+    "purge_url": PURGE_URL,
+    "ingest_url": INGEST_URL,
+}
 
 
 async def _connect(url: str) -> asyncpg.Connection:
@@ -33,6 +39,7 @@ async def test_prepare_is_safe_to_repeat_and_every_login_works() -> None:
         (APP_URL, APP_ROLE),
         (RETENTION_URL, RETENTION_ROLE),
         (PURGE_URL, PURGE_ROLE),
+        (INGEST_URL, INGEST_ROLE),
     ):
         conn = await _connect(url)
         try:
@@ -45,7 +52,7 @@ async def test_prepare_is_safe_to_repeat_and_every_login_works() -> None:
             await conn.close()
 
 
-@pytest.mark.parametrize("which", ["app", "retention", "purge"])
+@pytest.mark.parametrize("which", ["app", "retention", "purge", "ingest"])
 async def test_a_url_with_another_login_is_refused(which: str) -> None:
     # The grants are made for these exact role names; any other login in the
     # URL would run the API without them (or as the owner).

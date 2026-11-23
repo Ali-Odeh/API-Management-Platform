@@ -118,7 +118,7 @@ func TestBodyLimitWithoutARouteIs500(t *testing.T) {
 
 func TestLoggerShowsTheBodyLimitWhenHit(t *testing.T) {
 	var logs jsonLogger
-	h := Logger(logs.logger())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Logger(logs.logger(), nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqctx.From(r.Context()).BodyLimit.Store(1024)
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
 	}))
@@ -128,7 +128,7 @@ func TestLoggerShowsTheBodyLimitWhenHit(t *testing.T) {
 	}
 
 	logs.buf.Reset()
-	Logger(logs.logger())(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
+	Logger(logs.logger(), nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).
 		ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 	if _, ok := logs.lines(t)[0]["body_limit"]; ok {
 		t.Error("body_limit logged for a request that wasn't refused")
