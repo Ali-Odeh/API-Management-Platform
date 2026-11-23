@@ -18,6 +18,7 @@ from app.workspaces.models import Workspace, WorkspaceStatus
 from app.workspaces.purge import KEPT_TABLES, TENANT_TABLES, purge_due, run
 from tests.conftest import OWNER_URL
 from tests.factories import (
+    make_api,
     make_api_key,
     make_consumer,
     make_member,
@@ -34,7 +35,8 @@ async def _populated(db: AsyncSession, slug: str) -> Workspace:
     """A workspace with one of everything, an event in its own log and a request logged."""
     workspace = await make_workspace(db, slug=slug)
     service = await make_service(db, workspace.id)
-    await make_route(db, workspace.id, service.id)
+    route = await make_route(db, workspace.id, service.id)
+    await make_api(db, workspace.id, route_ids=(route.id,))
     consumer = await make_consumer(db, workspace.id)
     await make_api_key(db, workspace.id, consumer.id)
     person = await make_user(db, email=f"owner@{slug}.test")

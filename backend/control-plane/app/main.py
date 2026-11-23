@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.apis.router import router as apis_router
 from app.audit import crud as audit
 from app.audit.context import AuditContext
 from app.audit.router import router as audit_router
@@ -16,6 +17,7 @@ from app.core.openapi import error_responses
 from app.core.permissions import Role
 from app.core.request_id import RequestIdMiddleware
 from app.core.request_log import RequestLogMiddleware, configure_logging
+from app.developers.router import router as developers_router
 from app.gateway_config import crud as gateway_config_crud
 from app.gateway_config.notifier import ConfigNotifier
 from app.gateway_config.provider import ConfigProvider
@@ -26,6 +28,7 @@ from app.keys.router import router as keys_router
 from app.members import crud as members_crud
 from app.members.router import router as members_router
 from app.plans.router import router as plans_router
+from app.portal.router import router as portal_router
 from app.routes.router import router as routes_router
 from app.services.router import router as services_router
 from app.usage.router import router as usage_router
@@ -125,6 +128,18 @@ app.include_router(members_router, responses=_IN_WORKSPACE)
 app.include_router(audit_router, responses=_IN_WORKSPACE)
 app.include_router(usage_router, responses=_IN_WORKSPACE)
 app.include_router(plans_router, responses=_IN_WORKSPACE)
+app.include_router(apis_router, responses=_IN_WORKSPACE)
+app.include_router(developers_router, responses=_SIGNED_IN)
+# The developer portal (P.1): only the developers' own GoTrue tokens open it.
+app.include_router(
+    portal_router,
+    responses=error_responses(
+        {
+            401: "Missing, invalid or expired token of the developers' GoTrue (auth-portal)",
+            403: "developer_blocked or account_conflict",
+        }
+    ),
+)
 app.include_router(gateway_config_router)  # documents its own 401 (internal token)
 
 

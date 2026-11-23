@@ -5,10 +5,340 @@
         "enum": [
           "user",
           "platform_admin",
-          "system"
+          "system",
+          "developer"
         ],
         "title": "ActorType",
         "type": "string"
+      },
+      "ApiCreate": {
+        "description": "A new API starts as a draft: only the workspace's members see it.",
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "examples": [
+              "Orders API"
+            ],
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+            "title": "Name",
+            "type": "string"
+          },
+          "openapi": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "description": "An OpenAPI 3.x (or Swagger 2.0) document as JSON, at most 1048576 bytes",
+                "examples": [
+                  {
+                    "info": {
+                      "title": "Orders",
+                      "version": "1"
+                    },
+                    "openapi": "3.1.0",
+                    "paths": {}
+                  }
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openapi"
+          },
+          "route_ids": {
+            "default": [],
+            "description": "The routes the API is made of",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 1000,
+            "title": "Route Ids",
+            "type": "array"
+          },
+          "slug": {
+            "description": "Lowercase letters, digits, '-' and '_'",
+            "examples": [
+              "orders"
+            ],
+            "maxLength": 100,
+            "minLength": 1,
+            "pattern": "^[a-z0-9_-]+$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "slug"
+        ],
+        "title": "ApiCreate",
+        "type": "object"
+      },
+      "ApiOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "has_openapi": {
+            "title": "Has Openapi",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "openapi": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openapi"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/ApiRouteOut"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApiStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "description",
+          "status",
+          "has_openapi",
+          "routes",
+          "created_at",
+          "updated_at",
+          "openapi"
+        ],
+        "title": "ApiOut",
+        "type": "object"
+      },
+      "ApiRouteOut": {
+        "properties": {
+          "auth_required": {
+            "title": "Auth Required",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "path_prefix": {
+            "title": "Path Prefix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "path_prefix",
+          "methods",
+          "auth_required"
+        ],
+        "title": "ApiRouteOut",
+        "type": "object"
+      },
+      "ApiStatus": {
+        "enum": [
+          "draft",
+          "published",
+          "deprecated"
+        ],
+        "title": "ApiStatus",
+        "type": "string"
+      },
+      "ApiSummary": {
+        "description": "An API in a list: everything but its (possibly large) document.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "has_openapi": {
+            "title": "Has Openapi",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/ApiRouteOut"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApiStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "description",
+          "status",
+          "has_openapi",
+          "routes",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ApiSummary",
+        "type": "object"
+      },
+      "ApiUpdate": {
+        "description": "`route_ids` replaces the API's routes as a whole; `openapi: null` removes the\ndocument. `status` moves along the lifecycle: draft -> published, published ->\ndeprecated, deprecated -> published. The slug never changes.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "examples": [
+                  "Orders API"
+                ],
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "^[^\\x00-\\x1f\\x7f]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "openapi": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "description": "An OpenAPI 3.x (or Swagger 2.0) document as JSON, at most 1048576 bytes",
+                "examples": [
+                  {
+                    "info": {
+                      "title": "Orders",
+                      "version": "1"
+                    },
+                    "openapi": "3.1.0",
+                    "paths": {}
+                  }
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openapi"
+          },
+          "route_ids": {
+            "anyOf": [
+              {
+                "description": "The routes the API is made of",
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route Ids"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ApiStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "ApiUpdate",
+        "type": "object"
       },
       "AuditEventOut": {
         "properties": {
@@ -181,6 +511,173 @@
           "start"
         ],
         "title": "Bucket",
+        "type": "object"
+      },
+      "CatalogApi": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "has_openapi": {
+            "title": "Has Openapi",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "openapi": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Openapi"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogRoute"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApiStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "description",
+          "status",
+          "has_openapi",
+          "routes",
+          "updated_at",
+          "openapi"
+        ],
+        "title": "CatalogApi",
+        "type": "object"
+      },
+      "CatalogApiSummary": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "has_openapi": {
+            "title": "Has Openapi",
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "routes": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogRoute"
+            },
+            "title": "Routes",
+            "type": "array"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApiStatus"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "slug",
+          "description",
+          "status",
+          "has_openapi",
+          "routes",
+          "updated_at"
+        ],
+        "title": "CatalogApiSummary",
+        "type": "object"
+      },
+      "CatalogRoute": {
+        "description": "Where to call an API through the gateway, on the workspace's host.",
+        "properties": {
+          "auth_required": {
+            "title": "Auth Required",
+            "type": "boolean"
+          },
+          "methods": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Methods",
+            "type": "array"
+          },
+          "path_prefix": {
+            "title": "Path Prefix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path_prefix",
+          "methods",
+          "auth_required"
+        ],
+        "title": "CatalogRoute",
+        "type": "object"
+      },
+      "CatalogWorkspaceOut": {
+        "properties": {
+          "apis": {
+            "title": "Apis",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "apis"
+        ],
+        "title": "CatalogWorkspaceOut",
         "type": "object"
       },
       "ConfigAnswer": {
@@ -564,6 +1061,60 @@
           "latency"
         ],
         "title": "Counts",
+        "type": "object"
+      },
+      "DeveloperOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeveloperStatus"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "status",
+          "created_at"
+        ],
+        "title": "DeveloperOut",
+        "type": "object"
+      },
+      "DeveloperStatus": {
+        "enum": [
+          "active",
+          "blocked"
+        ],
+        "title": "DeveloperStatus",
+        "type": "string"
+      },
+      "DeveloperUpdate": {
+        "description": "PATCH /api/v1/developers/{id}: `{\"status\": \"blocked\"}` closes the portal to them.",
+        "properties": {
+          "status": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeveloperStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "DeveloperUpdate",
         "type": "object"
       },
       "ErrorOut": {
@@ -1376,6 +1927,27 @@
         "title": "MyWorkspaceOut",
         "type": "object"
       },
+      "Page_ApiSummary_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ApiSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[ApiSummary]",
+        "type": "object"
+      },
       "Page_AuditEventOut_": {
         "properties": {
           "items": {
@@ -1397,6 +1969,48 @@
         "title": "Page[AuditEventOut]",
         "type": "object"
       },
+      "Page_CatalogApiSummary_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogApiSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[CatalogApiSummary]",
+        "type": "object"
+      },
+      "Page_CatalogWorkspaceOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogWorkspaceOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[CatalogWorkspaceOut]",
+        "type": "object"
+      },
       "Page_ConsumerOut_": {
         "properties": {
           "items": {
@@ -1416,6 +2030,27 @@
           "total"
         ],
         "title": "Page[ConsumerOut]",
+        "type": "object"
+      },
+      "Page_DeveloperOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/DeveloperOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "Page[DeveloperOut]",
         "type": "object"
       },
       "Page_KeyOut_": {
@@ -3339,6 +3974,11 @@
         "name": "X-Internal-Token",
         "type": "apiKey"
       },
+      "DeveloperBearer": {
+        "description": "An access token of the developers' GoTrue (auth-portal)",
+        "scheme": "bearer",
+        "type": "http"
+      },
       "HTTPBearer": {
         "scheme": "bearer",
         "type": "http"
@@ -3561,6 +4201,199 @@
         ]
       }
     },
+    "/api/v1/developers": {
+      "get": {
+        "description": "Everyone who signed up on the developer portal, newest first.",
+        "operationId": "list_developers_api_v1_developers_get",
+        "parameters": [
+          {
+            "description": "Only active or blocked",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DeveloperStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only active or blocked",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_DeveloperOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Developers",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
+    "/api/v1/developers/{developer_id}": {
+      "patch": {
+        "description": "Block or unblock a developer: `{\"status\": \"blocked\"}`.",
+        "operationId": "update_developer_api_v1_developers__developer_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "developer_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Developer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeveloperUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeveloperOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Developer not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Developer",
+        "tags": [
+          "platform"
+        ]
+      }
+    },
     "/api/v1/me": {
       "get": {
         "description": "The signed-in person (their row is created on their first request).",
@@ -3773,6 +4606,332 @@
         "tags": [
           "members",
           "me"
+        ]
+      }
+    },
+    "/api/v1/portal/me": {
+      "get": {
+        "description": "The signed-in developer (their row is made on their first request).",
+        "operationId": "me_api_v1_portal_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeveloperOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/workspaces": {
+      "get": {
+        "description": "Workspaces that publish APIs, by name, with how many.",
+        "operationId": "list_workspaces_api_v1_portal_workspaces_get",
+        "parameters": [
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CatalogWorkspaceOut_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "List Workspaces",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/workspaces/{slug}/apis": {
+      "get": {
+        "description": "A workspace's catalog: its published and deprecated APIs, by name.",
+        "operationId": "list_apis_api_v1_portal_workspaces__slug__apis_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_CatalogApiSummary_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "List Apis",
+        "tags": [
+          "portal"
+        ]
+      }
+    },
+    "/api/v1/portal/workspaces/{slug}/apis/{api_id}": {
+      "get": {
+        "description": "One API of the catalog, with its OpenAPI document.",
+        "operationId": "get_api_api_v1_portal_workspaces__slug__apis__api_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "api_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Api Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogApi"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired token of the developers' GoTrue (auth-portal)"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "developer_blocked or account_conflict"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace or API not found (drafts too)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "DeveloperBearer": []
+          }
+        ],
+        "summary": "Get Api",
+        "tags": [
+          "portal"
         ]
       }
     },
@@ -4737,6 +5896,478 @@
         "summary": "Traffic",
         "tags": [
           "usage"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/apis": {
+      "get": {
+        "description": "The workspace's APIs in every status, by name, without their documents.",
+        "operationId": "list_apis_api_v1_workspaces__slug__apis_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page number, starting at 1",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Page number, starting at 1",
+              "minimum": 1,
+              "title": "Page",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "page_size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Items per page",
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Page Size",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ApiSummary_"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Apis",
+        "tags": [
+          "apis"
+        ]
+      },
+      "post": {
+        "description": "A new API, as a draft: publish it with `PATCH {\"status\": \"published\"}`.",
+        "operationId": "create_api_api_v1_workspaces__slug__apis_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Workspace not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Slug already used in this workspace, a route already in another API, or a move the lifecycle doesn't allow (api_draft, api_published, api_deprecated)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Invalid input, or a route that isn't in this workspace"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Api",
+        "tags": [
+          "apis"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{slug}/apis/{api_id}": {
+      "delete": {
+        "description": "Delete an API. Its routes stay and keep working at the gateway.",
+        "operationId": "delete_api_api_v1_workspaces__slug__apis__api_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "api_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Api Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "API not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Api",
+        "tags": [
+          "apis"
+        ]
+      },
+      "get": {
+        "operationId": "get_api_api_v1_workspaces__slug__apis__api_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "api_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Api Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "API not found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Api",
+        "tags": [
+          "apis"
+        ]
+      },
+      "patch": {
+        "operationId": "update_api_api_v1_workspaces__slug__apis__api_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "api_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Api Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Missing, invalid or expired GoTrue access token"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "API not found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Slug already used in this workspace, a route already in another API, or a move the lifecycle doesn't allow (api_draft, api_published, api_deprecated)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Invalid input, or a route that isn't in this workspace"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Api",
+        "tags": [
+          "apis"
         ]
       }
     },

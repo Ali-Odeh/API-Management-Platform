@@ -16,6 +16,7 @@ class ActorType(StrEnum):
     USER = "user"  # a person acting within their own role
     PLATFORM_ADMIN = "platform_admin"  # acting by platform power (or on a platform endpoint)
     SYSTEM = "system"  # startup, scripts and jobs
+    DEVELOPER = "developer"  # a portal developer (P.1): actor_user_id is their developers row
 
 
 _ACTOR_TYPES_SQL = ", ".join(f"'{t}'" for t in ActorType)

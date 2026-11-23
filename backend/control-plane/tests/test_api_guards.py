@@ -7,6 +7,9 @@ lock, and these fail without anyone writing a new test.
   on a workspace through `require_permission(...)`.
 - Permission guard: every role gets exactly what the permission map promises.
 - Isolation: a member of workspace A can never reach workspace B's objects.
+- Two identities: a member's token never opens the portal API, and a
+  developer's token never opens anything else (P.1). The portal's own
+  rules are in test_portal_guards.py.
 """
 
 import json
@@ -30,15 +33,19 @@ from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.core.deps import PermissionCheck, require_platform_admin
 from app.core.permissions import ROLE_PERMISSIONS, Permission, Role
+from app.developers.models import Developer
 from app.keys.models import ApiKey
 from app.main import app
+from app.portal.deps import get_developer
 from app.users.models import User
 from app.workspaces.crud import WORKSPACE_NOT_FOUND
 from app.workspaces.models import Workspace, WorkspaceStatus
 from tests.conftest import OWNER_URL
 from tests.factories import (
+    make_api,
     make_api_key,
     make_consumer,
+    make_developer,
     make_member,
     make_plan,
     make_route,
@@ -47,7 +54,7 @@ from tests.factories import (
     make_user,
     make_workspace,
 )
-from tests.fakes import bearer, make_token
+from tests.fakes import bearer, make_developer_token, make_token
 
 Endpoint = tuple[str, str]  # (method, path template)
 
@@ -94,6 +101,11 @@ WORKSPACE: dict[Endpoint, Permission] = {
     (m, r.path): perms[0] for r in _routes() if (perms := _permissions(r)) for m in r.methods
 }
 WORKSPACE_ENDPOINTS = sorted(WORKSPACE)
+# The developer portal (P.1): a developer's token, and nothing else, opens these.
+PORTAL = sorted(
+    (m, r.path) for r in _routes() if get_developer in _dependencies(r.dependant)
+    for m in r.methods
+)  # fmt: skip
 
 
 def _url(path: str, slug: str = "default", ids: dict[str, uuid.UUID] | None = None) -> str:
@@ -118,6 +130,7 @@ def test_discovery_finds_the_endpoints() -> None:
     assert ("PATCH", "/api/v1/users/{user_id}") in PLATFORM
     assert ("POST", "/api/v1/workspaces") in PLATFORM
     assert ("GET", "/internal/config") in INTERNAL
+    assert ("GET", "/api/v1/portal/workspaces/{slug}/apis") in PORTAL
 
 
 def test_every_endpoint_is_public_signed_in_or_internal() -> None:
@@ -129,8 +142,15 @@ def test_every_endpoint_is_public_signed_in_or_internal() -> None:
 def test_every_signed_in_endpoint_declares_who_may_call_it() -> None:
     # Signed in is not enough: each endpoint is about the caller, a platform
     # endpoint, or declares a workspace permission.
-    undeclared = [e for e in SIGNED_IN if e not in SELF | set(PLATFORM) | set(WORKSPACE)]
+    undeclared = [
+        e for e in SIGNED_IN if e not in SELF | set(PLATFORM) | set(WORKSPACE) | set(PORTAL)
+    ]
     assert undeclared == []
+
+
+def test_the_portal_lives_under_its_own_prefix() -> None:
+    # Everything under /portal is for developers, and only that.
+    assert {e for e in SIGNED_IN if e[1].startswith("/api/v1/portal/")} == set(PORTAL)
 
 
 def test_workspace_endpoints_live_under_their_workspace() -> None:
@@ -180,6 +200,47 @@ async def test_signed_in_endpoint_rejects_the_service_role_key(
     assert r.status_code == 401
 
 
+# ---- Two identities: members' tokens and developers' tokens never cross (P.1)
+
+ADMIN_API = [e for e in SIGNED_IN if e not in set(PORTAL)]
+
+
+@pytest.mark.parametrize(("method", "path"), ADMIN_API)
+async def test_a_developer_token_never_opens_the_admin_api(
+    client: AsyncClient, db: AsyncSession, method: str, path: str
+) -> None:
+    # Even a developer whose email and account id are the Platform Admin's:
+    # another GoTrue, another secret and audience, so not the same person.
+    admin = await make_user(db, email="platform@example.com", is_platform_admin=True)
+    assert admin.auth_user_id is not None
+    await make_developer(db, email=admin.email, auth_user_id=admin.auth_user_id)
+    token = make_developer_token(admin.auth_user_id, admin.email, aal="aal2")
+    r = await client.request(method, _url(path), json={}, headers=bearer(token))
+    assert r.status_code == 401
+
+
+@pytest.mark.parametrize(("method", "path"), PORTAL)
+async def test_a_member_token_never_opens_the_portal_api(
+    client: AsyncClient, db: AsyncSession, method: str, path: str
+) -> None:
+    # The Platform Admin with MFA, signed by the members' GoTrue: nobody here.
+    admin = await make_user(db, email="platform@example.com", is_platform_admin=True)
+    r = await client.request(method, _url(path), json={}, headers=_headers(admin, mfa=True))
+    assert r.status_code == 401
+    assert await db.scalar(select(func.count()).select_from(Developer)) == 0
+
+
+@pytest.mark.parametrize(("method", "path"), PORTAL)
+async def test_the_portal_audience_alone_is_not_enough(
+    client: AsyncClient, method: str, path: str
+) -> None:
+    # Signed with the members' secret: the developers' GoTrue signs with its own.
+    secret = get_settings().gotrue_jwt_secret
+    token = make_developer_token(uuid.uuid4(), "dev@portal.test", secret=secret)
+    r = await client.request(method, _url(path), json={}, headers=bearer(token))
+    assert r.status_code == 401
+
+
 # ---- Platform endpoints: Platform Admin with MFA (decision 12)
 
 
@@ -210,19 +271,19 @@ async def test_platform_endpoint_refuses_everyone_else(
 PLAN_MATRIX: dict[Role, set[str]] = {
     Role.VIEWER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read", "usage:read", "plans:read",
+        "members:read", "workspace:read", "usage:read", "plans:read", "apis:read",
     },
     Role.API_ADMIN: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read", "usage:read", "plans:read",
+        "members:read", "workspace:read", "usage:read", "plans:read", "apis:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
-        "plans:write",
+        "plans:write", "apis:write",
     },
     Role.OWNER: {
         "services:read", "routes:read", "consumers:read", "keys:read",
-        "members:read", "workspace:read", "usage:read", "plans:read",
+        "members:read", "workspace:read", "usage:read", "plans:read", "apis:read",
         "services:write", "routes:write", "consumers:write", "keys:write", "audit:read",
-        "plans:write", "members:write", "workspace:write", "workspace:delete",
+        "plans:write", "apis:write", "members:write", "workspace:write", "workspace:delete",
     },
 }  # fmt: skip
 
@@ -247,7 +308,8 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
 
     The service has no routes (so it can be deleted) and two targets (so one
     can be removed); the route uses another one. The plan has no consumers
-    (so it can be deleted, and a consumer can move onto it).
+    (so it can be deleted, and a consumer can move onto it). The API is a
+    draft (so it can be published) made of the route.
     `user_id` is a Viewer to change or remove; `candidate@acme.test` is a user
     who isn't a member yet, to add.
     """
@@ -259,6 +321,7 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
     consumer = await make_consumer(db, workspace.id)
     key = await make_api_key(db, workspace.id, consumer.id)
     plan = await make_plan(db, workspace.id, name="Spare", rate_limit_per_min=100)
+    api = await make_api(db, workspace.id, route_ids=(route.id,))
     viewer = await make_user(db, email="target@acme.test")
     await make_member(db, workspace.id, viewer.id, Role.VIEWER)
     await make_user(db, email="candidate@acme.test")
@@ -270,9 +333,12 @@ async def acme(db: AsyncSession) -> dict[str, uuid.UUID]:
         "consumer_id": consumer.id,
         "key_id": key.id,
         "plan_id": plan.id,
+        "api_id": api.id,
         "user_id": viewer.id,
     }
 
+
+OPENAPI = {"openapi": "3.1.0", "info": {"title": "Billing", "version": "1"}, "paths": {}}
 
 # A valid body for every workspace endpoint that takes one, so an allowed
 # request must really succeed (2xx), not just get past the check.
@@ -301,6 +367,10 @@ _VALID_BODIES: dict[Endpoint, Callable[[dict[str, uuid.UUID]], dict[str, Any]]] 
         "name": "Gold", "rate_limit_per_min": 100, "monthly_quota": 1000,
     },
     ("PATCH", "/api/v1/workspaces/{slug}/plans/{plan_id}"): lambda ids: {"rate_limit_per_min": 120},
+    ("POST", "/api/v1/workspaces/{slug}/apis"): lambda ids: {
+        "name": "Billing", "slug": "billing", "openapi": OPENAPI,
+    },
+    ("PATCH", "/api/v1/workspaces/{slug}/apis/{api_id}"): lambda ids: {"status": "published"},
     ("POST", "/api/v1/workspaces/{slug}/consumers/{consumer_id}/keys"): lambda ids: {"name": "k"},
     ("POST", "/api/v1/workspaces/{slug}/members"): lambda ids: {
         "email": "candidate@acme.test", "role": "viewer",
@@ -401,6 +471,7 @@ async def tenants(db: AsyncSession) -> Tenants:
     consumer = await make_consumer(db, globex.id)
     key = await make_api_key(db, globex.id, consumer.id)
     plan = await make_plan(db, globex.id)
+    api = await make_api(db, globex.id, route_ids=(route.id,))
     their_member = await make_user(db, email="member@globex.test")
     await make_member(db, globex.id, their_member.id, Role.VIEWER)
     theirs = {
@@ -410,6 +481,8 @@ async def tenants(db: AsyncSession) -> Tenants:
         "consumer_id": consumer.id,
         "key_id": key.id,
         "plan_id": plan.id,
+        "api_id": api.id,
+        "route_ids": route.id,  # a body field holding a list of route ids
         "user_id": their_member.id,
     }
     return Tenants(alice=alice, acme_id=acme.id, theirs=theirs)
@@ -433,7 +506,10 @@ ENDPOINTS_WITH_IDS = [e for e in WORKSPACE_ENDPOINTS if _path_ids(e[1])]
 
 def test_isolation_knows_every_kind_of_id() -> None:
     # A new kind of object in a URL must get an object of `globex` in `tenants`.
-    known = {"service_id", "target_id", "route_id", "consumer_id", "key_id", "plan_id", "user_id"}
+    known = {
+        "service_id", "target_id", "route_id", "consumer_id", "key_id", "plan_id", "api_id",
+        "user_id",
+    }  # fmt: skip
     assert {p for e in WORKSPACE_ENDPOINTS for p in _path_ids(e[1])} <= known
 
 
@@ -465,17 +541,19 @@ _REFERENCES: dict[Endpoint, tuple[str, dict[str, Any]]] = {
         {"name": "x", "email": "x@example.com"},
     ),
     ("PATCH", "/api/v1/workspaces/{slug}/consumers/{consumer_id}"): ("plan_id", {}),
+    ("POST", "/api/v1/workspaces/{slug}/apis"): ("route_ids", {"name": "X", "slug": "x"}),
+    ("PATCH", "/api/v1/workspaces/{slug}/apis/{api_id}"): ("route_ids", {}),
 }
 
 
 def _body_id_fields(method: str, path: str) -> set[str]:
-    """Fields of the request body that name another object (`..._id`)."""
+    """Fields of the request body that name other objects (`..._id`, `..._ids`)."""
     body = _operation(method, path).get("requestBody")
     if body is None:
         return set()
     ref = body["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
     properties = app.openapi()["components"]["schemas"][ref]["properties"]
-    return {name for name in properties if name.endswith("_id")}
+    return {name for name in properties if name.endswith(("_id", "_ids"))}
 
 
 def test_isolation_knows_every_body_reference() -> None:
@@ -495,7 +573,10 @@ async def test_naming_another_workspaces_object_is_422(
         ids["route_id"] = (await make_route(db, tenants.acme_id, service.id)).id
     if "{consumer_id}" in path:  # move one of alice's own consumers onto their plan
         ids["consumer_id"] = (await make_consumer(db, tenants.acme_id, name="own")).id
-    payload = {**body, field: str(tenants.theirs[field])}
+    if "{api_id}" in path:  # put their route into one of alice's own APIs
+        ids["api_id"] = (await make_api(db, tenants.acme_id, slug="own")).id
+    their_id = str(tenants.theirs[field])
+    payload = {**body, field: [their_id] if field.endswith("_ids") else their_id}
 
     r = await client.request(
         method, _url(path, "acme", ids), json=payload, headers=_headers(tenants.alice)
@@ -544,7 +625,8 @@ async def test_filtering_by_another_workspaces_object_is_422(
 # ---- Audit guard: every change leaves exactly one event (decision 11)
 
 MUTATING = sorted(e for e in SIGNED_IN if e[0] in {"POST", "PATCH", "DELETE"})
-GETS = sorted(e for e in SIGNED_IN if e[0] == "GET")
+# Portal reads are checked in test_portal_guards.py, with a developer's token.
+GETS = sorted(e for e in SIGNED_IN if e[0] == "GET" and e not in set(PORTAL))
 
 # The event each mutating endpoint writes. A new one must be added here, which
 # is the point: an endpoint without an audit event can't go unnoticed.
@@ -574,6 +656,10 @@ _ACTIONS: dict[Endpoint, str] = {
     ("POST", "/api/v1/workspaces/{slug}/plans"): "plan.create",
     ("PATCH", "/api/v1/workspaces/{slug}/plans/{plan_id}"): "plan.update",
     ("DELETE", "/api/v1/workspaces/{slug}/plans/{plan_id}"): "plan.delete",
+    ("POST", "/api/v1/workspaces/{slug}/apis"): "api.create",
+    ("PATCH", "/api/v1/workspaces/{slug}/apis/{api_id}"): "api.update",
+    ("DELETE", "/api/v1/workspaces/{slug}/apis/{api_id}"): "api.delete",
+    ("PATCH", "/api/v1/developers/{developer_id}"): "developer.block",
     ("POST", "/api/v1/workspaces/{slug}/members"): "member.add",
     ("PATCH", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.role_change",
     ("DELETE", "/api/v1/workspaces/{slug}/members/{user_id}"): "member.remove",
@@ -596,6 +682,7 @@ _PLATFORM_BODIES: dict[Endpoint, Callable[[User], dict[str, Any] | None]] = {
         "name": "Newco", "slug": "newco", "owner_email": person.email,
     },
     ("PATCH", "/api/v1/users/{user_id}"): lambda person: {"is_active": False},
+    ("PATCH", "/api/v1/developers/{developer_id}"): lambda person: {"status": "blocked"},
     ("POST", "/api/v1/workspaces/{slug}/suspend"): lambda person: {"reason": "abuse"},
     ("POST", "/api/v1/workspaces/{slug}/unsuspend"): lambda person: None,
     ("POST", "/api/v1/workspaces/{slug}/restore"): lambda person: None,
@@ -619,6 +706,7 @@ class Actors:
     platform_admin: User  # not a member of `acme`
     person: User  # the one platform endpoints act on
     leaver: User  # a Viewer of `acme` who leaves it
+    developer: Developer  # the one PATCH /developers acts on
 
 
 @pytest.fixture
@@ -629,7 +717,14 @@ async def actors(db: AsyncSession, acme: dict[str, uuid.UUID]) -> Actors:
     person = await make_user(db, email="person@example.com")
     leaver = await make_user(db, email="leaver@acme.test")
     await make_member(db, acme["workspace_id"], leaver.id, Role.VIEWER)
-    return Actors(owner=owner, platform_admin=platform_admin, person=person, leaver=leaver)
+    developer = await make_developer(db)
+    return Actors(
+        owner=owner,
+        platform_admin=platform_admin,
+        person=person,
+        leaver=leaver,
+        developer=developer,
+    )
 
 
 async def _mutate(
@@ -649,7 +744,8 @@ async def _mutate(
     if endpoint == LEAVE:
         return await client.request(method, _url(path, "acme"), headers=_headers(actors.leaver))
     body = _PLATFORM_BODIES[endpoint](actors.person)
-    url = _url(path, "acme", ids={"user_id": actors.person.id})
+    ids = {"user_id": actors.person.id, "developer_id": actors.developer.id}
+    url = _url(path, "acme", ids=ids)
     return await client.request(
         method, url, json=body, headers=_headers(actors.platform_admin, mfa=True)
     )
@@ -723,6 +819,8 @@ _TABLES = {
     "key": "api_keys",
     "member": "workspace_members",
     "plan": "plans",
+    "api": "apis",
+    "developer": "developers",
 }
 
 

@@ -28,6 +28,8 @@ logger = logging.getLogger("workspace_purge")
 TENANT_TABLES = (
     "request_logs",  # no foreign keys: first or last, either works
     "api_keys",
+    "api_routes",  # before the APIs and routes they link
+    "apis",
     "routes",
     "service_targets",
     "services",

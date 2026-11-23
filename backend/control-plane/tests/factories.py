@@ -15,10 +15,12 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.apis.models import Api, ApiRoute, ApiStatus
 from app.consumers.models import Consumer
 from app.core.db import violated_constraint
 from app.core.permissions import Role
 from app.core.security import generate_api_key, hash_api_key
+from app.developers.models import Developer
 from app.keys.models import KEY_PREFIX_LENGTH, ApiKey
 from app.members.models import WorkspaceMember
 from app.plans.crud import add_default_plan, get_default_plan
@@ -137,6 +139,31 @@ async def make_api_key(
     fields.setdefault("key_prefix", raw[:KEY_PREFIX_LENGTH])
     fields.setdefault("key_hash", hash_api_key(raw))
     return await _save(db, ApiKey(workspace_id=workspace_id, consumer_id=consumer_id, **fields))
+
+
+async def make_developer(
+    db: AsyncSession, email: str = "dev@portal.test", **fields: Any
+) -> Developer:
+    """A developer, as after their first portal request."""
+    fields.setdefault("auth_user_id", uuid.uuid4())
+    return await _save(db, Developer(email=email, **fields))
+
+
+async def make_api(
+    db: AsyncSession,
+    workspace_id: uuid.UUID,
+    slug: str = "orders",
+    *,
+    status: ApiStatus = ApiStatus.DRAFT,
+    route_ids: tuple[uuid.UUID, ...] = (),
+    **fields: Any,
+) -> Api:
+    """An API (a draft unless `status` says otherwise) made of `route_ids`."""
+    fields.setdefault("name", slug.title())
+    api = await _save(db, Api(workspace_id=workspace_id, slug=slug, status=status, **fields))
+    for route_id in route_ids:
+        await _save(db, ApiRoute(api_id=api.id, route_id=route_id, workspace_id=workspace_id))
+    return api
 
 
 async def expect_violation(db: AsyncSession, constraint: str, action: Awaitable[Any]) -> None:

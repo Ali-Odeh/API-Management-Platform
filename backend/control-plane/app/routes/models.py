@@ -50,6 +50,8 @@ class Route(Base, UUIDPrimaryKeyMixin, TimestampMixin, WorkspaceMixin):
         # Unique per workspace: two workspaces may both publish /v1/orders;
         # the gateway tells them apart by Host (MT.7).
         UniqueConstraint("workspace_id", "path_prefix", name=UQ_ROUTE_PATH_PREFIX),
+        # Target of api_routes' (route_id, workspace_id) foreign key (P.1).
+        UniqueConstraint("id", "workspace_id", name="uq_routes_id_workspace_id"),
         CheckConstraint("cardinality(methods) > 0", name="methods_not_empty"),
         CheckConstraint(f"methods <@ ARRAY[{_METHODS_SQL}]::varchar[]", name="methods_known"),
         CheckConstraint("max_body_bytes IS NULL OR max_body_bytes > 0", name="max_body_bytes"),
