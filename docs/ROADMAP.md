@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 23, 2026 · **Current step:** FE.2 done; next: FE.3
+**Last updated:** Nov 23, 2026 · **Current step:** FE.3 done; next: FE.4 (waiting for the owner's go)
 
 ## Overview
 
@@ -15,7 +15,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅✅ 12/12 | ✅ Done |
 | v2: Usage, plans and metrics (backend) | ✅✅✅ 3/3 | ✅ Done |
 | Portal: developer portal (backend) | ✅✅ 2/2 | ✅ Done: **the backend is complete** |
-| FE: Frontend | ✅✅⬜⬜ 2/4 | 🔨 In progress |
+| FE: Frontend | ✅✅✅⬜ 3/4 | 🔨 In progress |
 | *Out of plan* | — | Kept for reference, not scheduled (see "Out of plan" below) |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
@@ -30,8 +30,8 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 2187 passing (about 10 min), including developers' apps (made only for a published API on an offered plan of an active workspace, `pending` with a blocked consumer on a plan that needs approval, approved and rejected by members with the consumer following, a blocked developer's apps blocked in every workspace, 10 apps per developer, keys only for approved apps, usage and the month's quota from the request log), a portal guard over every portal endpoint (a blocked developer refused, another developer's apps and keys `404`, every portal write exactly one event by the developer in the workspace's log, none when it fails or only reads) (P.2), the two identities (a developer's token refused by every admin endpoint and a member's, the Platform Admin's with MFA included, by every portal endpoint), developers made just in time (parallel first requests make one, another account with a known email `403 account_conflict`, blocked `403 developer_blocked`), the API lifecycle and routes in at most one API, OpenAPI documents (shape, the 1 MiB limit to the byte, SQL NULL for none), the catalog (drafts, another workspace's APIs and suspended workspaces all 404) (P.1), plans (above the workspace's limit 422, one default that moves but is never unset or deleted, a plan in use kept by the foreign key too), the populated MVP database upgraded with every consumer's limit unchanged on a `Legacy <n>/min` plan, the per-IP limits reaching running gateways, the usage-ingest worker against a real Redis stream (each event stored once, a worker stopped mid-batch losing and doubling nothing, bad and out-of-window entries dropped, `last_used_at` forward only and at most once a minute without moving `updated_at` or the config), analytics numbers against known rows (buckets, percentiles, busiest routes and consumers, the request log's filters), the five logins' privileges, platform defaults from `.env` reaching running gateways (only the workspaces that inherit a changed default are bumped, once), route CORS settings (origins normalized, `*` never with credentials) and body limits within the ceiling, service targets (the 50 limit, the last target kept under parallel deletes, URLs once per service), health settings, one config bump per transaction, internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
-| Coverage | 99% (minimum 90%) |
+| Tests | 2201 passing (about 16 min), including the users list with each person's workspaces and its filters (FE.3), developers' apps (made only for a published API on an offered plan of an active workspace, `pending` with a blocked consumer on a plan that needs approval, approved and rejected by members with the consumer following, a blocked developer's apps blocked in every workspace, 10 apps per developer, keys only for approved apps, usage and the month's quota from the request log), a portal guard over every portal endpoint (a blocked developer refused, another developer's apps and keys `404`, every portal write exactly one event by the developer in the workspace's log, none when it fails or only reads) (P.2), the two identities (a developer's token refused by every admin endpoint and a member's, the Platform Admin's with MFA included, by every portal endpoint), developers made just in time (parallel first requests make one, another account with a known email `403 account_conflict`, blocked `403 developer_blocked`), the API lifecycle and routes in at most one API, OpenAPI documents (shape, the 1 MiB limit to the byte, SQL NULL for none), the catalog (drafts, another workspace's APIs and suspended workspaces all 404) (P.1), plans (above the workspace's limit 422, one default that moves but is never unset or deleted, a plan in use kept by the foreign key too), the populated MVP database upgraded with every consumer's limit unchanged on a `Legacy <n>/min` plan, the per-IP limits reaching running gateways, the usage-ingest worker against a real Redis stream (each event stored once, a worker stopped mid-batch losing and doubling nothing, bad and out-of-window entries dropped, `last_used_at` forward only and at most once a minute without moving `updated_at` or the config), analytics numbers against known rows (buckets, percentiles, busiest routes and consumers, the request log's filters), the five logins' privileges, platform defaults from `.env` reaching running gateways (only the workspaces that inherit a changed default are bumped, once), route CORS settings (origins normalized, `*` never with credentials) and body limits within the ceiling, service targets (the 50 limit, the last target kept under parallel deletes, URLs once per service), health settings, one config bump per transaction, internal upstreams refused on save (IP literals in every spelling, `localhost`, `*.internal`) and the allow list, the JSON request log with `workspace_id`, config generation changes, database privileges, config triggers column by column, endpoint guards and a populated MVP database upgrade through the current migration. The tests use a fake GoTrue admin API. |
+| Coverage | 99.45% (minimum 90%) |
 | ruff lint and format | clean |
 | mypy strict | clean |
 | Run all checks | `.\backend\control-plane\scripts\check.ps1` (`-Fix` to autofix) |
@@ -58,10 +58,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 121 passing (about 50 s), the whole app rendered against a fake GoTrue and the API faked with MSW: login with and without MFA (wrong code, several authenticators), invitation and recovery links, MFA set-up and removal, password change, sign-out everywhere, my workspaces and leaving one, the role and permission rules, a suspended workspace, the API client's 401 and `user_disabled` handling; every dashboard page (FE.2): creating and editing services with targets, routes with CORS and body limits, consumers, keys shown once and revoked, plans, members and roles, the audit log and request log with filters, settings and deleting with the slug typed, APIs with their routes and OpenAPI document, the apps queue; a Viewer seeing no controls |
+| Tests | 132 passing (about 80 s), the whole app rendered against a fake GoTrue and the API faked with MSW: login with and without MFA (wrong code, several authenticators), invitation and recovery links, MFA set-up and removal, password change, sign-out everywhere, my workspaces and leaving one, the role and permission rules, a suspended workspace, the API client's 401 and `user_disabled` handling; every dashboard page (FE.2): creating and editing services with targets, routes with CORS and body limits, consumers, keys shown once and revoked, plans, members and roles, the audit log and request log with filters, settings and deleting with the slug typed, APIs with their routes and OpenAPI document, the apps queue; a Viewer seeing no controls; the Platform pages (FE.3): the guard (not the Platform Admin, no authenticator, the code first), workspaces' lifecycle and limits (only changed ones sent, empty back to the default), people with their workspaces, disable and enable, developers blocked and unblocked, the platform audit log by workspace |
 | Coverage | 97.5% lines (minimum 90%; functions 91%, branches 92%) |
 | prettier, eslint (strict type-checked), tsc | clean |
-| Browser stories | 5 pass in about 40 s (`docker compose run --rm e2e-browser`) |
+| Browser stories | 6 pass in about 75 s (`docker compose run --rm e2e-browser`) |
 | Run all checks | `.\frontend\scripts\check.ps1` (`-Fix` to format and regenerate the API types) |
 
 **Both**
@@ -421,7 +421,7 @@ Decided Nov 22, 2026: not scheduled, kept in PLAN.md for reference and marked *O
 | --- | --- | --- |
 | FE.1 | Foundation: Vite, React, TypeScript, layout, GoTrue login and MFA, account page, workspace switcher, role-aware routing and buttons, generated API types (Vite proxies `/api`, so no CORS is needed) | ✅ |
 | FE.2 | Dashboard: Overview, Services and service detail (targets, health), Routes (CORS, body limit), Consumers and keys, Members, Activity, Settings, Plans, Logs | ✅ |
-| FE.3 | Platform: Workspaces (create, suspend, restore, limits), Users (disable, enable), platform activity | ⬜ |
+| FE.3 | Platform: Workspaces (create, suspend, restore, limits), Users (disable, enable), platform activity | ✅ |
 | FE.4 | Developer portal: sign-up and login, API catalog, API docs with try-it, own keys, own usage | ⬜ |
 
 The FE steps are built on stacked branches (`fe1-foundation` → `fe2-dashboard` → `fe3-platform` → `fe4-portal`), each one a pull request into the one before. The page lists above are a sketch: every feature of the finished backend gets a page or a control (decided Nov 23, 2026).
@@ -437,6 +437,12 @@ The FE steps are built on stacked branches (`fe1-foundation` → `fe2-dashboard`
 **Done when:** a workspace member can do everything their role allows from the dashboard: services and targets, routes (CORS, body limit), consumers and keys, plans, APIs and the apps queue, members, settings, and read the overview, activity and logs; a Viewer sees every page without controls; tests and checks pass.
 
 **Status:** ✅ Done (Nov 23). Commits `e45e3ce` (overview, services, routes, consumers, keys, plans, shared tables and dialogs), `5efc60e` (members, activity, logs, settings), `5f5a65b` (APIs and apps), `548134f` (browser stories). Checked by hand against the real stack: a service, route, consumer and key made in the UI, 11 calls through the gateway, then the overview (11 requests, 27% errors, 1 active consumer), the chart, the logs and the activity showing them.
+
+### FE.3 Platform
+
+**Done when:** the Platform Admin, signed in with MFA, can create, suspend, unsuspend, delete and restore workspaces and change their limits, find people with their workspaces and disable or enable them, block or unblock developers, and read the platform's audit log; anyone else is kept out; tests and checks pass.
+
+**Status:** ✅ Done (Nov 23). Commits `2c926ad` (the `GET /api/v1/users` endpoint with tests and openapi.json), `632f3a9` (the Platform pages), `8c249ea` (browser story), then docs. The story runs against the real stack: the admin signs in with the authenticator code, creates a workspace, suspends, unsuspends and deletes it, and finds a new member with their workspace and role on the Users page.
 
 ## Decisions log
 
@@ -716,3 +722,7 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 23 | FE.2 | Overview: "active consumers" counts consumers with requests in the period (from the analytics), "recent errors" are the 4xx/5xx among the newest 100 request-log rows | The API has no count of active consumers and no status-range filter on the request log; both come from data the page already reads |
 | Nov 23 | FE.2 | Pages load when first opened, and libraries are built into their own chunks (react, radix, auth, charts, vendor) | The first download stays small, no chunk is over 500 kB, and library files stay cached across app changes |
 | Nov 23 | FE.2 | A 422's field errors appear under their fields (`lib/forms.ts`); other refusals show above the buttons, in words for the short codes (`quota_exceeded`, `last_owner`, ...) | The server's checks (an internal upstream, an email domain) are the final word; the person sees them where they typed |
+| Nov 23 | FE.3 | Added `GET /api/v1/users` (Platform Admin with MFA): everyone, newest first, each with their workspaces (`slug`, `name`, `role`, `status`); `?is_active=` and `?email=` (part of the address, any case, `%` and `_` taken literally) filter | The Users page needs a list and the backend had only `PATCH /users/{id}`; the memberships come in one query per page, not one per person |
+| Nov 23 | FE.3 | The Platform pages check the person before any call: not the Platform Admin → a "not for you" page; no authenticator → a page that sends them to set one up (one with an authenticator is asked for the code at sign-in already) | Every platform endpoint answers `403 mfa_required` without `aal2`; a page that fails call by call would only show errors |
+| Nov 23 | FE.3 | The limits dialog sends only the limits that changed; an emptied field sends `null` (back to the platform default), whose value is shown as the placeholder | `PATCH /limits` takes `null` as "default"; sending unchanged values would turn defaults into custom values the next time a default moves |
+| Nov 23 | FE.3 | The workspace actions hide what the API refuses anyway: no suspend or delete for `default`, no restore except for deleted ones, nothing for purged ones | Fewer dead ends; the API's 409s still show in words if the list is stale |

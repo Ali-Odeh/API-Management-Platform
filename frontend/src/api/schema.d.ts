@@ -331,6 +331,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Users
+         * @description Everyone with an account, newest first, with the workspaces they belong to.
+         */
+        get: operations["list_users_api_v1_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{user_id}": {
         parameters: {
             query?: never;
@@ -1855,6 +1875,18 @@ export interface components {
             role?: components["schemas"]["Role"] | null;
         };
         /**
+         * Membership
+         * @description One workspace a person belongs to, with their role there.
+         */
+        Membership: {
+            /** Name */
+            name: string;
+            role: components["schemas"]["Role"];
+            /** Slug */
+            slug: string;
+            status: components["schemas"]["WorkspaceStatus"];
+        };
+        /**
          * MyWorkspaceOut
          * @description A workspace I belong to, and my role there.
          */
@@ -2022,6 +2054,13 @@ export interface components {
         Page_TargetOut_: {
             /** Items */
             items: components["schemas"]["TargetOut"][];
+            /** Total */
+            total: number;
+        };
+        /** Page[UserListItem] */
+        Page_UserListItem_: {
+            /** Items */
+            items: components["schemas"]["UserListItem"][];
             /** Total */
             total: number;
         };
@@ -2621,6 +2660,30 @@ export interface components {
             routes: number;
             /** Services */
             services: number;
+        };
+        /**
+         * UserListItem
+         * @description GET /api/v1/users: a person and their workspaces (deleted ones included).
+         */
+        UserListItem: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Email */
+            email: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Is Active */
+            is_active: boolean;
+            /** Is Platform Admin */
+            is_platform_admin: boolean;
+            /** Workspaces */
+            workspaces: components["schemas"]["Membership"][];
         };
         /** UserOut */
         UserOut: {
@@ -3881,6 +3944,62 @@ export interface operations {
             };
             /** @description Workspace not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_v1_users_get: {
+        parameters: {
+            query?: {
+                /** @description Only enabled or disabled people */
+                is_active?: boolean | null;
+                /** @description Part of the email address, any case */
+                email?: string | null;
+                /** @description Page number, starting at 1 */
+                page?: number;
+                /** @description Items per page */
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Page_UserListItem_"];
+                };
+            };
+            /** @description Missing, invalid or expired GoTrue access token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorOut"];
+                };
+            };
+            /** @description Not allowed: user_disabled, account_conflict, platform_admin_required, mfa_required or permission_denied */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
