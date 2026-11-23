@@ -182,6 +182,7 @@ async def _build(
             Workspace.status,
             Workspace.rate_limit_per_min,
             Workspace.max_concurrent,
+            Workspace.ip_rate_limit_per_min,
             WorkspaceConfig.version,
         )
         .join(WorkspaceConfig, WorkspaceConfig.workspace_id == Workspace.id)
@@ -274,7 +275,9 @@ async def _build(
             limits=GatewayLimits(
                 rate_limit_per_min=_effective(workspace.rate_limit_per_min, "rate_limit_per_min"),
                 max_concurrent=_effective(workspace.max_concurrent, "max_concurrent"),
-                ip_rate_limit_per_min=get_settings().public_rate_limit_per_ip_per_min,
+                ip_rate_limit_per_min=_effective(
+                    workspace.ip_rate_limit_per_min, "ip_rate_limit_per_min"
+                ),
                 auth_fail_limit=get_settings().auth_fail_limit_per_ip,
             ),
             services=[

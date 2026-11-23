@@ -410,6 +410,7 @@ async def test_details_show_limits_and_usage(
     assert body["limits"] == {
         "rate_limit_per_min": 6000, "max_concurrent": 200,
         "max_services": 100, "max_routes": 500, "max_consumers": 5000,
+        "ip_rate_limit_per_min": 600,
     }  # fmt: skip
     assert set(body["limit_overrides"].values()) == {None}
     assert body["usage"] == {"services": 1, "routes": 1, "consumers": 1}

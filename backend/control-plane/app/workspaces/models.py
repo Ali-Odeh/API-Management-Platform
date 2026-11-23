@@ -35,6 +35,7 @@ LIMIT_COLUMNS = (
     "max_services",
     "max_routes",
     "max_consumers",
+    "ip_rate_limit_per_min",  # per client IP on public routes (V2.3)
 )
 
 _GONE_SQL = "status IN ('deleted', 'purged')"
@@ -103,6 +104,7 @@ class Workspace(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # Limits (decision 6); NULL = the platform default from the settings.
     rate_limit_per_min: Mapped[int | None]
     max_concurrent: Mapped[int | None]
+    ip_rate_limit_per_min: Mapped[int | None]
     max_services: Mapped[int | None]
     max_routes: Mapped[int | None]
     max_consumers: Mapped[int | None]
