@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml)
 
-A self-hosted API gateway and its management API, modeled on Kong, Tyk and Apigee. A **Go gateway** sits in front of your backend services: every API call passes through it and is routed, authenticated with an API key, rate-limited per consumer and logged. A **FastAPI control plane** is where admins configure it, and changes reach the gateway in milliseconds. People log in with **GoTrue** (Supabase Auth, self-hosted), with MFA for the Platform Admin.
+A self-hosted API gateway and its management API, modeled on Kong, Tyk and Apigee. A **Go gateway** sits in front of your backend services: every API call passes through it and is routed, authenticated with an API key, rate-limited per consumer and logged. A **FastAPI control plane** is where admins configure it, and changes reach the gateway in milliseconds. A **React app** puts it all on screen: a dashboard for each workspace's team, pages for the Platform Admin, and a developer portal. People log in with **GoTrue** (Supabase Auth, self-hosted), with MFA for the Platform Admin.
 
 It is a learning project, built step by step with production habits: tests at every layer, fuzzing, an end-to-end suite, a load test and CI on every push.
 
@@ -20,6 +20,8 @@ It is a learning project, built step by step with production habits: tests at ev
 - **Login:** GoTrue handles passwords, TOTP MFA, rotating refresh tokens and emails; the control plane verifies its tokens and decides what each person may do from its own tables. A disabled person is refused on their very next request.
 - **Developer portal:** developers sign up on their own GoTrue (open sign-up, confirmed by email; never mixed with workspace members) and browse each workspace's catalog: the APIs it has published, with their OpenAPI documents. Drafts stay hidden, deprecated APIs are marked. Then they serve themselves: an app on a plan the workspace offers (an API Admin approves it first when the plan says so), keys, calls through the gateway, their own usage and remaining monthly quota. Every app is a consumer underneath, so the gateway needed no change.
 - **Backup and restore:** a script dumps the platform's and both GoTrues' databases; another restores them into a fresh stack only and rotates the config generation. Tried for real: a key made before the backup works at the restored gateway.
+- **Plans, usage and analytics:** each consumer is on a plan (requests per minute and per month). Every answered request lands in its workspace's request log through a Redis Stream and a worker, with traffic, error rates, latency percentiles and the busiest routes and consumers on top. Prometheus scrapes the gateway's metrics.
+- **The app:** one React app with three areas: the **Dashboard** (by role: Owner, API Admin, Viewer), the **Platform** pages (workspaces, users, developers, the whole audit log) and the **Developer portal** (catalog, docs with a try-it console, apps, keys, usage). See the [user guide](docs/USER_GUIDE.md).
 - **Live configuration:** admins change services, routes, consumers and keys through a REST API (GoTrue JWT). The gateway long-polls the control plane and swaps in the new config without locks: a revoked key stops working in about 70 ms.
 
 ## Architecture
@@ -37,7 +39,7 @@ flowchart TB
 
     subgraph control["Control plane: configuration"]
         direction LR
-        admin([Admin]) -- "login, MFA" --> auth["GoTrue<br/>login"]
+        admin(["React app<br/>dashboard, platform, portal"]) -- "login, MFA" --> auth["GoTrue<br/>login"]
         admin -- "REST + GoTrue JWT" --> cp["Control plane (FastAPI)<br/>admin API"] <-- "NOTIFY on change" --> pg[("PostgreSQL<br/>all config")]
     end
 
@@ -70,8 +72,9 @@ flowchart LR
 | **Config propagation** | An admin change reaches the gateway in about **4 ms** (only the changed workspace is sent) |
 | **Route matching** | 0.4 µs for 100 routes, no memory allocations (Go benchmark) |
 | **Gateway tests** | 575 tests and table cases, **98% coverage**, the race detector, 9 fuzz tests |
-| **Control plane tests** | 2,187 tests, **99% coverage**, mypy strict; permission, isolation and audit guards over every endpoint, the portal's too |
-| **End to end** | 66 stories on the real stack (the developer portal from sign-up to a revoked key, GoTrue login with MFA, two tenants on their own subdomains, roles, audit log, invitations, lifecycle, limits, SSRF, load balancing, CORS, the request log and analytics), in CI on every push |
+| **Control plane tests** | 2,201 tests, **99% coverage**, mypy strict; permission, isolation and audit guards over every endpoint, the portal's too |
+| **Frontend tests** | 153 tests, **97% coverage** (the whole app against a fake GoTrue and API), strict TypeScript and lint |
+| **End to end** | 66 API stories and 8 browser stories (Chromium) on the real stack (the dashboard, the Platform pages and the portal from sign-up to a call from its try-it console; the developer portal from sign-up to a revoked key, GoTrue login with MFA, two tenants on their own subdomains, roles, audit log, invitations, lifecycle, limits, SSRF, load balancing, CORS, the request log and analytics), in CI on every push |
 
 The load test ran on one laptop with Docker Desktop; the differences between runs (with and without the gateway) are the meaningful part.
 
@@ -103,8 +106,6 @@ docker compose up -d --build --wait
 | --- | --- |
 | The app: dashboard and Platform pages (sign in as the Platform Admin) | `http://localhost:5173` |
 | The developer portal (sign up as a developer) | `http://localhost:5173/portal` |
-
-How to use the app, role by role: the [user guide](docs/USER_GUIDE.md).
 | Gateway (send API calls here) | `http://localhost:8081` |
 | Admin API and Swagger UI | `http://localhost:8000/docs` |
 | Login (GoTrue) | `http://localhost:9999` |
@@ -112,9 +113,13 @@ How to use the app, role by role: the [user guide](docs/USER_GUIDE.md).
 | Emails both GoTrues send (Mailpit) | `http://localhost:8025` |
 | Mock backend (an echo service) | `http://localhost:9000` |
 
-## Try it (2 minutes, PowerShell)
+How to use the app, role by role: the [user guide](docs/USER_GUIDE.md).
 
-Log in with GoTrue as the Platform Admin and register a backend, a route, an app with a limit of 3 requests per minute, and a key for it:
+## Try it (2 minutes)
+
+**In the app:** sign in at `http://localhost:5173` as the Platform Admin, open the `default` workspace, and add a service (`http://mock-backend:9000`), a route, a consumer and a key, then call the gateway with that key. The [user guide](docs/USER_GUIDE.md) walks through it.
+
+**Or with the API (PowerShell):** log in with GoTrue as the Platform Admin and register a backend, a route, a plan of 3 requests per minute, an app on that plan, and a key for it:
 
 ```powershell
 $cp  = "http://localhost:8000/api/v1/workspaces/default"   # the `default` workspace
@@ -128,7 +133,8 @@ function Add($path, $body) {
 
 $svc = Add /services  @{ name = "orders"; targets = @(@{ url = "http://mock-backend:9000" }) }
 $rt  = Add /routes    @{ service_id = $svc.id; path_prefix = "/v1/orders"; methods = @("GET", "POST") }
-$app = Add /consumers @{ name = "mobile-app"; email = "dev@example.com"; rate_limit_per_min = 3 }
+$plan = Add /plans    @{ name = "Tiny"; rate_limit_per_min = 3 }
+$app = Add /consumers @{ name = "mobile-app"; email = "dev@example.com"; plan_id = $plan.id }
 $key = (Add "/consumers/$($app.id)/keys" @{ name = "demo" }).key   # shown only this once
 ```
 
@@ -156,9 +162,11 @@ Or do the same by clicking in Swagger at `http://localhost:8000/docs` (**Authori
 | --- | --- |
 | Gateway (data plane) | Go 1.27, standard library only (`net/http`, `httputil.ReverseProxy`, `log/slog`), plus `go-redis` for the rate limiter |
 | Control plane | Python 3.12, FastAPI, SQLAlchemy 2 (async), Alembic, Pydantic v2 |
+| Frontend | React 19, TypeScript, Vite, Tailwind with shadcn/ui, TanStack Query, React Router, Recharts; API types generated from `openapi.json` |
 | Login | GoTrue (Supabase Auth) v2.197, Mailpit for its emails |
-| Storage | PostgreSQL 16 (config, and GoTrue's own database), Redis 7 (rate limits) |
-| Tests | Go `testing` (table tests, fuzzing, benchmarks, `-race`), pytest + httpx, k6 |
+| Storage | PostgreSQL 16 (config, the request log, and each GoTrue's own database), Redis 7 (rate limits, quotas, the usage stream) |
+| Tests | Go `testing` (table tests, fuzzing, benchmarks, `-race`), pytest + httpx, Vitest + Testing Library + MSW, Playwright, k6 |
+| Metrics | Prometheus |
 | Runtime and CI | Docker Compose, GitHub Actions |
 
 Some decisions worth a look (all of them, with reasons, are in the [decisions log](docs/ROADMAP.md#decisions-log)):
@@ -177,28 +185,34 @@ Some decisions worth a look (all of them, with reasons, are in the [decisions lo
 | [`backend/control-plane/`](backend/control-plane) | The FastAPI admin API and the developer portal API, organized by feature (users, services, routes, consumers, keys, plans, usage, apis, developers, portal, gateway_config) |
 | [`backend/auth/`](backend/auth) | Prepares both GoTrue databases (members' and developers') on the shared Postgres |
 | [`backend/mock-backend/`](backend/mock-backend) | A small echo service to proxy to (two copies in Compose, for load balancing) |
-| [`e2e/`](e2e) | End-to-end tests against the whole stack |
+| [`e2e/`](e2e) | End-to-end tests against the whole stack: API stories, and browser stories in `e2e/browser/` |
 | [`loadtest/`](loadtest) | The k6 load test and its results |
 | [`docs/`](docs) | [Plan](docs/PLAN.md), [roadmap and decisions](docs/ROADMAP.md), [MT design decisions](docs/MT_ROLES_DECISIONS.md), [developer guide](docs/DEVELOPMENT.md), [user guide](docs/USER_GUIDE.md) |
-| `frontend/` | The React app (built last, after the backend milestones) |
+| [`frontend/`](frontend) | The React app: `src/features` (one folder per page group), `src/api` (typed client), `src/lib` (auth, permissions) |
 
 ## Development
 
 Tests, quality checks, migrations, the race detector, fuzzing and the load test are in the [developer guide](docs/DEVELOPMENT.md). The short version:
 
 ```powershell
-.\backend\control-plane\scripts\check.ps1   # ruff, mypy strict, pytest
-.\backend\gateway\scripts\check.ps1         # gofmt, go vet, go test
+.\backend\control-plane\scripts\check.ps1   # ruff, mypy strict, pytest, coverage >= 90%
+.\backend\gateway\scripts\check.ps1         # gofmt, go vet, go test, coverage >= 90%
 docker compose run --rm e2e                 # end-to-end tests
 docker compose run --rm e2e-browser         # the React app in Chromium
 .\frontend\scripts\check.ps1                # frontend checks (local Node 22)
 docker compose run --rm loadtest            # k6 load test
 ```
 
-## Status and what's next
+## Status
 
-The **MVP is done**: routing, API keys, rate limiting, logging, live configuration, with tests at every level. **Multi-tenancy and login (MT) is done** too: GoTrue login with MFA (MT.1), workspaces with roles and permission checks (MT.2), an append-only audit log (MT.3) and members with email invitations and owner rules (MT.4), the workspace lifecycle (suspend, delete with a 30-day restore, purge) with quotas (MT.5), an incremental config protocol, where the gateway receives only the workspaces that changed (MT.6), gateway tenancy, each workspace on its own subdomain (`acme.<gateway>`) and never mixed with another (MT.7), workspace limits in the gateway, a rate limit and an in-flight limit per workspace (MT.8), SSRF protection (MT.9), load balancing over several targets with active and passive health checks (MT.10), CORS per route with request body limits (MT.11), and the MT definition of done proven end to end on every push, with the load test measured again on a tenant's subdomain and two targets (MT.12). Next on the [roadmap](docs/ROADMAP.md):
+**The plan is complete.** Every milestone is done, tested end to end and run in CI on every push:
 
-- **v2 is complete:** every request is in its workspace's request log, with analytics on top (V2.1: the gateway writes usage events to a Redis Stream, a worker stores them in Postgres by month), plans with monthly quotas and per-IP protection (V2.2), and Prometheus metrics (V2.3).
-- **The developer portal is complete:** developers sign up on their own GoTrue (open sign-up, email confirmation) and browse each workspace's published APIs with their OpenAPI documents (P.1); they make apps on offered plans (with approval when a plan needs it), get keys, call through the gateway and see their own usage and quota, with a tested backup and restore (P.2). **The backend is complete.**
-- **The React app is complete** (FE.1–FE.4), at http://localhost:5173: login with MFA and the account page; the workspace dashboard (overview with traffic, services and targets, routes with CORS, consumers and keys, plans, APIs and the apps queue, members, activity, logs, settings), by role; the Platform Admin's pages (workspaces' lifecycle and limits, users, developers, the platform's audit log); and the developer portal (sign-up, catalog, OpenAPI docs with a try-it console, apps, keys, usage). Unit tests and browser stories run on every push. **The plan is complete.**
+| Milestone | What it brought |
+| --- | --- |
+| MVP | Routing, API keys, rate limiting, logging, live configuration |
+| MT: multi-tenancy and login | GoTrue with MFA, workspaces and roles, audit log, members, workspace lifecycle and quotas, each workspace on its own subdomain, SSRF protection, load balancing with health checks, CORS and body limits |
+| v2 | The request log and analytics, plans with monthly quotas, per-IP protection, Prometheus metrics |
+| Portal | Developers' own sign-up, the API catalog, self-service apps and keys, usage; backup and restore |
+| FE | The React app: dashboard, Platform pages and the developer portal |
+
+Progress, numbers and every decision with its reason are in the [roadmap](docs/ROADMAP.md). Ideas kept for later (JWT auth, caching, a Grafana dashboard, deployment, ...) are listed there as *out of plan*.
