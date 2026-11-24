@@ -103,6 +103,8 @@ docker compose up -d --build --wait
 | --- | --- |
 | The app: dashboard and Platform pages (sign in as the Platform Admin) | `http://localhost:5173` |
 | The developer portal (sign up as a developer) | `http://localhost:5173/portal` |
+
+How to use the app, role by role: the [user guide](docs/USER_GUIDE.md).
 | Gateway (send API calls here) | `http://localhost:8081` |
 | Admin API and Swagger UI | `http://localhost:8000/docs` |
 | Login (GoTrue) | `http://localhost:9999` |
@@ -177,7 +179,7 @@ Some decisions worth a look (all of them, with reasons, are in the [decisions lo
 | [`backend/mock-backend/`](backend/mock-backend) | A small echo service to proxy to (two copies in Compose, for load balancing) |
 | [`e2e/`](e2e) | End-to-end tests against the whole stack |
 | [`loadtest/`](loadtest) | The k6 load test and its results |
-| [`docs/`](docs) | [Plan](docs/PLAN.md), [roadmap and decisions](docs/ROADMAP.md), [MT design decisions](docs/MT_ROLES_DECISIONS.md), [developer guide](docs/DEVELOPMENT.md) |
+| [`docs/`](docs) | [Plan](docs/PLAN.md), [roadmap and decisions](docs/ROADMAP.md), [MT design decisions](docs/MT_ROLES_DECISIONS.md), [developer guide](docs/DEVELOPMENT.md), [user guide](docs/USER_GUIDE.md) |
 | `frontend/` | The React app (built last, after the backend milestones) |
 
 ## Development
