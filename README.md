@@ -2,7 +2,22 @@
 
 [![ci](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml/badge.svg)](https://github.com/Ali-Odeh/API-Management-Platform/actions/workflows/ci.yml)
 
-A self-hosted API gateway with a management app, modeled on Kong, Tyk and Apigee.
+## Overview
+
+Companies that offer APIs need one front door for them: something that checks who is calling, limits how much each caller uses, sends each call to the right server, and shows what happened. This project is that front door, plus the app to run it. It is self-hosted and modeled on Kong, Tyk and Apigee.
+
+**How it works in short:** a company (a **workspace**) adds its backend servers and the paths it wants to expose, then gives each client app a **key** and a **plan** (its limits). Every call goes through the **gateway**, which checks the key and the limits, forwards the call, and logs it. Outside developers can find the APIs on a **portal** and get keys on their own. One **Platform Admin** runs the whole platform.
+
+**Who uses it:**
+
+| Who | Does what |
+| --- | --- |
+| Platform Admin | Creates workspaces, sets their limits, manages people and developers |
+| Workspace team (Owner, API Admin, Viewer) | Builds and runs their APIs, members, keys and plans, and watches the traffic |
+| Developers | Find APIs on the portal, read the docs, try them, and get keys |
+| Client apps | Call the APIs through the gateway with a key |
+
+**The parts:**
 
 - A **Go gateway** sits in front of your backends. Every API call passes through it to be routed, checked and logged.
 - A **FastAPI control plane** stores the configuration. Changes reach the gateway in milliseconds.
