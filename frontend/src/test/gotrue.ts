@@ -163,6 +163,13 @@ export class FakeGoTrue {
         log(`logout:${new URL(request.url).searchParams.get('scope') ?? 'global'}`)
         return new HttpResponse(null, { status: 204 })
       }),
+      http.post(url('/signup'), async ({ request }) => {
+        const body = (await request.json()) as { email: string; password: string }
+        log(`signup:${body.email}:${new URL(request.url).searchParams.get('redirect_to') ?? ''}`)
+        // Email confirmation on: a user, no session, until the link is opened.
+        const user = this.addUser(body.email, body.password)
+        return HttpResponse.json(this.publicUser(user))
+      }),
       http.post(url('/recover'), async ({ request }) => {
         const body = (await request.json()) as { email: string }
         log(`recover:${body.email}`)
