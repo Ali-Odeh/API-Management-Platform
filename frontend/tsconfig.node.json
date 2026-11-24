@@ -13,7 +13,8 @@
     "noEmit": true,
     "strict": true,
     "noUnusedLocals": true,
-    "noUnusedParameters": true
+    "noUnusedParameters": true,
+    "noUncheckedIndexedAccess": true
   },
   "include": ["vite.config.ts", "eslint.config.js"]
 }

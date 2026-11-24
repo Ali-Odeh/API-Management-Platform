@@ -474,6 +474,8 @@ services:
       API_PROXY_TARGET: http://control-plane:8000
       AUTH_PROXY_TARGET: http://auth:9999
       PORTAL_AUTH_PROXY_TARGET: http://auth-portal:9998
+      # The portal's try-it console calls APIs through the gateway (FE.4).
+      GATEWAY_PROXY_TARGET: http://gateway:8080
       # Docker Desktop on Windows passes no file events into containers.
       VITE_POLL: "true"
     volumes:

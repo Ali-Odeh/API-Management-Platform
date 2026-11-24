@@ -3,6 +3,13 @@ import { AccountPage } from '@/features/account/account-page'
 import { ForgotPasswordPage, LoginPage, SetPasswordPage } from '@/features/auth/pages'
 import { WorkspacesPage } from '@/features/me/workspaces-page'
 import { PlatformLayout } from '@/features/platform/layout'
+import {
+  PortalForgotPasswordPage,
+  PortalLoginPage,
+  PortalSetPasswordPage,
+  PortalSignUpPage,
+} from '@/features/portal/auth-pages'
+import { PortalLayout, PortalRoot, RequireDeveloper } from '@/features/portal/layout'
 import { WorkspaceLayout } from '@/features/workspace/layout'
 import { RequireMember } from './guards'
 import { MemberLayout, MemberRoot } from './member-layout'
@@ -63,10 +70,39 @@ const platformPages: RouteObject[] = [
 ]
 
 /**
+ * The developer portal under `/portal` (PLAN.md section 8): its own
+ * GoTrue, sign-up included; everything else needs a signed-in developer.
+ */
+const portalPages: RouteObject[] = [
+  { path: 'login', element: <PortalLoginPage /> },
+  { path: 'signup', element: <PortalSignUpPage /> },
+  { path: 'forgot-password', element: <PortalForgotPasswordPage /> },
+  { path: 'set-password', element: <PortalSetPasswordPage /> },
+  {
+    element: <RequireDeveloper />,
+    children: [
+      {
+        element: <PortalLayout />,
+        children: [
+          page(undefined, async () => (await import('@/features/portal/catalog-page')).CatalogPage),
+          page(
+            'apis/:slug/:id',
+            async () => (await import('@/features/portal/api-page')).PortalApiPage,
+          ),
+          page('apps', async () => (await import('@/features/portal/apps-page')).PortalAppsPage),
+          page('apps/:id', async () => (await import('@/features/portal/app-page')).PortalAppPage),
+        ],
+      },
+    ],
+  },
+]
+
+/**
  * The app's pages (PLAN.md section 8). Areas:
  * - account: login, my workspaces, account (members' GoTrue)
  * - dashboard: `/w/:slug/...` (workspace members, by role)
  * - platform: `/platform/...` (the Platform Admin, with MFA)
+ * - developer portal: `/portal/...` (developers, their own GoTrue)
  */
 export const routes: RouteObject[] = [
   {
@@ -95,6 +131,12 @@ export const routes: RouteObject[] = [
         ],
       },
     ],
+  },
+  {
+    path: '/portal',
+    element: <PortalRoot />,
+    errorElement: <RouteErrorPage />,
+    children: portalPages,
   },
   { path: '*', element: <NotFoundPage /> },
 ]

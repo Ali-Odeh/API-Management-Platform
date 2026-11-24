@@ -2,7 +2,7 @@
 
 Where the project stands, step by step. The *what* and *why* of each milestone live in [PLAN.md](PLAN.md) section 10. This file tracks *progress*, and it is updated at the end of every step.
 
-**Last updated:** Nov 23, 2026 · **Current step:** FE.3 done; next: FE.4 (waiting for the owner's go)
+**Last updated:** Nov 24, 2026 · **Current step:** FE.4 done: **the plan is complete**
 
 ## Overview
 
@@ -15,7 +15,7 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 | MT: Multi-tenancy and login | ✅✅✅✅✅✅✅✅✅✅✅✅ 12/12 | ✅ Done |
 | v2: Usage, plans and metrics (backend) | ✅✅✅ 3/3 | ✅ Done |
 | Portal: developer portal (backend) | ✅✅ 2/2 | ✅ Done: **the backend is complete** |
-| FE: Frontend | ✅✅✅⬜ 3/4 | 🔨 In progress |
+| FE: Frontend | ✅✅✅✅ 4/4 | ✅ Done: **the plan is complete** |
 | *Out of plan* | — | Kept for reference, not scheduled (see "Out of plan" below) |
 
 **MVP:** 24 of 24 steps done (100%). 🎉 The MVP is complete: routing, API keys, rate limiting, logging and live config, tested end to end and under load.
@@ -58,10 +58,10 @@ Where the project stands, step by step. The *what* and *why* of each milestone l
 
 | Check | Result |
 | --- | --- |
-| Tests | 132 passing (about 80 s), the whole app rendered against a fake GoTrue and the API faked with MSW: login with and without MFA (wrong code, several authenticators), invitation and recovery links, MFA set-up and removal, password change, sign-out everywhere, my workspaces and leaving one, the role and permission rules, a suspended workspace, the API client's 401 and `user_disabled` handling; every dashboard page (FE.2): creating and editing services with targets, routes with CORS and body limits, consumers, keys shown once and revoked, plans, members and roles, the audit log and request log with filters, settings and deleting with the slug typed, APIs with their routes and OpenAPI document, the apps queue; a Viewer seeing no controls; the Platform pages (FE.3): the guard (not the Platform Admin, no authenticator, the code first), workspaces' lifecycle and limits (only changed ones sent, empty back to the default), people with their workspaces, disable and enable, developers blocked and unblocked, the platform audit log by workspace |
+| Tests | 153 passing (about 70 s), the whole app rendered against a fake GoTrue and the API faked with MSW: login with and without MFA (wrong code, several authenticators), invitation and recovery links, MFA set-up and removal, password change, sign-out everywhere, my workspaces and leaving one, the role and permission rules, a suspended workspace, the API client's 401 and `user_disabled` handling; every dashboard page (FE.2): creating and editing services with targets, routes with CORS and body limits, consumers, keys shown once and revoked, plans, members and roles, the audit log and request log with filters, settings and deleting with the slug typed, APIs with their routes and OpenAPI document, the apps queue; a Viewer seeing no controls; the Platform pages (FE.3): the guard (not the Platform Admin, no authenticator, the code first), workspaces' lifecycle and limits (only changed ones sent, empty back to the default), people with their workspaces, disable and enable, developers blocked and unblocked, the platform audit log by workspace; the developer portal (FE.4): sign-up with the confirmation link, recovery, a blocked developer, the catalog, OpenAPI docs (references, Swagger 2.0 bodies), the try-it console, apps (pending, rejected), keys, usage and the quota |
 | Coverage | 97.5% lines (minimum 90%; functions 91%, branches 92%) |
 | prettier, eslint (strict type-checked), tsc | clean |
-| Browser stories | 6 pass in about 75 s (`docker compose run --rm e2e-browser`) |
+| Browser stories | 8 pass in about 90 s (`docker compose run --rm e2e-browser`) |
 | Run all checks | `.\frontend\scripts\check.ps1` (`-Fix` to format and regenerate the API types) |
 
 **Both**
@@ -422,7 +422,7 @@ Decided Nov 22, 2026: not scheduled, kept in PLAN.md for reference and marked *O
 | FE.1 | Foundation: Vite, React, TypeScript, layout, GoTrue login and MFA, account page, workspace switcher, role-aware routing and buttons, generated API types (Vite proxies `/api`, so no CORS is needed) | ✅ |
 | FE.2 | Dashboard: Overview, Services and service detail (targets, health), Routes (CORS, body limit), Consumers and keys, Members, Activity, Settings, Plans, Logs | ✅ |
 | FE.3 | Platform: Workspaces (create, suspend, restore, limits), Users (disable, enable), platform activity | ✅ |
-| FE.4 | Developer portal: sign-up and login, API catalog, API docs with try-it, own keys, own usage | ⬜ |
+| FE.4 | Developer portal: sign-up and login, API catalog, API docs with try-it, own keys, own usage | ✅ |
 
 The FE steps are built on stacked branches (`fe1-foundation` → `fe2-dashboard` → `fe3-platform` → `fe4-portal`), each one a pull request into the one before. The page lists above are a sketch: every feature of the finished backend gets a page or a control (decided Nov 23, 2026).
 
@@ -437,6 +437,12 @@ The FE steps are built on stacked branches (`fe1-foundation` → `fe2-dashboard`
 **Done when:** a workspace member can do everything their role allows from the dashboard: services and targets, routes (CORS, body limit), consumers and keys, plans, APIs and the apps queue, members, settings, and read the overview, activity and logs; a Viewer sees every page without controls; tests and checks pass.
 
 **Status:** ✅ Done (Nov 23). Commits `e45e3ce` (overview, services, routes, consumers, keys, plans, shared tables and dialogs), `5efc60e` (members, activity, logs, settings), `5f5a65b` (APIs and apps), `548134f` (browser stories). Checked by hand against the real stack: a service, route, consumer and key made in the UI, 11 calls through the gateway, then the overview (11 requests, 27% errors, 1 active consumer), the chart, the logs and the activity showing them.
+
+### FE.4 Developer portal
+
+**Done when:** a developer can sign up (email confirmation), sign in, recover a password, browse the catalog, read an API's docs and try it through the gateway, create an app on an offered plan, get keys, see their usage and quota, and delete the app; a blocked developer is told why; tests and checks pass.
+
+**Status:** ✅ Done (Nov 24). Commits `2d5cea0` (the portal), `2212c2a` (browser stories), then docs. Checked by hand against the real stack: sign-up, the confirmation link from Mailpit signing the developer in, the catalog, the docs, an app on an offered plan, a key, a try-it call through the gateway (200, with the developer's consumer), and the app's usage showing it.
 
 ### FE.3 Platform
 
@@ -726,3 +732,7 @@ Choices made along the way that differ from, or add to, the original plan. The M
 | Nov 23 | FE.3 | The Platform pages check the person before any call: not the Platform Admin → a "not for you" page; no authenticator → a page that sends them to set one up (one with an authenticator is asked for the code at sign-in already) | Every platform endpoint answers `403 mfa_required` without `aal2`; a page that fails call by call would only show errors |
 | Nov 23 | FE.3 | The limits dialog sends only the limits that changed; an emptied field sends `null` (back to the platform default), whose value is shown as the placeholder | `PATCH /limits` takes `null` as "default"; sending unchanged values would turn defaults into custom values the next time a default moves |
 | Nov 23 | FE.3 | The workspace actions hide what the API refuses anyway: no suspend or delete for `default`, no restore except for deleted ones, nothing for purged ones | Fewer dead ends; the API's 409s still show in words if the list is stale |
+| Nov 24 | FE.4 | The portal's pages are `/portal` (catalog), `/portal/apis/:slug/:id`, `/portal/apps` and `/portal/apps/:id`; keys and usage live on an app's page, not on `/portal/keys` and `/portal/usage` | Since P.2 a developer's keys and usage belong to an app (one per API and plan); one page per app keeps them together |
+| Nov 24 | FE.4 | The try-it console calls `/try/<slug>/<path>` on the app's origin; Vite forwards it to the gateway with `Host: <slug>.localhost` | A browser can't set Host, and a route answers CORS only for the origins its owner allows. A deployment would call the gateway's own host instead (deployment is out of plan) |
+| Nov 24 | FE.4 | OpenAPI documents are rendered by a small reader of our own (operations, parameters, request body with `$ref`s resolved a few levels, responses), not Swagger UI or Redoc | Those bundles are larger than the whole app; documents aren't validated beyond their shape, so the reader is defensive |
+| Nov 24 | FE.4 | Frontend tests run on half the cores, with 30 s per test and 10 s per wait | Whole-app renders sometimes timed out when every core ran one |
