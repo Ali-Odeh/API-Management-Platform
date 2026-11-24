@@ -102,6 +102,7 @@ docker compose up -d --build --wait
 | | Address |
 | --- | --- |
 | The app: dashboard and Platform pages (sign in as the Platform Admin) | `http://localhost:5173` |
+| The developer portal (sign up as a developer) | `http://localhost:5173/portal` |
 | Gateway (send API calls here) | `http://localhost:8081` |
 | Admin API and Swagger UI | `http://localhost:8000/docs` |
 | Login (GoTrue) | `http://localhost:9999` |

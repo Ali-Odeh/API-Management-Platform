@@ -958,11 +958,11 @@ A Viewer sees every dashboard page read-only; buttons a role can't use are hidde
 
 | # | Page | Path | Contains | Data from |
 | --- | --- | --- | --- | --- |
-| 18 | Sign up and login | `/portal/login` | Developer account forms | P.1 |
-| 19 | API catalog | `/portal/apis` | Cards for published APIs | P.1 |
-| 20 | API docs | `/portal/apis/:id` | Rendered OpenAPI docs, try-it console | P.1 |
-| 21 | My keys | `/portal/keys` | Create, list, revoke own keys | P.2 |
-| 22 | My usage | `/portal/usage` | Requests over time, quota bar, plan | P.2 |
+| 18 | Sign up and login | `/portal/signup`, `/portal/login` | Developer account forms; the confirmation link signs in; password recovery (`/portal/forgot-password`, `/portal/set-password`) | P.1 |
+| 19 | API catalog | `/portal` | Cards for published APIs, by workspace | P.1 |
+| 20 | API docs | `/portal/apis/:slug/:id` | Routes, rendered OpenAPI docs, try-it console (through the dev server's `/try/<slug>/...`), create an app | P.1 |
+| 21 | My apps | `/portal/apps` | My apps in every workspace, with status and plan (FE.4: keys and usage belong to an app) | P.2 |
+| 22 | An app | `/portal/apps/:id` | Its status (pending, rejected), keys (create, shown once, revoke), requests over time, the month's quota bar, delete | P.2 |
 
 "Data from" names the backend milestone that provides a page's data; every page is built in the FE milestone.
 
